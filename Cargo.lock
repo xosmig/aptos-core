@@ -2515,6 +2515,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "aptos-network2"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aptos-bitvec",
+ "aptos-compression",
+ "aptos-config",
+ "aptos-crypto",
+ "aptos-id-generator",
+ "aptos-infallible",
+ "aptos-logger",
+ "aptos-metrics-core",
+ "aptos-netcore",
+ "aptos-num-variants",
+ "aptos-short-hex-str",
+ "aptos-time-service",
+ "aptos-types",
+ "bcs 0.1.4",
+ "bytes",
+ "futures",
+ "futures-util",
+ "hex",
+ "maplit",
+ "once_cell",
+ "pin-project",
+ "rand 0.7.3",
+ "serde 1.0.149",
+ "serde_bytes",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util 0.7.3",
+]
+
+[[package]]
 name = "aptos-nft-metadata-crawler-parser"
 version = "0.1.0"
 dependencies = [
