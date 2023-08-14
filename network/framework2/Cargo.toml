@@ -17,14 +17,17 @@ aptos-logger = { workspace = true }
 aptos-metrics-core = { workspace = true }
 aptos-netcore = { workspace = true }
 aptos-num-variants = { workspace = true }
+aptos-peer-monitoring-service-types = { workspace = true }
 aptos-short-hex-str = { workspace = true }
 aptos-time-service = { workspace = true }
 aptos-types = { workspace = true }
+async-trait = { workspace = true }
 bcs = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
 hex = { workspace = true }
+itertools = { workspace = true }
 maplit = { workspace = true }
 once_cell = { workspace = true }
 pin-project = { workspace = true }

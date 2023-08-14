@@ -6,7 +6,7 @@
 
 pub use crate::protocols::rpc::error::RpcError;
 use crate::{
-    // error::NetworkError,
+    error::NetworkError,
     // peer_manager::{
     //     ConnectionNotification, ConnectionRequestSender, PeerManagerNotification,
     //     PeerManagerRequestSender,
@@ -256,112 +256,114 @@ impl NetworkApplicationConfig {
 //     }
 // }
 //
-// /// `NetworkSender` is the generic interface from upper network applications to
-// /// the lower network layer. It provides the full API for network applications,
-// /// including sending direct-send messages, sending rpc requests, as well as
-// /// dialing or disconnecting from peers and updating the list of accepted public
-// /// keys.
-// ///
-// /// `NetworkSender` is in fact a thin wrapper around a `PeerManagerRequestSender`, which in turn is
-// /// a thin wrapper on `aptos_channel::Sender<(PeerId, ProtocolId), PeerManagerRequest>`,
-// /// mostly focused on providing a more ergonomic API. However, network applications will usually
-// /// provide their own thin wrapper around `NetworkSender` that narrows the API to the specific
-// /// interface they need.
-// ///
-// /// Provide Protobuf wrapper over `[peer_manager::PeerManagerRequestSender]`
-// #[derive(Clone, Debug)]
-// pub struct NetworkSender<TMessage> {
-//     peer_mgr_reqs_tx: PeerManagerRequestSender,
-//     connection_reqs_tx: ConnectionRequestSender,
-//     _marker: PhantomData<TMessage>,
-// }
-//
-// /// Trait specifying the signature for `new()` `NetworkSender`s
-// pub trait NewNetworkSender {
-//     fn new(
-//         peer_mgr_reqs_tx: PeerManagerRequestSender,
-//         connection_reqs_tx: ConnectionRequestSender,
-//     ) -> Self;
-// }
-//
-// impl<TMessage> NewNetworkSender for NetworkSender<TMessage> {
-//     fn new(
-//         peer_mgr_reqs_tx: PeerManagerRequestSender,
-//         connection_reqs_tx: ConnectionRequestSender,
-//     ) -> Self {
-//         Self {
-//             peer_mgr_reqs_tx,
-//             connection_reqs_tx,
-//             _marker: PhantomData,
-//         }
-//     }
-// }
-//
-// impl<TMessage> NetworkSender<TMessage> {
-//     /// Request that a given Peer be dialed at the provided `NetworkAddress` and
-//     /// synchronously wait for the request to be performed.
-//     pub async fn dial_peer(&self, peer: PeerId, addr: NetworkAddress) -> Result<(), NetworkError> {
-//         self.connection_reqs_tx.dial_peer(peer, addr).await?;
-//         Ok(())
-//     }
-//
-//     /// Request that a given Peer be disconnected and synchronously wait for the request to be
-//     /// performed.
-//     pub async fn disconnect_peer(&self, peer: PeerId) -> Result<(), NetworkError> {
-//         self.connection_reqs_tx.disconnect_peer(peer).await?;
-//         Ok(())
-//     }
-// }
-//
-// impl<TMessage: Message> NetworkSender<TMessage> {
-//     /// Send a protobuf message to a single recipient. Provides a wrapper over
-//     /// `[peer_manager::PeerManagerRequestSender::send_to]`.
-//     pub fn send_to(
-//         &self,
-//         recipient: PeerId,
-//         protocol: ProtocolId,
-//         message: TMessage,
-//     ) -> Result<(), NetworkError> {
-//         let mdata = protocol.to_bytes(&message)?.into();
-//         self.peer_mgr_reqs_tx.send_to(recipient, protocol, mdata)?;
-//         Ok(())
-//     }
-//
-//     /// Send a protobuf message to a many recipients. Provides a wrapper over
-//     /// `[peer_manager::PeerManagerRequestSender::send_to_many]`.
-//     pub fn send_to_many(
-//         &self,
-//         recipients: impl Iterator<Item = PeerId>,
-//         protocol: ProtocolId,
-//         message: TMessage,
-//     ) -> Result<(), NetworkError> {
-//         // Serialize message.
-//         let mdata = protocol.to_bytes(&message)?.into();
-//         self.peer_mgr_reqs_tx
-//             .send_to_many(recipients, protocol, mdata)?;
-//         Ok(())
-//     }
-//
-//     /// Send a protobuf rpc request to a single recipient while handling
-//     /// serialization and deserialization of the request and response respectively.
-//     /// Assumes that the request and response both have the same message type.
-//     pub async fn send_rpc(
-//         &self,
-//         recipient: PeerId,
-//         protocol: ProtocolId,
-//         req_msg: TMessage,
-//         timeout: Duration,
-//     ) -> Result<TMessage, RpcError> {
-//         // serialize request
-//         let req_data = protocol.to_bytes(&req_msg)?.into();
-//         let res_data = self
-//             .peer_mgr_reqs_tx
-//             .send_rpc(recipient, protocol, req_data, timeout)
-//             .await?;
-//         let res_msg: TMessage = protocol.from_bytes(&res_data)?;
-//         Ok(res_msg)
-//     }
-// }
+/// `NetworkSender` is the generic interface from upper network applications to
+/// the lower network layer. It provides the full API for network applications,
+/// including sending direct-send messages, sending rpc requests, as well as
+/// dialing or disconnecting from peers and updating the list of accepted public
+/// keys.
+///
+/// `NetworkSender` is in fact a thin wrapper around a `PeerManagerRequestSender`, which in turn is
+/// a thin wrapper on `aptos_channel::Sender<(PeerId, ProtocolId), PeerManagerRequest>`,
+/// mostly focused on providing a more ergonomic API. However, network applications will usually
+/// provide their own thin wrapper around `NetworkSender` that narrows the API to the specific
+/// interface they need.
+///
+/// Provide Protobuf wrapper over `[peer_manager::PeerManagerRequestSender]`
+#[derive(Clone, Debug)]
+pub struct NetworkSender<TMessage> {
+    // TODO: rebuild NetworkSender around single-level network::framework2
+    // peer_mgr_reqs_tx: PeerManagerRequestSender,
+    // connection_reqs_tx: ConnectionRequestSender,
+    _marker: PhantomData<TMessage>,
+}
+
+/// Trait specifying the signature for `new()` `NetworkSender`s
+pub trait NewNetworkSender {
+    fn new(
+        // peer_mgr_reqs_tx: PeerManagerRequestSender,
+        // connection_reqs_tx: ConnectionRequestSender,
+    ) -> Self;
+}
+
+impl<TMessage> NewNetworkSender for NetworkSender<TMessage> {
+    fn new(
+        // peer_mgr_reqs_tx: PeerManagerRequestSender,
+        // connection_reqs_tx: ConnectionRequestSender,
+    ) -> Self {
+        Self {
+            // peer_mgr_reqs_tx,
+            // connection_reqs_tx,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<TMessage> NetworkSender<TMessage> {
+    /// Request that a given Peer be dialed at the provided `NetworkAddress` and
+    /// synchronously wait for the request to be performed.
+    pub async fn dial_peer(&self, peer: PeerId, addr: NetworkAddress) -> Result<(), NetworkError> {
+        // self.connection_reqs_tx.dial_peer(peer, addr).await?;
+        Ok(())
+    }
+
+    /// Request that a given Peer be disconnected and synchronously wait for the request to be
+    /// performed.
+    pub async fn disconnect_peer(&self, peer: PeerId) -> Result<(), NetworkError> {
+        // self.connection_reqs_tx.disconnect_peer(peer).await?;
+        Ok(())
+    }
+}
+
+impl<TMessage: Message> NetworkSender<TMessage> {
+    /// Send a protobuf message to a single recipient. Provides a wrapper over
+    /// `[peer_manager::PeerManagerRequestSender::send_to]`.
+    pub fn send_to(
+        &self,
+        recipient: PeerId,
+        protocol: ProtocolId,
+        message: TMessage,
+    ) -> Result<(), NetworkError> {
+        // let mdata = protocol.to_bytes(&message)?.into();
+        // self.peer_mgr_reqs_tx.send_to(recipient, protocol, mdata)?;
+        Ok(())
+    }
+
+    /// Send a protobuf message to a many recipients. Provides a wrapper over
+    /// `[peer_manager::PeerManagerRequestSender::send_to_many]`.
+    pub fn send_to_many(
+        &self,
+        recipients: impl Iterator<Item = PeerId>,
+        protocol: ProtocolId,
+        message: TMessage,
+    ) -> Result<(), NetworkError> {
+        // Serialize message.
+        // let mdata = protocol.to_bytes(&message)?.into();
+        // self.peer_mgr_reqs_tx
+        //     .send_to_many(recipients, protocol, mdata)?;
+        Ok(())
+    }
+
+    /// Send a protobuf rpc request to a single recipient while handling
+    /// serialization and deserialization of the request and response respectively.
+    /// Assumes that the request and response both have the same message type.
+    pub async fn send_rpc(
+        &self,
+        recipient: PeerId,
+        protocol: ProtocolId,
+        req_msg: TMessage,
+        timeout: Duration,
+    ) -> Result<TMessage, RpcError> {
+        // serialize request
+        // let req_data = protocol.to_bytes(&req_msg)?.into();
+        // let res_data = self
+        //     .peer_mgr_reqs_tx
+        //     .send_rpc(recipient, protocol, req_data, timeout)
+        //     .await?;
+        // let res_msg: TMessage = protocol.from_bytes(&res_data)?;
+        //Ok(res_msg)
+        Err(RpcError::TimedOut)// TODO: implement send_rpc()
+    }
+}
 
 /// Generalized functionality for any request across `DirectSend` and `Rpc`.
 pub trait SerializedRequest {
