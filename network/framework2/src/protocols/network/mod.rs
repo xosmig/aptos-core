@@ -28,6 +28,7 @@ use futures::{
 use pin_project::pin_project;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{cmp::min, fmt::Debug, marker::PhantomData, pin::Pin, time::Duration};
+use aptos_config::network_id::NetworkId;
 
 pub trait Message: DeserializeOwned + Serialize {}
 impl<T: DeserializeOwned + Serialize> Message for T {}
@@ -77,71 +78,85 @@ impl<T: DeserializeOwned + Serialize> Message for T {}
 //     }
 // }
 
-/// Configuration needed for the client side of AptosNet applications
-#[derive(Clone)]
-pub struct NetworkClientConfig {
-    /// Direct send protocols for the application (sorted by preference, highest to lowest)
-    pub direct_send_protocols_and_preferences: Vec<ProtocolId>,
-    /// RPC protocols for the application (sorted by preference, highest to lowest)
-    pub rpc_protocols_and_preferences: Vec<ProtocolId>,
-}
 
-impl NetworkClientConfig {
-    pub fn new(
-        direct_send_protocols_and_preferences: Vec<ProtocolId>,
-        rpc_protocols_and_preferences: Vec<ProtocolId>,
-    ) -> Self {
-        Self {
-            direct_send_protocols_and_preferences,
-            rpc_protocols_and_preferences,
-        }
-    }
-}
+// TODO: delete NetworkClientConfig as redundant, same as 'service' config
+// /// Configuration needed for the client side of AptosNet applications
+// #[derive(Clone)]
+// pub struct NetworkClientConfig {
+//     /// Direct send protocols for the application (sorted by preference, highest to lowest)
+//     pub direct_send_protocols_and_preferences: Vec<ProtocolId>,
+//     /// RPC protocols for the application (sorted by preference, highest to lowest)
+//     pub rpc_protocols_and_preferences: Vec<ProtocolId>,
+// }
+//
+// impl NetworkClientConfig {
+//     pub fn new(
+//         direct_send_protocols_and_preferences: Vec<ProtocolId>,
+//         rpc_protocols_and_preferences: Vec<ProtocolId>,
+//     ) -> Self {
+//         Self {
+//             direct_send_protocols_and_preferences,
+//             rpc_protocols_and_preferences,
+//         }
+//     }
+// }
 
 /// Configuration needed for the service side of AptosNet applications
 #[derive(Clone)]
-pub struct NetworkServiceConfig {
+pub struct NetworkApplicationConfig {
     /// Direct send protocols for the application (sorted by preference, highest to lowest)
     pub direct_send_protocols_and_preferences: Vec<ProtocolId>,
     /// RPC protocols for the application (sorted by preference, highest to lowest)
     pub rpc_protocols_and_preferences: Vec<ProtocolId>,
-    // The inbound queue config (from the network to the application)
-    // pub inbound_queue_config: aptos_channel::Config,
+    /// Which networks do we want traffic from? [] for all.
+    pub networks: Vec<NetworkId>,
 }
 
-impl NetworkServiceConfig {
+impl NetworkApplicationConfig {
+    /// New NetworkApplicationConfig which talks to all peers on all networks
     pub fn new(
         direct_send_protocols_and_preferences: Vec<ProtocolId>,
         rpc_protocols_and_preferences: Vec<ProtocolId>,
-        // inbound_queue_config: aptos_channel::Config,
     ) -> Self {
         Self {
             direct_send_protocols_and_preferences,
             rpc_protocols_and_preferences,
-            // inbound_queue_config,
+            networks: vec![],
         }
     }
-}
-
-/// Configuration needed for AptosNet applications to register with the network
-/// builder. Supports client and service side.
-#[derive(Clone)]
-pub struct NetworkApplicationConfig {
-    pub network_client_config: NetworkClientConfig,
-    pub network_service_config: NetworkServiceConfig,
-}
-
-impl NetworkApplicationConfig {
-    pub fn new(
-        network_client_config: NetworkClientConfig,
-        network_service_config: NetworkServiceConfig,
+    /// New NetworkApplicationConfig which talks to peers only on selected networks
+    pub fn new_for_networks(
+        direct_send_protocols_and_preferences: Vec<ProtocolId>,
+        rpc_protocols_and_preferences: Vec<ProtocolId>,
+        networks: Vec<NetworkId>,
     ) -> Self {
         Self {
-            network_client_config,
-            network_service_config,
+            direct_send_protocols_and_preferences,
+            rpc_protocols_and_preferences,
+            networks,
         }
     }
 }
+
+// /// Configuration needed for AptosNet applications to register with the network
+// /// builder. Supports client and service side.
+// #[derive(Clone)]
+// pub struct NetworkApplicationConfig { // TODO: delete? obsolete wrapper since client config is the same as service?
+//     // pub network_client_config: NetworkClientConfig,
+//     pub network_service_config: NetworkServiceConfig,
+// }
+//
+// impl NetworkApplicationConfig {
+//     pub fn new(
+//         // network_client_config: NetworkClientConfig,
+//         network_service_config: NetworkServiceConfig,
+//     ) -> Self {
+//         Self {
+//             // network_client_config,
+//             network_service_config,
+//         }
+//     }
+// }
 
 // /// A `Stream` of `Event<TMessage>` from the lower network layer to an upper
 // /// network application that deserializes inbound network direct-send and rpc
