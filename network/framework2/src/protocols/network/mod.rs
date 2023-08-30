@@ -28,6 +28,7 @@ use futures::{
 use pin_project::pin_project;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{cmp::min, fmt::Debug, marker::PhantomData, pin::Pin, time::Duration};
+use std::collections::BTreeMap;
 use aptos_config::network_id::NetworkId;
 
 pub trait Message: DeserializeOwned + Serialize {}
@@ -101,15 +102,27 @@ impl<T: DeserializeOwned + Serialize> Message for T {}
 //     }
 // }
 
+const DEFAULT_QUEUE_SIZE : usize = 1000;
+
+#[derive(Clone)]
+pub struct ApplicationProtocolConfig{
+    pub protocol_id : ProtocolId,
+    pub queue_size : usize,
+}
+
 /// Configuration needed for the service side of AptosNet applications
 #[derive(Clone)]
 pub struct NetworkApplicationConfig {
     /// Direct send protocols for the application (sorted by preference, highest to lowest)
-    pub direct_send_protocols_and_preferences: Vec<ProtocolId>,
+    pub direct_send_protocols_and_preferences: Vec<ApplicationProtocolConfig>,
     /// RPC protocols for the application (sorted by preference, highest to lowest)
-    pub rpc_protocols_and_preferences: Vec<ProtocolId>,
+    pub rpc_protocols_and_preferences: Vec<ApplicationProtocolConfig>,
     /// Which networks do we want traffic from? [] for all.
     pub networks: Vec<NetworkId>,
+}
+
+fn default_protocol_configs(protocol_ids: Vec<ProtocolId>) -> Vec<ApplicationProtocolConfig> {
+    protocol_ids.iter().map(|protocol_id| ApplicationProtocolConfig{protocol_id: *protocol_id, queue_size: DEFAULT_QUEUE_SIZE}).collect()
 }
 
 impl NetworkApplicationConfig {
@@ -119,8 +132,8 @@ impl NetworkApplicationConfig {
         rpc_protocols_and_preferences: Vec<ProtocolId>,
     ) -> Self {
         Self {
-            direct_send_protocols_and_preferences,
-            rpc_protocols_and_preferences,
+            direct_send_protocols_and_preferences: default_protocol_configs(direct_send_protocols_and_preferences),
+            rpc_protocols_and_preferences: default_protocol_configs(rpc_protocols_and_preferences),
             networks: vec![],
         }
     }
@@ -131,10 +144,14 @@ impl NetworkApplicationConfig {
         networks: Vec<NetworkId>,
     ) -> Self {
         Self {
-            direct_send_protocols_and_preferences,
-            rpc_protocols_and_preferences,
+            direct_send_protocols_and_preferences: default_protocol_configs(direct_send_protocols_and_preferences),
+            rpc_protocols_and_preferences: default_protocol_configs(rpc_protocols_and_preferences),
             networks,
         }
+    }
+
+    pub fn wants_network(&self, network: NetworkId) -> bool {
+        self.networks.is_empty() || self.networks.contains(&network)
     }
 }
 

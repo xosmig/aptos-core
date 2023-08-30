@@ -1,10 +1,12 @@
 // Copyright © Aptos Foundation
 
 pub mod application;
+pub mod builder;
 pub mod error;
 pub mod logging;
 pub mod noise;
 pub mod protocols;
+pub mod setup;
 pub mod transport;
 pub mod util;
 

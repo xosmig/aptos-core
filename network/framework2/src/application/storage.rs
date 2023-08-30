@@ -63,7 +63,7 @@ impl PeersAndMetadata {
     /// Returns all peers. Note: this will return disconnected and unhealthy peers, so
     /// it is not recommended for applications to use this interface. Instead,
     /// `get_connected_peers_and_metadata()` should be used.
-    pub fn get_all_peers(&self) -> Result<Vec<PeerNetworkId>, Error> {
+    pub fn get_all_peers(&self) -> Vec<PeerNetworkId> {
         let mut all_peers = Vec::new();
         let read = self.peers_and_metadata.read();
         for (network_id, peers) in read.iter() {
@@ -72,7 +72,38 @@ impl PeersAndMetadata {
                 all_peers.push(peer_network_id);
             }
         }
-        Ok(all_peers)
+        return all_peers;
+    }
+
+    /// Return copy of list of peers if generation is different than previously held.
+    /// May optionally filter for connected peers only.
+    /// May optionally filter on match for any of a set of ProtocolId.
+    pub fn get_all_peers_generational(
+        &self,
+        generation: u32,
+        require_connected: bool,
+        protocol_ids: &[ProtocolId],
+    ) -> Option<(Vec<PeerNetworkId>, u32)> {
+        let generation_test = self.generation.load(Ordering::SeqCst);
+        if generation == generation_test {
+            return None;
+        }
+        let mut all_peers = Vec::new();
+        let read = self.peers_and_metadata.read();
+        for (network_id, peers) in read.iter() {
+            for (peer_id, peer_metadata) in peers.iter() {
+                if require_connected && !peer_metadata.is_connected() {
+                    continue;
+                }
+                if (protocol_ids.len() != 0) && !peer_metadata.supports_any_protocol(protocol_ids) {
+                    continue;
+                }
+                let peer_network_id = PeerNetworkId::new(*network_id, *peer_id);
+                all_peers.push(peer_network_id);
+            }
+        }
+        let generation_actual = self.generation.load(Ordering::SeqCst);
+        return Some((all_peers, generation_actual));
     }
 
     /// Returns all connected peers that support at least one of
@@ -113,12 +144,6 @@ impl PeersAndMetadata {
 
         Ok(connected_peers_and_metadata)
     }
-
-    // /// Returns the networks currently held in the container
-    // pub fn get_registered_networks(&self) -> impl Iterator<Item = NetworkId> + '_ {
-    //     // TODO: all uses of this are dumb
-    //     self.peers_and_metadata.keys().copied()
-    // }
 
     /// Returns the metadata for the specified peer
     pub fn get_metadata_for_peer(
@@ -165,17 +190,6 @@ impl PeersAndMetadata {
                 peer_metadata.connection_metadata = connection_metadata.clone()
             })
             .or_insert_with(|| PeerMetadata::new(connection_metadata));
-        // let peer_metadata_for_network =
-        //     self.get_peer_metadata_for_network(&peer_network_id.network_id())?;
-        //
-        // // Update the metadata for the peer or insert a new entry
-        // peer_metadata_for_network
-        //     .write()
-        //     .entry(peer_network_id.peer_id())
-        //     .and_modify(|peer_metadata| {
-        //         peer_metadata.connection_metadata = connection_metadata.clone()
-        //     })
-        //     .or_insert_with(|| PeerMetadata::new(connection_metadata));
 
         Ok(())
     }
@@ -190,12 +204,8 @@ impl PeersAndMetadata {
         let mut writer = self.peers_and_metadata.write();
         let mut peer_metadata_for_network = writer.get_mut(&peer_network_id.network_id()).unwrap();
 
-        // let peer_metadata_for_network =
-        //     self.get_peer_metadata_for_network(&peer_network_id.network_id())?;
-
         // Update the connection state for the peer or return a missing metadata error
         if let Some(peer_metadata) = peer_metadata_for_network
-            // .write()
             .get_mut(&peer_network_id.peer_id())
         {
             self.generation.fetch_add(1 , Ordering::SeqCst);
@@ -215,12 +225,9 @@ impl PeersAndMetadata {
     ) -> Result<(), Error> {
         let mut writer = self.peers_and_metadata.write();
         let mut peer_metadata_for_network = writer.get_mut(&peer_network_id.network_id()).unwrap();
-        // let peer_metadata_for_network =
-        //     self.get_peer_metadata_for_network(&peer_network_id.network_id())?;
 
         // Update the peer monitoring metadata for the peer or return a missing metadata error
         if let Some(peer_metadata) = peer_metadata_for_network
-            // .write()
             .get_mut(&peer_network_id.peer_id())
         {
             self.generation.fetch_add(1 , Ordering::SeqCst);
@@ -241,12 +248,9 @@ impl PeersAndMetadata {
     ) -> Result<PeerMetadata, Error> {
         let mut writer = self.peers_and_metadata.write();
         let mut peer_metadata_for_network = writer.get_mut(&peer_network_id.network_id()).unwrap();
-        // let peer_metadata_for_network =
-        //     self.get_peer_metadata_for_network(&peer_network_id.network_id())?;
 
         // Remove the peer metadata for the peer or return a missing metadata error
         if let Entry::Occupied(entry) = peer_metadata_for_network
-            // .write()
             .entry(peer_network_id.peer_id())
         {
             // Don't remove the peer if the connection doesn't match!
@@ -266,21 +270,6 @@ impl PeersAndMetadata {
             Err(missing_metadata_error(&peer_network_id))
         }
     }
-
-    // /// A helper method that returns the peers and metadata for the specified network
-    // fn get_peer_metadata_for_network(
-    //     &self,
-    //     network_id: &NetworkId,
-    // ) -> Result<&RwLock<HashMap<PeerId, PeerMetadata>>, Error> {
-    //     let wat = self.peers_and_metadata.read();
-    //     wat.get(network_id);
-    //     self.peers_and_metadata.get(network_id).ok_or_else(|| {
-    //         Error::UnexpectedError(format!(
-    //             "No peers or metadata was found for the given network: {:?}",
-    //             network_id
-    //         ))
-    //     })
-    // }
 }
 
 /// A simple helper for returning a missing metadata error
