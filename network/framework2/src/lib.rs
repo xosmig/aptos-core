@@ -1,7 +1,7 @@
 // Copyright © Aptos Foundation
 
 pub mod application;
-pub mod builder;
+// pub mod builder;
 pub mod error;
 pub mod logging;
 pub mod noise;

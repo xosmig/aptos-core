@@ -1,7 +1,7 @@
 // Copyright © Aptos Foundation
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::network::ApplicationNetworkInterfaces;
+use crate::network2::ApplicationNetworkInterfaces;
 use aptos_config::config::{NodeConfig, StateSyncConfig};
 use aptos_consensus_notifications::ConsensusNotifier;
 use aptos_data_client::client::AptosDataClient;
@@ -15,7 +15,7 @@ use aptos_event_notifications::{
 use aptos_executor::chunk_executor::ChunkExecutor;
 use aptos_infallible::RwLock;
 use aptos_mempool_notifications::MempoolNotificationListener;
-use aptos_network::application::{
+use aptos_network2::application::{
     interface::{NetworkClient, NetworkClientInterface, NetworkServiceEvents},
     storage::PeersAndMetadata,
 };

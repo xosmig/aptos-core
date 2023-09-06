@@ -11,7 +11,7 @@ use crate::{
     PEER_INFORMATION_PATH, SYSTEM_INFORMATION_PATH,
 };
 use aptos_config::config::NodeConfig;
-use aptos_network::application::storage::PeersAndMetadata;
+use aptos_network2::application::storage::PeersAndMetadata;
 use assert_approx_eq::assert_approx_eq;
 use futures::executor::block_on;
 use hyper::{body, Body, Method, Request, Response, StatusCode};

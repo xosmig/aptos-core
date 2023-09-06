@@ -5,7 +5,7 @@
 #![forbid(unsafe_code)]
 
 use aptos_config::network_id::PeerNetworkId;
-use aptos_network::{
+use aptos_network2::{
     application::{interface::NetworkClientInterface, storage::PeersAndMetadata},
     protocols::network::RpcError,
 };

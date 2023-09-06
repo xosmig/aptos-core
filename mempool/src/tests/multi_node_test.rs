@@ -19,7 +19,7 @@ use aptos_config::{
     network_id::{NetworkId, PeerNetworkId},
 };
 use aptos_netcore::transport::ConnectionOrigin;
-use aptos_network::{
+use aptos_network2::{
     peer_manager::{PeerManagerNotification, PeerManagerRequest},
     ProtocolId,
 };

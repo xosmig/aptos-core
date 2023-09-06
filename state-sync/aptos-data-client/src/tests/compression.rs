@@ -7,7 +7,7 @@ use crate::{
     tests::{mock::MockNetwork, utils},
 };
 use aptos_config::config::AptosDataClientConfig;
-use aptos_network::protocols::wire::handshake::v1::ProtocolId;
+use aptos_network2::protocols::wire::handshake::v1::ProtocolId;
 use aptos_storage_service_types::{
     requests::{DataRequest, TransactionsWithProofRequest},
     responses::{DataResponse, StorageServiceResponse},

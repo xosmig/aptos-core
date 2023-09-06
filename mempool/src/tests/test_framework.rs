@@ -17,7 +17,7 @@ use aptos_event_notifications::{ReconfigNotification, ReconfigNotificationListen
 use aptos_id_generator::U32IdGenerator;
 use aptos_infallible::{Mutex, RwLock};
 use aptos_mempool_notifications::MempoolNotifier;
-use aptos_network::{
+use aptos_network2::{
     application::{
         interface::{NetworkClient, NetworkServiceEvents},
         storage::PeersAndMetadata,

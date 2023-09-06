@@ -14,7 +14,7 @@ use anyhow::bail;
 use aptos_channels::aptos_channel;
 use aptos_consensus_types::common::Author;
 use aptos_logger::{error, warn};
-use aptos_network::protocols::network::RpcError;
+use aptos_network2::protocols::network::RpcError;
 use aptos_types::epoch_state::EpochState;
 use bytes::Bytes;
 use futures::StreamExt;

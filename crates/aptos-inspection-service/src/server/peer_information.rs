@@ -3,7 +3,7 @@
 
 use crate::server::utils::CONTENT_TYPE_TEXT;
 use aptos_config::{config::NodeConfig, network_id::NetworkId};
-use aptos_network::application::storage::PeersAndMetadata;
+use aptos_network2::application::storage::PeersAndMetadata;
 use hyper::{Body, StatusCode};
 use std::sync::Arc;
 
@@ -35,7 +35,7 @@ fn get_peer_information(peers_and_metadata: Arc<PeersAndMetadata>) -> String {
     let mut peer_information = Vec::<String>::new();
 
     // Display a summary of all peers and networks
-    let all_peers = peers_and_metadata.get_all_peers().unwrap_or_default();
+    let all_peers = peers_and_metadata.get_all_peers();
     let registered_networks: Vec<NetworkId> =
         peers_and_metadata.get_registered_networks().collect();
     peer_information.push("Peer information summary:".into());

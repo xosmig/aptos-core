@@ -17,7 +17,7 @@ use aptos_config::{
 };
 use aptos_infallible::Mutex;
 use aptos_logger::prelude::*;
-use aptos_network::application::storage::PeersAndMetadata;
+use aptos_network2::application::storage::PeersAndMetadata;
 use aptos_storage_service_notifications::StorageServiceNotificationListener;
 use aptos_storage_service_types::{
     requests::StorageServiceRequest,

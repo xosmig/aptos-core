@@ -6,7 +6,8 @@
 
 mod indexer;
 mod logger;
-mod network;
+// mod network;
+mod network2;
 mod services;
 mod state_sync;
 mod storage;

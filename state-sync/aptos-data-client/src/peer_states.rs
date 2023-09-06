@@ -12,7 +12,7 @@ use aptos_config::{
 };
 use aptos_logger::prelude::*;
 use aptos_netcore::transport::ConnectionOrigin;
-use aptos_network::application::storage::PeersAndMetadata;
+use aptos_network2::application::storage::PeersAndMetadata;
 use aptos_storage_service_types::{
     requests::StorageServiceRequest, responses::StorageServerSummary,
 };

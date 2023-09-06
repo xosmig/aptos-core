@@ -242,3 +242,5 @@ impl<Message: NetworkMessageTrait> NetworkClientInterface<Message> for NetworkCl
 //         self.network_and_events
 //     }
 // }
+
+pub type NetworkEvents<Message> = crate::protocols::network::NetworkEvents<Message>;

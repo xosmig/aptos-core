@@ -29,6 +29,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 /// applications (e.g., peer monitoring service).
 #[derive(Debug)]
 pub struct PeersAndMetadata {
+    network_ids: Vec<NetworkId>,
     peers_and_metadata: RwLock<HashMap<NetworkId, HashMap<PeerId, PeerMetadata>>>,
     generation: AtomicU32,
 
@@ -39,7 +40,9 @@ pub struct PeersAndMetadata {
 impl PeersAndMetadata {
     pub fn new(network_ids: &[NetworkId]) -> Arc<PeersAndMetadata> {
         // Create the container
+        let network_ids = network_ids.to_vec();
         let mut peers_and_metadata = PeersAndMetadata {
+            network_ids,
             peers_and_metadata: RwLock::new(HashMap::new()),
             generation: AtomicU32::new(1),
             trusted_peers: HashMap::new(),
@@ -48,7 +51,7 @@ impl PeersAndMetadata {
         // Initialize each network mapping and trusted peer set
         {
             let mut wat = peers_and_metadata.peers_and_metadata.write();
-            network_ids.iter().for_each(|network_id| {
+            peers_and_metadata.network_ids.iter().for_each(|network_id| {
                 wat.insert(*network_id, HashMap::new());
 
                 peers_and_metadata
@@ -58,6 +61,11 @@ impl PeersAndMetadata {
         }
 
         Arc::new(peers_and_metadata)
+    }
+
+    /// Returns the networks currently held in the container
+    pub fn get_registered_networks(&self) -> impl Iterator<Item = NetworkId> + '_ {
+        self.network_ids.iter().copied()
     }
 
     /// Returns all peers. Note: this will return disconnected and unhealthy peers, so

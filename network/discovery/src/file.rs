@@ -63,7 +63,7 @@ mod tests {
         network_id::NetworkContext,
     };
     use aptos_event_notifications::DbBackedOnChainConfig;
-    use aptos_network::connectivity_manager::{ConnectivityRequest, DiscoverySource};
+    use aptos_network2::connectivity_manager::{ConnectivityRequest, DiscoverySource};
     use aptos_temppath::TempPath;
     use aptos_types::{network_address::NetworkAddress, PeerId};
     use futures::StreamExt;

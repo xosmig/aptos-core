@@ -23,7 +23,7 @@ use aptos_config::{
 use aptos_id_generator::{IdGenerator, U64IdGenerator};
 use aptos_infallible::RwLock;
 use aptos_logger::{debug, info, sample, sample::SampleRate, trace, warn};
-use aptos_network::{application::interface::NetworkClient, protocols::network::RpcError};
+use aptos_network2::{application::interface::NetworkClient, protocols::network::RpcError};
 use aptos_storage_interface::DbReader;
 use aptos_storage_service_client::StorageServiceClient;
 use aptos_storage_service_types::{

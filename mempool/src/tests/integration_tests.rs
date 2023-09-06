@@ -8,7 +8,7 @@ use crate::tests::{
 };
 use aptos_config::network_id::PeerNetworkId;
 use aptos_netcore::transport::ConnectionOrigin;
-use aptos_network::{
+use aptos_network2::{
     testutils::{
         test_framework::TestFramework,
         test_node::{

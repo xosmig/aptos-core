@@ -4,7 +4,7 @@
 use crate::server::utils::CONTENT_TYPE_TEXT;
 use aptos_config::config::NodeConfig;
 use aptos_logger::debug;
-use aptos_network::application::storage::PeersAndMetadata;
+use aptos_network2::application::storage::PeersAndMetadata;
 use hyper::{
     service::{make_service_fn, service_fn},
     Body, Method, Request, Response, Server, StatusCode,

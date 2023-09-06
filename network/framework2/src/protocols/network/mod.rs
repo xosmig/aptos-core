@@ -11,7 +11,7 @@ use crate::{
     //     ConnectionNotification, ConnectionRequestSender, PeerManagerNotification,
     //     PeerManagerRequestSender,
     // },
-    // transport::ConnectionMetadata,
+    transport::ConnectionMetadata,
     ProtocolId,
 };
 // use aptos_channels::aptos_channel;
@@ -29,55 +29,57 @@ use pin_project::pin_project;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{cmp::min, fmt::Debug, marker::PhantomData, pin::Pin, time::Duration};
 use std::collections::BTreeMap;
-use aptos_config::network_id::NetworkId;
+use tokio::sync::mpsc::error::TryRecvError;
+use aptos_config::network_id::{NetworkId, PeerNetworkId};
+use crate::protocols::wire::messaging::v1::{NetworkMessage, RequestId};
 
 pub trait Message: DeserializeOwned + Serialize {}
 impl<T: DeserializeOwned + Serialize> Message for T {}
 
-// /// Events received by network clients in a validator
-// ///
-// /// An enumeration of the various types of messages that the network will be sending
-// /// to its clients. This differs from [`PeerNotification`] since the contents are deserialized
-// /// into the type `TMessage` over which `Event` is generic. Note that we assume here that for every
-// /// consumer of this API there's a singleton message type, `TMessage`,  which encapsulates all the
-// /// messages and RPCs that are received by that consumer.
-// ///
-// /// [`PeerNotification`]: crate::peer::PeerNotification
-// #[derive(Debug)]
-// pub enum Event<TMessage> {
-//     /// New inbound direct-send message from peer.
-//     Message(PeerId, TMessage),
-//     /// New inbound rpc request. The request is fulfilled by sending the
-//     /// serialized response `Bytes` over the `oneshot::Sender`, where the network
-//     /// layer will handle sending the response over-the-wire.
-//     RpcRequest(
-//         PeerId,
-//         TMessage,
-//         ProtocolId,
-//         oneshot::Sender<Result<Bytes, RpcError>>,
-//     ),
-//     /// Peer which we have a newly established connection with.
-//     NewPeer(ConnectionMetadata),
-//     /// Peer with which we've lost our connection.
-//     LostPeer(ConnectionMetadata),
-// }
-//
-// /// impl PartialEq for simpler testing
-// impl<TMessage: PartialEq> PartialEq for Event<TMessage> {
-//     fn eq(&self, other: &Event<TMessage>) -> bool {
-//         use Event::*;
-//         match (self, other) {
-//             (Message(pid1, msg1), Message(pid2, msg2)) => pid1 == pid2 && msg1 == msg2,
-//             // ignore oneshot::Sender in comparison
-//             (RpcRequest(pid1, msg1, proto1, _), RpcRequest(pid2, msg2, proto2, _)) => {
-//                 pid1 == pid2 && msg1 == msg2 && proto1 == proto2
-//             },
-//             (NewPeer(metadata1), NewPeer(metadata2)) => metadata1 == metadata2,
-//             (LostPeer(metadata1), LostPeer(metadata2)) => metadata1 == metadata2,
-//             _ => false,
-//         }
-//     }
-// }
+/// Events received by network clients in a validator
+///
+/// An enumeration of the various types of messages that the network will be sending
+/// to its clients. This differs from [`PeerNotification`] since the contents are deserialized
+/// into the type `TMessage` over which `Event` is generic. Note that we assume here that for every
+/// consumer of this API there's a singleton message type, `TMessage`,  which encapsulates all the
+/// messages and RPCs that are received by that consumer.
+///
+/// [`PeerNotification`]: crate::peer::PeerNotification
+#[derive(Debug)]
+pub enum Event<TMessage> {
+    /// New inbound direct-send message from peer.
+    Message(PeerNetworkId, TMessage),
+    /// New inbound rpc request. The request is fulfilled by sending the
+    /// serialized response `Bytes` over the `oneshot::Sender`, where the network
+    /// layer will handle sending the response over-the-wire.
+    RpcRequest(
+        PeerNetworkId,
+        TMessage,
+        ProtocolId,
+        oneshot::Sender<Result<Bytes, RpcError>>,
+    ),
+    /// Peer which we have a newly established connection with. TODO network2: remove this from Event?
+    NewPeer(ConnectionMetadata),
+    /// Peer with which we've lost our connection. TODO network2: remove this from Event?
+    LostPeer(ConnectionMetadata),
+}
+
+/// impl PartialEq for simpler testing
+impl<TMessage: PartialEq> PartialEq for Event<TMessage> {
+    fn eq(&self, other: &Event<TMessage>) -> bool {
+        use Event::*;
+        match (self, other) {
+            (Message(pid1, msg1), Message(pid2, msg2)) => pid1 == pid2 && msg1 == msg2,
+            // ignore oneshot::Sender in comparison
+            (RpcRequest(pid1, msg1, proto1, _), RpcRequest(pid2, msg2, proto2, _)) => {
+                pid1 == pid2 && msg1 == msg2 && proto1 == proto2
+            },
+            (NewPeer(metadata1), NewPeer(metadata2)) => metadata1 == metadata2,
+            (LostPeer(metadata1), LostPeer(metadata2)) => metadata1 == metadata2,
+            _ => false,
+        }
+    }
+}
 
 
 // TODO: delete NetworkClientConfig as redundant, same as 'service' config
@@ -125,6 +127,10 @@ fn default_protocol_configs(protocol_ids: Vec<ProtocolId>) -> Vec<ApplicationPro
     protocol_ids.iter().map(|protocol_id| ApplicationProtocolConfig{protocol_id: *protocol_id, queue_size: DEFAULT_QUEUE_SIZE}).collect()
 }
 
+fn protocol_configs_for_queue_size(protocol_ids: Vec<ProtocolId>, queue_size: usize) -> Vec<ApplicationProtocolConfig> {
+    protocol_ids.iter().map(|protocol_id| ApplicationProtocolConfig{protocol_id: *protocol_id, queue_size}).collect()
+}
+
 impl NetworkApplicationConfig {
     /// New NetworkApplicationConfig which talks to all peers on all networks
     pub fn new(
@@ -142,16 +148,43 @@ impl NetworkApplicationConfig {
         direct_send_protocols_and_preferences: Vec<ProtocolId>,
         rpc_protocols_and_preferences: Vec<ProtocolId>,
         networks: Vec<NetworkId>,
+        queue_size: usize,
     ) -> Self {
         Self {
-            direct_send_protocols_and_preferences: default_protocol_configs(direct_send_protocols_and_preferences),
-            rpc_protocols_and_preferences: default_protocol_configs(rpc_protocols_and_preferences),
+            direct_send_protocols_and_preferences: protocol_configs_for_queue_size(direct_send_protocols_and_preferences, queue_size),
+            rpc_protocols_and_preferences: protocol_configs_for_queue_size(rpc_protocols_and_preferences, queue_size),
             networks,
         }
     }
 
     pub fn wants_network(&self, network: NetworkId) -> bool {
         self.networks.is_empty() || self.networks.contains(&network)
+    }
+}
+
+// TODO network2: is this the final home of ReceivedMessage? better place to put it?
+pub struct ReceivedMessage {
+    pub message: NetworkMessage,
+    pub sender: PeerNetworkId,
+}
+
+impl ReceivedMessage {
+    pub fn protocol_id(&self) -> Option<ProtocolId> {
+        match &self.message {
+            NetworkMessage::Error(_e) => {
+                None
+            }
+            NetworkMessage::RpcRequest(req) => {
+                Some(req.protocol_id)
+            }
+            NetworkMessage::RpcResponse(_response) => {
+                // TODO network2: legacy design of RpcResponse lacking ProtocolId requires global rpc counter (or at least per-peer) and requires reply matching globally or per-peer
+                None
+            }
+            NetworkMessage::DirectSendMsg(msg) => {
+                Some(msg.protocol_id)
+            }
+        }
     }
 }
 
@@ -174,6 +207,109 @@ impl NetworkApplicationConfig {
 //         }
 //     }
 // }
+
+struct OpenRpcRequestState {
+    id: RequestId,
+    sender: oneshot::Sender<Result<Bytes, RpcError>>,
+    protocol_id: ProtocolId,
+}
+
+pub struct NetworkEvents<TMessage> {
+    network_source: tokio::sync::mpsc::Receiver<ReceivedMessage>,
+    done: bool,
+    // TODO network2: add rpc-response matching at the application level here
+    open_outbound_rpc: BTreeMap<RequestId, OpenRpcRequestState>,
+
+    // TMessage is the type we will deserialize to
+    phantom: PhantomData<TMessage>,
+}
+
+impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
+    type Item = Event<TMessage>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.done {
+            return Poll::Ready(None);
+        }
+        // throw away up to 10 messages while looking for one to return
+        let mself = self.get_mut();
+        for _ in 1..10 {
+            match mself.network_source.try_recv() {
+                Ok(msg) => match msg.message {
+                    NetworkMessage::Error(err) => {
+                        // We just drop error responses! TODO: never send them
+                        // fall through, maybe get another
+                    }
+                    NetworkMessage::RpcRequest(request) => {
+                        let app_msg = match request.protocol_id.from_bytes(request.raw_request.as_slice()) {
+                            Ok(x) => { x },
+                            Err(_) => {
+                                mself.done = true;
+                                // TODO network2: log error, count error, close connection
+                                return Poll::Ready(None);
+                            }
+                        };
+                        let (responder, _response_reader) = oneshot::channel();//oneshot::Sender<Result<Bytes, RpcError>>
+                        // TODO network2: add rpc-response matching at the application level here
+                        return Poll::Ready(Some(Event::RpcRequest(
+                            msg.sender, app_msg, request.protocol_id, responder)))
+                    }
+                    NetworkMessage::RpcResponse(response) => {
+                        // TODO network2: add rpc-response matching at the application level here
+                        let request_state = mself.open_outbound_rpc.remove(&response.request_id);
+                        let request_state = match request_state {
+                            None => {
+                                // timeout or garbage collection or something. drop response.
+                                // TODO network2 log/count dropped response
+                                // TODO: drop this one message, but go back to local loop
+                                return Poll::Pending;
+                            }
+                            Some(x) => { x }
+                        };
+                        let app_msg = match request_state.protocol_id.from_bytes(response.raw_response.as_slice()) {
+                            Ok(x) => { x },
+                            Err(_) => {
+                                mself.done = true;
+                                // TODO network2: log error, count error, close connection
+                                return Poll::Ready(None);
+                            }
+                        };
+                        request_state.sender.send(Ok(response.raw_response.into()));
+                        // we processed a legit message, even if it didn't come back through the expected channel, yield
+                        return Poll::Pending
+                    }
+                    NetworkMessage::DirectSendMsg(message) => {
+                        let app_msg = match message.protocol_id.from_bytes(message.raw_msg.as_slice()) {
+                            Ok(x) => { x },
+                            Err(_) => {
+                                mself.done = true;
+                                // TODO network2: log error, count error, close connection
+                                return Poll::Ready(None);
+                            }
+                        };
+                        return Poll::Ready(Some(Event::Message(msg.sender, app_msg)))
+                    }
+                }
+                Err(err) => match err {
+                    TryRecvError::Empty => {
+                        return Poll::Pending
+                    }
+                    TryRecvError::Disconnected => {
+                        mself.done = true;
+                        return Poll::Ready(None)
+                    }
+                }
+            }
+        }
+        Poll::Pending
+    }
+}
+
+impl<TMessage: Message + Unpin> FusedStream for NetworkEvents<TMessage> {
+    fn is_terminated(&self) -> bool {
+        self.done
+    }
+}
 
 // /// A `Stream` of `Event<TMessage>` from the lower network layer to an upper
 // /// network application that deserializes inbound network direct-send and rpc

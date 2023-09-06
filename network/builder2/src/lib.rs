@@ -76,37 +76,37 @@ impl NetworkBuilder {
     }
 }
 
-pub struct ReceivedMessage {
-    pub message: NetworkMessage,
-    pub sender: PeerNetworkId,
+pub struct ApplicationConnections {
+    pub protocol_id: ProtocolId,
+
+    /// sender receives messages from network, towards application code
+    pub sender: tokio::sync::mpsc::Sender<ReceivedMessage>,
+
+    /// receiver is where application code takes messages from network peers
+    pub receiver: tokio::sync::mpsc::Receiver<ReceivedMessage>,
+
+    /// label used in metrics counters
+    pub label: String,
 }
 
-impl ReceivedMessage {
-    pub fn protocol_id(&self) -> Option<ProtocolId> {
-        match &self.message {
-            NetworkMessage::Error(e) => {
-                None
-            }
-            NetworkMessage::RpcRequest(req) => {
-                Some(req.protocol_id)
-            }
-            NetworkMessage::RpcResponse(response) => {
-                // TODO network2: mis-design of RpcResponse lacking ProtocolId requires global rpc counter (or at least per-peer)
-                None
-            }
-            NetworkMessage::DirectSendMsg(msg) => {
-                Some(msg.protocol_id)
-            }
+impl ApplicationConnections {
+    pub fn new(protocol_id: ProtocolId, queue_size: usize, label: &str) -> Self {
+        let (sender, receiver) = tokio::sync::mpsc::channel(queue_size);
+        Self {
+            protocol_id,
+            sender,
+            receiver,
+            label: label.to_string(),
         }
     }
 }
 
-pub struct ApplicationConnections {
-    pub protocol_id: ProtocolId,
-    pub sender: tokio::sync::mpsc::Sender<ReceivedMessage>,
-    pub receiver: tokio::sync::mpsc::Receiver<ReceivedMessage>,
-}
-
 pub struct ApplicationCollector {
     apps: BTreeMap<ProtocolId,ApplicationConnections>,
+}
+
+impl ApplicationCollector {
+    pub fn add(&mut self, connections: ApplicationConnections) {
+        self.apps.insert(connections.protocol_id, connections);
+    }
 }

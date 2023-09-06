@@ -12,7 +12,7 @@
 //! Usage example:
 //!
 //! ```
-//! use aptos_network::noise::{AntiReplayTimestamps, HandshakeAuthMode, NoiseUpgrader};
+//! use aptos_network2::noise::{AntiReplayTimestamps, HandshakeAuthMode, NoiseUpgrader};
 //! use futures::{executor, future, io::{AsyncReadExt, AsyncWriteExt}};
 //! use aptos_memsocket::MemorySocket;
 //! use aptos_config::{config::{Peer, PeerRole}, network_id::{NetworkContext, NetworkId}};
@@ -22,7 +22,7 @@
 //! use aptos_types::PeerId;
 //! use std::{collections::{HashSet, HashMap}, io, sync::Arc};
 //! use aptos_config::config::RoleType;
-//! use aptos_network::application::storage::PeersAndMetadata;
+//! use aptos_network2::application::storage::PeersAndMetadata;
 //!
 //! fn example() -> io::Result<()> {
 //! // create client and server NoiseUpgrader

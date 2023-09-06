@@ -12,7 +12,7 @@ use aptos_config::{
     network_id::NetworkId,
 };
 use aptos_crypto::HashValue;
-use aptos_network::{
+use aptos_network2::{
     application::{interface::NetworkServiceEvents, storage::PeersAndMetadata},
     peer_manager::PeerManagerNotification,
     protocols::{

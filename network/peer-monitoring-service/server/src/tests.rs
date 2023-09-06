@@ -15,7 +15,7 @@ use aptos_config::{
 use aptos_crypto::HashValue;
 use aptos_logger::Level;
 use aptos_netcore::transport::ConnectionOrigin;
-use aptos_network::{
+use aptos_network2::{
     application::{
         interface::NetworkServiceEvents, metadata::ConnectionState, storage::PeersAndMetadata,
     },

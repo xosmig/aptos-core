@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use aptos_config::network_id::{NetworkId, PeerNetworkId};
-use aptos_network::{
-    application::interface::NetworkServiceEvents,
+use aptos_network2::{
+    application::interface::NetworkEvents,
     protocols::network::{Event, RpcError},
     ProtocolId,
 };
@@ -38,14 +38,14 @@ pub struct StorageServiceNetworkEvents {
 }
 
 impl StorageServiceNetworkEvents {
-    pub fn new(network_service_events: NetworkServiceEvents<StorageServiceMessage>) -> Self {
+    pub fn new(network_events: NetworkEvents<StorageServiceMessage>) -> Self {
         // Transform the event streams to also include the network ID
-        let network_events: Vec<_> = network_service_events
-            .into_network_and_events()
-            .into_iter()
-            .map(|(network_id, events)| events.map(move |event| (network_id, event)))
-            .collect();
-        let network_events = select_all(network_events).fuse();
+        // let network_events: Vec<_> = network_service_events
+        //     .into_network_and_events()
+        //     .into_iter()
+        //     .map(|(network_id, events)| events.map(move |event| (network_id, event)))
+        //     .collect();
+        // let network_events = select_all(network_events).fuse();
 
         // Transform each event to a network request
         let network_request_stream = network_events
