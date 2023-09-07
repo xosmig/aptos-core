@@ -2518,31 +2518,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aptos-network-builder"
-version = "0.1.0"
-dependencies = [
- "aptos-channels",
- "aptos-config",
- "aptos-crypto",
- "aptos-event-notifications",
- "aptos-infallible",
- "aptos-logger",
- "aptos-netcore",
- "aptos-network-discovery",
- "aptos-network2",
- "aptos-secure-storage",
- "aptos-time-service",
- "aptos-types",
- "async-trait",
- "bcs 0.1.4",
- "futures",
- "maplit",
- "rand 0.7.3",
- "serde 1.0.149",
- "tokio",
-]
-
-[[package]]
 name = "aptos-network-checker"
 version = "0.0.1"
 dependencies = [
@@ -2611,6 +2586,7 @@ dependencies = [
  "bcs 0.1.4",
  "bytes",
  "futures",
+ "futures-core",
  "futures-util",
  "hex",
  "itertools",
@@ -2623,6 +2599,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "tokio-stream",
  "tokio-util 0.7.3",
 ]
 
@@ -2711,8 +2688,8 @@ dependencies = [
  "aptos-logger",
  "aptos-mempool",
  "aptos-mempool-notifications",
- "aptos-network-builder",
  "aptos-network2",
+ "aptos-network2-builder",
  "aptos-node-identity",
  "aptos-peer-monitoring-service-client",
  "aptos-peer-monitoring-service-server",

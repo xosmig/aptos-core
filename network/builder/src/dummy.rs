@@ -12,7 +12,7 @@ use aptos_config::{
 };
 use aptos_crypto::{test_utils::TEST_SEED, x25519, Uniform};
 use aptos_netcore::transport::ConnectionOrigin;
-use aptos_network2::{
+use aptos_network::{
     application::{interface::NetworkClient, storage::PeersAndMetadata},
     peer_manager::builder::AuthenticationMode,
     protocols::network::{

@@ -25,7 +25,7 @@ use aptos_event_notifications::{
 };
 use aptos_logger::prelude::*;
 use aptos_netcore::transport::tcp::TCPBufferCfg;
-use aptos_network2::{
+use aptos_network::{
     application::storage::PeersAndMetadata,
     connectivity_manager::{builder::ConnectivityManagerBuilder, ConnectivityRequest},
     constants::MAX_MESSAGE_SIZE,

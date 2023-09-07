@@ -13,7 +13,7 @@ use aptos_config::{
 use aptos_crypto::x25519;
 use aptos_event_notifications::ReconfigNotificationListener;
 use aptos_logger::prelude::*;
-use aptos_network2::{counters::inc_by_with_context, logging::NetworkSchema};
+use aptos_network2::logging::NetworkSchema; // counters::inc_by_with_context TODO network2 rebuild counters in place
 use aptos_short_hex_str::AsShortHexStr;
 use aptos_types::on_chain_config::{OnChainConfigPayload, OnChainConfigProvider, ValidatorSet};
 use futures::Stream;
@@ -81,12 +81,13 @@ impl<P: OnChainConfigProvider> ValidatorSetStream<P> {
                 .map(|peer| &peer.keys),
         );
 
-        inc_by_with_context(
-            &DISCOVERY_COUNTS,
-            &self.network_context,
-            "new_nodes",
-            peer_set.len() as u64,
-        );
+        // TODO network2 redo counters
+        // inc_by_with_context(
+        //     &DISCOVERY_COUNTS,
+        //     &self.network_context,
+        //     "new_nodes",
+        //     peer_set.len() as u64,
+        // );
 
         peer_set
     }
@@ -129,7 +130,7 @@ pub(crate) fn extract_validator_set_updates(
                     .map_err(anyhow::Error::from)
             }
             .map_err(|err| {
-                inc_by_with_context(&DISCOVERY_COUNTS, &network_context, "read_failure", 1);
+                // inc_by_with_context(&DISCOVERY_COUNTS, &network_context, "read_failure", 1); // TODO network2 redo counters
 
                 warn!(
                     NetworkSchema::new(&network_context),

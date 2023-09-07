@@ -6,12 +6,13 @@ use tokio::runtime::Handle;
 use aptos_config::config::{NetworkConfig, RoleType};
 use aptos_config::network_id::{NetworkContext, PeerNetworkId};
 use aptos_event_notifications::{DbBackedOnChainConfig,EventSubscriptionService};
-use aptos_network_discovery::DiscoveryChangeListener;
+// use aptos_network_discovery::DiscoveryChangeListener;
 use aptos_time_service::TimeService;
 use aptos_types::chain_id::ChainId;
-use crate::application::storage::PeersAndMetadata;
-use crate::protocols::wire::handshake::v1::ProtocolId;
-use crate::protocols::wire::messaging::v1::NetworkMessage;
+use aptos_network2::application::storage::PeersAndMetadata;
+use aptos_network2::protocols::wire::handshake::v1::ProtocolId;
+use aptos_network2::protocols::wire::messaging::v1::NetworkMessage;
+use aptos_network2::protocols::network::ReceivedMessage;
 
 #[derive(Debug, PartialEq, PartialOrd)]
 enum State {
@@ -30,7 +31,7 @@ pub struct NetworkBuilder {
     executor: Option<Handle>,
     time_service: TimeService,
     network_context: NetworkContext,
-    discovery_listeners: Option<Vec<DiscoveryChangeListener<DbBackedOnChainConfig>>>,
+    // discovery_listeners: Option<Vec<DiscoveryChangeListener<DbBackedOnChainConfig>>>, // TODO network2: re-build known-peer-directory
     // connectivity_manager_builder: Option<ConnectivityManagerBuilder>, // TODO network2: re-enable connectivity manager
     // health_checker_builder: Option<HealthCheckerBuilder>,
     // peer_manager_builder: PeerManagerBuilder,
@@ -54,7 +55,7 @@ impl NetworkBuilder {
             executor: None,
             time_service,
             network_context,
-            discovery_listeners: None,
+            // discovery_listeners: None,
             // connectivity_manager_builder: None,
             peers_and_metadata,
         }
@@ -83,21 +84,20 @@ pub struct ApplicationConnections {
     pub sender: tokio::sync::mpsc::Sender<ReceivedMessage>,
 
     /// receiver is where application code takes messages from network peers
-    pub receiver: tokio::sync::mpsc::Receiver<ReceivedMessage>,
+    //pub receiver: tokio::sync::mpsc::Receiver<ReceivedMessage>,
 
     /// label used in metrics counters
     pub label: String,
 }
 
 impl ApplicationConnections {
-    pub fn new(protocol_id: ProtocolId, queue_size: usize, label: &str) -> Self {
+    pub fn build(protocol_id: ProtocolId, queue_size: usize, label: &str) -> (ApplicationConnections, tokio::sync::mpsc::Receiver<ReceivedMessage>) {
         let (sender, receiver) = tokio::sync::mpsc::channel(queue_size);
-        Self {
+        (ApplicationConnections {
             protocol_id,
             sender,
-            receiver,
             label: label.to_string(),
-        }
+        }, receiver)
     }
 }
 
@@ -106,6 +106,12 @@ pub struct ApplicationCollector {
 }
 
 impl ApplicationCollector {
+    pub fn new() -> Self {
+        Self {
+            apps: BTreeMap::new(),
+        }
+    }
+
     pub fn add(&mut self, connections: ApplicationConnections) {
         self.apps.insert(connections.protocol_id, connections);
     }

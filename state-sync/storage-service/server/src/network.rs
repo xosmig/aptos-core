@@ -49,8 +49,8 @@ impl StorageServiceNetworkEvents {
 
         // Transform each event to a network request
         let network_request_stream = network_events
-            .filter_map(|(network_id, event)| {
-                future::ready(Self::event_to_request(network_id, event))
+            .filter_map(|event| {
+                future::ready(Self::event_to_request(event))
             })
             .boxed();
 
@@ -61,18 +61,18 @@ impl StorageServiceNetworkEvents {
 
     /// Filters out everything except Rpc requests
     fn event_to_request(
-        network_id: NetworkId,
+        // network_id: NetworkId,
         event: Event<StorageServiceMessage>,
     ) -> Option<NetworkRequest> {
         match event {
             Event::RpcRequest(
-                peer_id,
+                peer_network_id,
                 StorageServiceMessage::Request(storage_service_request),
                 protocol_id,
                 response_tx,
             ) => {
                 let response_sender = ResponseSender::new(response_tx);
-                let peer_network_id = PeerNetworkId::new(network_id, peer_id);
+                // let peer_network_id = PeerNetworkId::new(network_id, peer_id);
                 Some(NetworkRequest {
                     peer_network_id,
                     protocol_id,

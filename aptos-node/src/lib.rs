@@ -22,6 +22,7 @@ use aptos_build_info::build_information;
 use aptos_config::config::{merge_node_config, NodeConfig, PersistableConfig};
 use aptos_framework::ReleaseBundle;
 use aptos_logger::{prelude::*, telemetry_log_writer::TelemetryLog, Level, LoggerFilterUpdater};
+use aptos_network2_builder::ApplicationCollector;
 use aptos_state_sync_driver::driver_factory::StateSyncRuntimes;
 use aptos_types::chain_id::ChainId;
 use clap::Parser;
@@ -466,7 +467,7 @@ pub fn setup_environment_and_start_node(
     info!("Using node config {:?}", &node_config);
 
     // Start the node inspection service
-    let peers_and_metadata = network::create_peers_and_metadata(&node_config);
+    let peers_and_metadata = network2::create_peers_and_metadata(&node_config);
     services::start_node_inspection_service(&node_config, peers_and_metadata.clone());
 
     // Set up the storage database and any RocksDB checkpoints
@@ -497,19 +498,33 @@ pub fn setup_environment_and_start_node(
         consensus_reconfig_subscription,
     ) = state_sync::create_event_subscription_service(&node_config, &db_rw);
 
-    // Set up the networks and gather the application network handles
-    let (
-        network_runtimes,
-        consensus_network_interfaces,
-        mempool_network_interfaces,
-        peer_monitoring_service_network_interfaces,
-        storage_service_network_interfaces,
-    ) = network::setup_networks_and_get_interfaces(
+    let network_runtimes = network2::setup_networks(
         &node_config,
         chain_id,
         peers_and_metadata.clone(),
-        &mut event_subscription_service,
+        &mut event_subscription_service);
+
+    let mut apps = ApplicationCollector::new();
+    let consensus_network_interfaces = network2::consensus_network_connections(
+        &node_config,
+        peers_and_metadata.clone(),
+        &mut apps,
     );
+    // Set up the networks and gather the application network handles
+    // let (
+    //     network_runtimes,
+    //     consensus_network_interfaces,
+    //     mempool_network_interfaces,
+    //     peer_monitoring_service_network_interfaces,
+    //     storage_service_network_interfaces,
+    // ) = network2::setup_networks_and_get_interfaces(
+    //     &node_config,
+    //     chain_id,
+    //     peers_and_metadata.clone(),
+    //     &mut event_subscription_service,
+    // );
+
+    let peer_monitoring_service_network_interfaces = network2::peer_monitoring_network_connections(&node_config, peers_and_metadata.clone(), &mut apps);
 
     // Start the peer monitoring service
     let peer_monitoring_service_runtime = services::start_peer_monitoring_service(
@@ -517,6 +532,8 @@ pub fn setup_environment_and_start_node(
         peer_monitoring_service_network_interfaces,
         db_rw.reader.clone(),
     );
+
+    let storage_service_network_interfaces = network2::storage_service_network_connections(&node_config, peers_and_metadata.clone(), &mut apps);
 
     // Start state sync and get the notification endpoints for mempool and consensus
     let (state_sync_runtimes, mempool_listener, consensus_notifier) =
@@ -531,6 +548,8 @@ pub fn setup_environment_and_start_node(
     // Bootstrap the API and indexer
     let (mempool_client_receiver, api_runtime, indexer_runtime, indexer_grpc_runtime) =
         services::bootstrap_api_and_indexer(&node_config, aptos_db, chain_id)?;
+
+    let mempool_network_interfaces = network2::mempool_network_connections(&node_config, peers_and_metadata.clone(), &mut apps);
 
     // Create mempool and get the consensus to mempool sender
     let (mempool_runtime, consensus_to_mempool_sender) =

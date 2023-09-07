@@ -30,6 +30,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::{cmp::min, fmt::Debug, marker::PhantomData, pin::Pin, time::Duration};
 use std::collections::BTreeMap;
 use tokio::sync::mpsc::error::TryRecvError;
+use tokio_stream::wrappers::ReceiverStream;
 use aptos_config::network_id::{NetworkId, PeerNetworkId};
 use crate::protocols::wire::messaging::v1::{NetworkMessage, RequestId};
 
@@ -215,13 +216,24 @@ struct OpenRpcRequestState {
 }
 
 pub struct NetworkEvents<TMessage> {
-    network_source: tokio::sync::mpsc::Receiver<ReceivedMessage>,
+    network_source: NetworkSource, //::sync::mpsc::Receiver<ReceivedMessage>,
     done: bool,
     // TODO network2: add rpc-response matching at the application level here
     open_outbound_rpc: BTreeMap<RequestId, OpenRpcRequestState>,
 
     // TMessage is the type we will deserialize to
     phantom: PhantomData<TMessage>,
+}
+
+impl<TMessage: Message + Unpin> NetworkEvents<TMessage> {
+    pub fn new(network_source: NetworkSource) -> Self {
+        Self {
+            network_source,
+            done: false,
+            open_outbound_rpc: BTreeMap::new(),
+            phantom: Default::default(),
+        }
+    }
 }
 
 impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
@@ -234,8 +246,21 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
         // throw away up to 10 messages while looking for one to return
         let mself = self.get_mut();
         for _ in 1..10 {
-            match mself.network_source.try_recv() {
-                Ok(msg) => match msg.message {
+            let msg = match Pin::new(&mut mself.network_source).poll_next(cx) {
+                Poll::Ready(x) => match x {
+                    Some(msg) => {
+                        msg
+                    }
+                    None => {
+                        mself.done = true;
+                        return Poll::Ready(None);
+                    }
+                }
+                Poll::Pending => {
+                    return Poll::Pending
+                }
+            };
+            match msg.message {
                     NetworkMessage::Error(err) => {
                         // We just drop error responses! TODO: never send them
                         // fall through, maybe get another
@@ -290,16 +315,6 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
                         return Poll::Ready(Some(Event::Message(msg.sender, app_msg)))
                     }
                 }
-                Err(err) => match err {
-                    TryRecvError::Empty => {
-                        return Poll::Pending
-                    }
-                    TryRecvError::Disconnected => {
-                        mself.done = true;
-                        return Poll::Ready(None)
-                    }
-                }
-            }
         }
         Poll::Pending
     }
@@ -543,4 +558,65 @@ pub trait SerializedRequest {
     fn to_message<TMessage: DeserializeOwned>(&self) -> anyhow::Result<TMessage> {
         self.protocol_id().from_bytes(self.data())
     }
+}
+
+// tokio::sync::mpsc::Receiver<ReceivedMessage>,
+
+enum NetworkSourceUnion {
+    SingleSource(tokio_stream::wrappers::ReceiverStream<ReceivedMessage>),
+    ManySource(futures::stream::SelectAll<ReceiverStream<ReceivedMessage>>),
+}
+
+pub struct NetworkSource {
+    source: NetworkSourceUnion,
+}
+
+impl NetworkSource {
+    pub fn new_single_source(network_source: tokio::sync::mpsc::Receiver<ReceivedMessage>) -> Self {
+        let network_source = ReceiverStream::new(network_source);
+        Self {
+            source: NetworkSourceUnion::SingleSource(network_source),
+        }
+    }
+
+    pub fn new_multi_source(receivers: Vec<tokio::sync::mpsc::Receiver<ReceivedMessage>>) -> Self {
+        Self {
+            source: NetworkSourceUnion::ManySource(merge_receivers(receivers))
+        }
+    }
+}
+
+
+// tokio::sync::mpsc::Receiver<ReceivedMessage>
+// tokio_stream::wrappers::ReceiverStream
+//futures::stream::SelectAll
+fn merge_receivers(receivers: Vec<tokio::sync::mpsc::Receiver<ReceivedMessage>>) -> futures::stream::SelectAll<ReceiverStream<ReceivedMessage>> {
+    futures::stream::select_all(
+        receivers.into_iter().map(|x| tokio_stream::wrappers::ReceiverStream::new(x))
+    )
+}
+
+impl Stream for NetworkSource {
+    type Item = ReceivedMessage;
+
+    fn poll_next(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>
+    ) -> Poll<Option<Self::Item>> {
+        match &mut self.get_mut().source {
+            NetworkSourceUnion::SingleSource(rs) => { Pin::new(rs).poll_next(cx) }
+            NetworkSourceUnion::ManySource(sa) => { Pin::new(sa).poll_next(cx) }
+        }
+    }
+
+    // pub fn try_recv(&mut self) -> Result<ReceivedMessage, TryRecvError> {
+    //     match self {
+    //         NetworkSource::SingleSource(source) => {
+    //             source.try_recv()
+    //         }
+    //         NetworkSource::ManySource(sources) => {
+    //
+    //         }
+    //     }
+    // }
 }
