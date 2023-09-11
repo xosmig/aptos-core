@@ -35,6 +35,7 @@ use futures::{
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, convert::TryFrom, fmt, io, pin::Pin, sync::Arc, time::Duration};
 use std::sync::RwLock;
+use crate::application::storage::PeersAndMetadata;
 
 #[cfg(test)]
 mod test;
@@ -441,7 +442,9 @@ where
         time_service: TimeService,
         identity_key: x25519::PrivateKey,
         // auth_mode: HandshakeAuthMode,
-        trusted_peers: Arc<RwLock<Vec<(NetworkId, PeerSet)>>>,
+        // trusted_peers: Arc<RwLock<Vec<(NetworkId, PeerSet)>>>,
+        // trusted_peers: Arc<RwLock<PeerSet>>,
+        peers_and_metadata: Arc<PeersAndMetadata>,
         mutual_auth: bool,
         handshake_version: u8,
         chain_id: ChainId,
@@ -455,7 +458,7 @@ where
         let identity_pubkey = identity_key.public_key();
 
         let upgrade_context = UpgradeContext::new(
-            NoiseUpgrader::new(network_context, identity_key, trusted_peers, mutual_auth),
+            NoiseUpgrader::new(network_context, identity_key, peers_and_metadata, mutual_auth),
             handshake_version,
             supported_protocols,
             chain_id,

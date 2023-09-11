@@ -27,6 +27,7 @@ use aptos_short_hex_str::{AsShortHexStr, ShortHexStr};
 use aptos_types::PeerId;
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use std::{collections::HashMap, convert::TryFrom as _, fmt::Debug, sync::Arc, sync::RwLock};
+use crate::application::storage::PeersAndMetadata;
 
 /// In a mutually authenticated network, a client message is accompanied with a timestamp.
 /// This is in order to prevent replay attacks, where the attacker does not know the client's static key,
@@ -149,7 +150,8 @@ pub struct NoiseUpgrader {
     /// Config for executing Noise handshakes. Includes our static private key.
     noise_config: noise::NoiseConfig,
     /// Configured known peers
-    trusted_peers: Arc<RwLock<Vec<(NetworkId, PeerSet)>>>,
+    // trusted_peers: Arc<RwLock<Vec<(NetworkId, PeerSet)>>>,
+    peers_and_metadata: Arc<PeersAndMetadata>,
     /// When negatiating mutual trust we need these timestamps
     anti_replay_timestamps: Option<RwLock<AntiReplayTimestamps>>,
 }
@@ -168,7 +170,8 @@ impl NoiseUpgrader {
         network_context: NetworkContext,
         key: x25519::PrivateKey,
         // auth_mode: HandshakeAuthMode, // TODO: pass in trusted peer source
-        trusted_peers: Arc<RwLock<Vec<(NetworkId, PeerSet)>>>,
+        // trusted_peers: Arc<RwLock<Vec<(NetworkId, PeerSet)>>>,
+        peers_and_metadata: Arc<PeersAndMetadata>,
         mutual_auth: bool,
     ) -> Self {
         let anti_replay_timestamps = if mutual_auth {
@@ -179,7 +182,8 @@ impl NoiseUpgrader {
         Self {
             network_context,
             noise_config: noise::NoiseConfig::new(key),
-            trusted_peers,
+            // trusted_peers,
+            peers_and_metadata,
             anti_replay_timestamps,
         }
     }
@@ -190,13 +194,14 @@ impl NoiseUpgrader {
 
     pub fn is_trusted_peer(&self, network_id: &NetworkId, peer_id: &PeerId) -> Option<Peer> {
         // TODO: implement
-        let trusted_peers = self.trusted_peers.read().unwrap();
-        for (ni, ps) in trusted_peers.iter() {
-            if ni == network_id {
-                let peer = ps.get(peer_id);
-                if let Some(peer) = peer {
-                    return Some(peer.clone());
-                }
+        let trusted_peers = match self.peers_and_metadata.get_trusted_peers(network_id) {
+            Ok(ps) => {ps}
+            Err(_) => {return None;}
+        };
+
+        for (tpeer_id, peer) in trusted_peers.read().iter() {
+            if peer_id == tpeer_id {
+                return Some(peer.clone());
             }
         }
         None

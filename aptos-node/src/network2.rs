@@ -197,11 +197,6 @@ pub fn mempool_network_connections(
 
     build_network_connections(direct_send_protocols, rpc_protocols, queue_size, counter_label, peers_and_metadata, apps)
 }
-// TODO: return these as if from setup_networks_and_get_interfaces()
-// Option<ApplicationNetworkInterfaces<ConsensusMsg>>,
-// ApplicationNetworkInterfaces<MempoolSyncMsg>,
-// ApplicationNetworkInterfaces<PeerMonitoringServiceMessage>,
-// ApplicationNetworkInterfaces<StorageServiceMessage>,
 
 /// Creates a network runtime for the given network config
 pub fn create_network_runtime(network_config: &NetworkConfig) -> Runtime {
@@ -248,10 +243,11 @@ pub fn setup_networks(
     chain_id: ChainId,
     peers_and_metadata: Arc<PeersAndMetadata>,
     event_subscription_service: &mut EventSubscriptionService,
-) -> Vec<Runtime> { // TODO network2 return (runtimes, networks) ?
+) -> (Vec<Runtime>, Vec<NetworkBuilder>) {
     let network_configs = extract_network_configs(node_config);
 
     let mut network_runtimes = vec![];
+    let mut networks = vec![];
 
     for network_config in network_configs.into_iter() {
         // Create a network runtime for the config
@@ -275,13 +271,13 @@ pub fn setup_networks(
         // if network_id.is_validator_network() {}
         // Build and start the network on the runtime
         network_builder.build(runtime.handle().clone());
-        network_builder.start();
-        network_runtimes.push(runtime);
         debug!(
             "Network built for the network context: {}",
             network_builder.network_context()
         );
+        network_runtimes.push(runtime);
+        networks.push(network_builder);
     }
 
-    network_runtimes
+    (network_runtimes, networks)
 }

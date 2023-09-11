@@ -33,7 +33,7 @@ pub struct PeersAndMetadata {
     peers_and_metadata: RwLock<HashMap<NetworkId, HashMap<PeerId, PeerMetadata>>>,
     generation: AtomicU32,
 
-    // trusted_peers are configured at system startup and not part of the generational peer data
+    // trusted_peers have separate locking and access
     trusted_peers: HashMap<NetworkId, Arc<RwLock<PeerSet>>>,
 }
 

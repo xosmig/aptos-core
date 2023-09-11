@@ -498,44 +498,24 @@ pub fn setup_environment_and_start_node(
         consensus_reconfig_subscription,
     ) = state_sync::create_event_subscription_service(&node_config, &db_rw);
 
-    let network_runtimes = network2::setup_networks(
+    let (network_runtimes, mut networks) = network2::setup_networks(
         &node_config,
         chain_id,
         peers_and_metadata.clone(),
         &mut event_subscription_service);
 
     let mut apps = ApplicationCollector::new();
-    let consensus_network_interfaces = network2::consensus_network_connections(
-        &node_config,
-        peers_and_metadata.clone(),
-        &mut apps,
-    );
-    // Set up the networks and gather the application network handles
-    // let (
-    //     network_runtimes,
-    //     consensus_network_interfaces,
-    //     mempool_network_interfaces,
-    //     peer_monitoring_service_network_interfaces,
-    //     storage_service_network_interfaces,
-    // ) = network2::setup_networks_and_get_interfaces(
-    //     &node_config,
-    //     chain_id,
-    //     peers_and_metadata.clone(),
-    //     &mut event_subscription_service,
-    // );
-
-    let peer_monitoring_service_network_interfaces = network2::peer_monitoring_network_connections(&node_config, peers_and_metadata.clone(), &mut apps);
 
     // Start the peer monitoring service
+    let peer_monitoring_service_network_interfaces = network2::peer_monitoring_network_connections(&node_config, peers_and_metadata.clone(), &mut apps);
     let peer_monitoring_service_runtime = services::start_peer_monitoring_service(
         &node_config,
         peer_monitoring_service_network_interfaces,
         db_rw.reader.clone(),
     );
 
-    let storage_service_network_interfaces = network2::storage_service_network_connections(&node_config, peers_and_metadata.clone(), &mut apps);
-
     // Start state sync and get the notification endpoints for mempool and consensus
+    let storage_service_network_interfaces = network2::storage_service_network_connections(&node_config, peers_and_metadata.clone(), &mut apps);
     let (state_sync_runtimes, mempool_listener, consensus_notifier) =
         state_sync::start_state_sync_and_get_notification_handles(
             &node_config,
@@ -549,9 +529,8 @@ pub fn setup_environment_and_start_node(
     let (mempool_client_receiver, api_runtime, indexer_runtime, indexer_grpc_runtime) =
         services::bootstrap_api_and_indexer(&node_config, aptos_db, chain_id)?;
 
-    let mempool_network_interfaces = network2::mempool_network_connections(&node_config, peers_and_metadata.clone(), &mut apps);
-
     // Create mempool and get the consensus to mempool sender
+    let mempool_network_interfaces = network2::mempool_network_connections(&node_config, peers_and_metadata.clone(), &mut apps);
     let (mempool_runtime, consensus_to_mempool_sender) =
         services::start_mempool_runtime_and_get_consensus_sender(
             &mut node_config,
@@ -560,10 +539,15 @@ pub fn setup_environment_and_start_node(
             mempool_network_interfaces,
             mempool_listener,
             mempool_client_receiver,
-            peers_and_metadata,
+            peers_and_metadata.clone(),
         );
 
     // Create the consensus runtime (this blocks on state sync first)
+    let consensus_network_interfaces = network2::consensus_network_connections(
+        &node_config,
+        peers_and_metadata.clone(),
+        &mut apps,
+    );
     let consensus_runtime = consensus_network_interfaces.map(|consensus_network_interfaces| {
         // Wait until state sync has been initialized
         debug!("Waiting until state sync is initialized!");
@@ -580,6 +564,12 @@ pub fn setup_environment_and_start_node(
             consensus_to_mempool_sender,
         )
     });
+
+    let apps = Arc::new(apps);
+    for network in networks.iter_mut() {
+        network.set_apps(apps.clone());
+        network.start();
+    }
 
     Ok(AptosHandle {
         _api_runtime: api_runtime,
