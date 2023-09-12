@@ -13,14 +13,17 @@ use move_compiler::{
     PASS_CFGIR,
 };
 use move_coverage::coverage_map::{output_map_to_file, CoverageMap};
-// if windows
-use move_package::compilation::compiled_package::unimplemented_v2_driver;
-use move_package::{compilation::build_plan::BuildPlan, BuildConfig, CompilerConfig};
+use move_package::{
+    compilation::{build_plan::BuildPlan, compiled_package::unimplemented_v2_driver},
+    BuildConfig, CompilerConfig,
+};
 use move_unit_test::UnitTestingConfig;
+use move_vm_runtime::tracing::{LOGGING_FILE_WRITER, TRACING_ENABLED};
 use move_vm_test_utils::gas_schedule::CostTable;
 // if unix
 #[cfg(target_family = "unix")]
 use std::os::unix::prelude::ExitStatusExt;
+// if windows
 #[cfg(target_family = "windows")]
 use std::os::windows::process::ExitStatusExt;
 use std::{
@@ -266,6 +269,10 @@ pub fn run_move_unit_tests<W: Write + Send>(
 
     // Compute the coverage map. This will be used by other commands after this.
     if compute_coverage && !no_tests {
+        if *TRACING_ENABLED {
+            let buf_writer = &mut *LOGGING_FILE_WRITER.lock().unwrap();
+            buf_writer.flush().unwrap();
+        }
         let coverage_map = CoverageMap::from_trace_file(trace_path);
         output_map_to_file(coverage_map_path, &coverage_map).unwrap();
     }

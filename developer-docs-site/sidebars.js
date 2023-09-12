@@ -125,6 +125,7 @@ const sidebars = {
             "move/move-on-aptos/modules-on-aptos",
             "move/move-on-aptos/move-scripts",
             "move/move-on-aptos/cli",
+            "move/move-on-aptos/cryptography",
           ],
         },
         {
@@ -229,7 +230,6 @@ const sidebars = {
       collapsed: true,
       items: [
         "integration/aptos-apis",
-        "integration/indexing",
         {
           type: "category",
           label: "Integrate with Wallets",
@@ -276,8 +276,21 @@ const sidebars = {
                 "tools/aptos-cli/install-cli/install-move-prover",
               ],
             },
-            "tools/aptos-cli/use-cli/use-aptos-cli",
-            "tools/aptos-cli/use-cli/use-aptos-ledger",
+            {
+              type: "category",
+              label: "Use Aptos CLI",
+              link: { type: "doc", id: "tools/aptos-cli/use-cli/use-aptos-cli" },
+              collapsible: true,
+              collapsed: true,
+              items: [
+                "tools/aptos-cli/use-cli/cli-configuration",
+                "tools/aptos-cli/use-cli/cli-account",
+                "tools/aptos-cli/use-cli/cli-key",
+                "tools/aptos-cli/use-cli/cli-node",
+                "tools/aptos-cli/use-cli/cli-genesis",
+                "tools/aptos-cli/use-cli/use-aptos-ledger",
+              ],
+            },
           ],
         },
         {
@@ -385,6 +398,55 @@ const sidebars = {
           ],
         },
         "guides/transaction-management",
+        {
+          type: "category",
+          label: "Learn about the Aptos Indexer",
+          collapsible: true,
+          collapsed: true,
+          link: { type: "doc", id: "indexer/indexer-landing" },
+          items: [
+            {
+              type: "category",
+              label: "Indexer API",
+              link: { type: "doc", id: "indexer/api/index" },
+              collapsible: true,
+              collapsed: true,
+              items: ["indexer/api/labs-hosted", "indexer/api/self-hosted", "indexer/api/example-queries"],
+            },
+            {
+              type: "category",
+              label: "Custom Processors",
+              link: { type: "doc", id: "indexer/custom-processors/index" },
+              collapsible: true,
+              collapsed: true,
+              items: ["indexer/custom-processors/e2e-tutorial", "indexer/custom-processors/parsing-txns"],
+            },
+            {
+              type: "category",
+              label: "Transaction Stream Service",
+              link: { type: "doc", id: "indexer/txn-stream/index" },
+              collapsible: true,
+              collapsed: true,
+              items: [
+                "indexer/txn-stream/labs-hosted",
+                "indexer/txn-stream/self-hosted",
+                "indexer/txn-stream/local-development",
+              ],
+            },
+            {
+              type: "category",
+              label: "Legacy Indexer",
+              link: { type: "doc", id: "indexer/legacy/index" },
+              collapsible: true,
+              collapsed: true,
+              items: [
+                "indexer/legacy/indexer-fullnode",
+                "indexer/legacy/custom-data-model",
+                "indexer/legacy/migration",
+              ],
+            },
+          ],
+        },
       ],
     },
   ],
@@ -449,7 +511,6 @@ const sidebars = {
         "nodes/full-node/run-a-fullnode-on-gcp",
       ],
     },
-    "nodes/indexer-fullnode",
     {
       type: "category",
       label: "Monitor Nodes",

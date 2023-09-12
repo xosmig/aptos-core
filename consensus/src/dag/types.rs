@@ -16,11 +16,12 @@ use aptos_reliable_broadcast::{BroadcastStatus, RBMessage};
 use aptos_types::{
     aggregate_signature::{AggregateSignature, PartialSignatures},
     epoch_state::EpochState,
+    ledger_info::LedgerInfoWithSignatures,
     validator_signer::ValidatorSigner,
     validator_verifier::ValidatorVerifier,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, ops::Deref, sync::Arc};
+use std::{cmp::min, collections::HashSet, ops::Deref, sync::Arc};
 
 pub trait TDAGMessage: Into<DAGMessage> + TryFrom<DAGMessage> {
     fn verify(&self, verifier: &ValidatorVerifier) -> anyhow::Result<()>;
@@ -398,6 +399,14 @@ impl CertifiedNode {
     pub fn certificate(&self) -> NodeCertificate {
         NodeCertificate::new(self.node.metadata.clone(), self.signatures.clone())
     }
+
+    pub fn verify(&self, verifier: &ValidatorVerifier) -> anyhow::Result<()> {
+        ensure!(self.digest() == self.calculate_digest(), "invalid digest");
+
+        verifier
+            .verify_multi_signatures(self.metadata(), self.certificate().signatures())
+            .map_err(|e| anyhow::anyhow!("unable to verify: {}", e))
+    }
 }
 
 impl Deref for CertifiedNode {
@@ -408,13 +417,44 @@ impl Deref for CertifiedNode {
     }
 }
 
-impl TDAGMessage for CertifiedNode {
-    fn verify(&self, verifier: &ValidatorVerifier) -> anyhow::Result<()> {
-        ensure!(self.digest() == self.calculate_digest(), "invalid digest");
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct CertifiedNodeMessage {
+    inner: CertifiedNode,
+    ledger_info: LedgerInfoWithSignatures,
+}
 
-        verifier
-            .verify_multi_signatures(self.metadata(), self.certificate().signatures())
-            .map_err(|e| anyhow::anyhow!("unable to verify: {}", e))
+impl CertifiedNodeMessage {
+    pub fn new(node: CertifiedNode, ledger_info: LedgerInfoWithSignatures) -> Self {
+        Self {
+            inner: node,
+            ledger_info,
+        }
+    }
+
+    pub fn ledger_info(&self) -> &LedgerInfoWithSignatures {
+        &self.ledger_info
+    }
+
+    pub fn certified_node(self) -> CertifiedNode {
+        self.inner
+    }
+}
+
+impl Deref for CertifiedNodeMessage {
+    type Target = CertifiedNode;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl TDAGMessage for CertifiedNodeMessage {
+    fn verify(&self, verifier: &ValidatorVerifier) -> anyhow::Result<()> {
+        self.inner.verify(verifier)?;
+
+        self.ledger_info
+            .verify_signatures(verifier)
+            .map_err(|e| anyhow::anyhow!("unable to verify ledger info: {}", e))
     }
 }
 
@@ -453,12 +493,7 @@ impl SignatureBuilder {
     }
 }
 
-impl<M> BroadcastStatus<M> for SignatureBuilder
-where
-    M: RBMessage,
-    Vote: TryFrom<M> + Into<M>,
-    Node: TryFrom<M> + Into<M>,
-{
+impl BroadcastStatus<DAGMessage> for SignatureBuilder {
     type Ack = Vote;
     type Aggregated = NodeCertificate;
     type Message = Node;
@@ -507,15 +542,10 @@ impl CertifiedAck {
     }
 }
 
-impl<M> BroadcastStatus<M> for CertificateAckState
-where
-    M: RBMessage,
-    CertifiedAck: TryFrom<M> + Into<M>,
-    CertifiedNode: TryFrom<M> + Into<M>,
-{
+impl BroadcastStatus<DAGMessage> for CertificateAckState {
     type Ack = CertifiedAck;
     type Aggregated = ();
-    type Message = CertifiedNode;
+    type Message = CertifiedNodeMessage;
 
     fn add(&mut self, peer: Author, _ack: Self::Ack) -> anyhow::Result<Option<Self::Aggregated>> {
         self.received.insert(peer);
@@ -538,10 +568,10 @@ pub struct RemoteFetchRequest {
 }
 
 impl RemoteFetchRequest {
-    pub fn new(epoch: u64, parents: Vec<NodeMetadata>, exists_bitmask: DagSnapshotBitmask) -> Self {
+    pub fn new(epoch: u64, targets: Vec<NodeMetadata>, exists_bitmask: DagSnapshotBitmask) -> Self {
         Self {
             epoch,
-            targets: parents,
+            targets,
             exists_bitmask,
         }
     }
@@ -609,18 +639,27 @@ impl FetchResponse {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct DAGNetworkMessage {
     pub epoch: u64,
     #[serde(with = "serde_bytes")]
     pub data: Vec<u8>,
 }
 
+impl core::fmt::Debug for DAGNetworkMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DAGNetworkMessage")
+            .field("epoch", &self.epoch)
+            .field("data", &hex::encode(&self.data[..min(20, self.data.len())]))
+            .finish()
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug, EnumConversion)]
 pub enum DAGMessage {
     NodeMsg(Node),
     VoteMsg(Vote),
-    CertifiedNodeMsg(CertifiedNode),
+    CertifiedNodeMsg(CertifiedNodeMessage),
     CertifiedAckMsg(CertifiedAck),
     FetchRequest(RemoteFetchRequest),
     FetchResponse(FetchResponse),

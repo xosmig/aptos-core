@@ -3,9 +3,10 @@
 use super::{
     anchor_election::RoundRobinAnchorElection,
     dag_driver::DagDriver,
-    dag_fetcher::{DagFetcher, FetchRequestHandler},
+    dag_fetcher::{DagFetcherService, FetchRequestHandler},
     dag_handler::NetworkHandler,
     dag_network::TDAGNetworkSender,
+    dag_state_sync::DAG_WINDOW,
     dag_store::Dag,
     order_rule::OrderRule,
     rb_handler::NodeBroadcastHandler,
@@ -13,7 +14,7 @@ use super::{
     types::DAGMessage,
 };
 use crate::{
-    dag::adapter::BufferManagerAdapter, experimental::buffer_manager::OrderedBlocks,
+    dag::adapter::NotifierAdapter, experimental::buffer_manager::OrderedBlocks,
     network::IncomingDAGRequest, state_replication::PayloadClient,
 };
 use aptos_channels::{aptos_channel, message_queues::QueueStyle};
@@ -24,7 +25,7 @@ use aptos_types::{
     epoch_state::EpochState, ledger_info::LedgerInfo, validator_signer::ValidatorSigner,
 };
 use futures::stream::{AbortHandle, Abortable};
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 use tokio_retry::strategy::ExponentialBackoff;
 
 pub fn bootstrap_dag(
@@ -47,7 +48,7 @@ pub fn bootstrap_dag(
     let current_round = latest_ledger_info.round();
 
     let (ordered_nodes_tx, ordered_nodes_rx) = futures_channel::mpsc::unbounded();
-    let adapter = Box::new(BufferManagerAdapter::new(ordered_nodes_tx, storage.clone()));
+    let adapter = Box::new(NotifierAdapter::new(ordered_nodes_tx, storage.clone()));
     let (dag_rpc_tx, dag_rpc_rx) = aptos_channel::new(QueueStyle::FIFO, 64, None);
 
     // A backoff policy that starts at 100ms and doubles each iteration.
@@ -57,12 +58,15 @@ pub fn bootstrap_dag(
         rb_network_sender,
         rb_backoff_policy,
         time_service.clone(),
+        // TODO: add to config
+        Duration::from_millis(500),
     ));
 
     let dag = Arc::new(RwLock::new(Dag::new(
         epoch_state.clone(),
         storage.clone(),
         current_round,
+        DAG_WINDOW,
     )));
 
     let anchor_election = Box::new(RoundRobinAnchorElection::new(validators));
@@ -76,7 +80,7 @@ pub fn bootstrap_dag(
     );
 
     let (dag_fetcher, fetch_requester, node_fetch_waiter, certified_node_fetch_waiter) =
-        DagFetcher::new(
+        DagFetcherService::new(
             epoch_state.clone(),
             dag_network_sender,
             dag.clone(),
@@ -90,7 +94,6 @@ pub fn bootstrap_dag(
         dag.clone(),
         payload_client,
         rb,
-        current_round,
         time_service,
         storage.clone(),
         order_rule,

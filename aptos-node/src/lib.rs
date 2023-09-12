@@ -157,13 +157,9 @@ impl AptosNodeArgs {
     }
 }
 
-pub fn load_seed(input: &str) -> Result<Option<[u8; 32]>, FromHexError> {
+pub fn load_seed(input: &str) -> Result<[u8; 32], FromHexError> {
     let trimmed_input = input.trim();
-    if !trimmed_input.is_empty() {
-        FromHex::from_hex(trimmed_input).map(Some)
-    } else {
-        Ok(None)
-    }
+    FromHex::from_hex(trimmed_input)
 }
 
 /// Runtime handle to ensure that all inner runtimes stay in scope
@@ -276,7 +272,7 @@ where
                 genesis_config.recurring_lockup_duration_secs = 7200;
             })))
             .with_randomize_first_validator_ports(random_ports);
-        let (root_key, _genesis, genesis_waypoint, validators) = builder.build(rng)?;
+        let (root_key, _genesis, genesis_waypoint, mut validators) = builder.build(rng)?;
 
         // Write the mint key to disk
         let serialized_keys = bcs::to_bytes(&root_key)?;
@@ -289,6 +285,8 @@ where
             &mut fs::File::create(waypoint_file_path)?,
             genesis_waypoint.to_string().as_bytes(),
         )?;
+
+        aptos_config::config::sanitize_node_config(&mut validators[0].config)?;
 
         // Return the validator config
         validators[0].config.clone()

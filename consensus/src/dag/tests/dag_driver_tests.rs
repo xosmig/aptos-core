@@ -4,8 +4,9 @@ use crate::{
     dag::{
         anchor_election::RoundRobinAnchorElection,
         dag_driver::{DagDriver, DagDriverError},
-        dag_fetcher::DagFetcher,
+        dag_fetcher::DagFetcherService,
         dag_network::{RpcWithFallback, TDAGNetworkSender},
+        dag_state_sync::DAG_WINDOW,
         dag_store::Dag,
         order_rule::OrderRule,
         tests::{
@@ -21,7 +22,9 @@ use aptos_infallible::RwLock;
 use aptos_reliable_broadcast::{RBNetworkSender, ReliableBroadcast};
 use aptos_time_service::TimeService;
 use aptos_types::{
-    epoch_state::EpochState, ledger_info::LedgerInfo, validator_verifier::random_validator_verifier,
+    epoch_state::EpochState,
+    ledger_info::{generate_ledger_info_with_sig, LedgerInfo},
+    validator_verifier::random_validator_verifier,
 };
 use async_trait::async_trait;
 use claims::{assert_ok, assert_ok_eq};
@@ -67,18 +70,22 @@ impl TDAGNetworkSender for MockNetworkSender {
     }
 }
 
-#[test]
-fn test_certified_node_handler() {
+#[tokio::test]
+async fn test_certified_node_handler() {
     let (signers, validator_verifier) = random_validator_verifier(4, None, false);
     let epoch_state = Arc::new(EpochState {
         epoch: 1,
         verifier: validator_verifier,
     });
-    let storage = Arc::new(MockStorage::new());
+
+    let mock_ledger_info = LedgerInfo::mock_genesis(None);
+    let mock_ledger_info = generate_ledger_info_with_sig(&signers, mock_ledger_info);
+    let storage = Arc::new(MockStorage::new_with_ledger_info(mock_ledger_info));
     let dag = Arc::new(RwLock::new(Dag::new(
         epoch_state.clone(),
         storage.clone(),
-        1,
+        0,
+        DAG_WINDOW,
     )));
 
     let network_sender = Arc::new(MockNetworkSender {});
@@ -87,6 +94,7 @@ fn test_certified_node_handler() {
         network_sender.clone(),
         ExponentialBackoff::from_millis(10),
         aptos_time_service::TimeService::mock(),
+        Duration::from_millis(500),
     ));
     let time_service = TimeService::mock();
     let validators = signers.iter().map(|vs| vs.author()).collect();
@@ -100,7 +108,7 @@ fn test_certified_node_handler() {
         storage.clone(),
     );
 
-    let (_, fetch_requester, _, _) = DagFetcher::new(
+    let (_, fetch_requester, _, _) = DagFetcherService::new(
         epoch_state.clone(),
         network_sender,
         dag.clone(),
@@ -114,7 +122,6 @@ fn test_certified_node_handler() {
         dag,
         Arc::new(MockPayloadManager::new(None)),
         rb,
-        1,
         time_service,
         storage,
         order_rule,
