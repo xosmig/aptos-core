@@ -5,13 +5,14 @@ use std::io::Chain;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use futures::{AsyncRead, AsyncWrite};
+use futures::StreamExt;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::error::TrySendError;
 use aptos_config::config::{HANDSHAKE_VERSION, NetworkConfig, RoleType};
 use aptos_config::network_id::{NetworkContext, PeerNetworkId};
 use aptos_crypto::x25519;
 use aptos_event_notifications::{DbBackedOnChainConfig,EventSubscriptionService};
-use aptos_logger::error;
+use aptos_logger::{error, info};
 #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
 use aptos_netcore::transport::memory::MemoryTransport;
 use aptos_netcore::transport::tcp::{TCPBufferCfg, TcpSocket, TcpTransport};
@@ -25,7 +26,7 @@ use aptos_network2::protocols::wire::handshake::v1::{ProtocolId, ProtocolIdSet};
 use aptos_network2::protocols::wire::messaging::v1::NetworkMessage;
 use aptos_network2::protocols::network::ReceivedMessage;
 use aptos_network2::transport::{APTOS_TCP_TRANSPORT, AptosNetTransport, Connection};
-use aptos_types::network_address::Protocol;
+use aptos_types::network_address::{NetworkAddress, Protocol};
 
 #[derive(Debug, PartialEq, PartialOrd)]
 enum State {
@@ -67,6 +68,7 @@ pub struct NetworkBuilder {
     // peer_manager_builder: PeerManagerBuilder,
     peers_and_metadata: Arc<PeersAndMetadata>,
     apps: Arc<ApplicationCollector>,
+    handle: Option<Handle>,
 }
 
 impl NetworkBuilder {
@@ -99,6 +101,7 @@ impl NetworkBuilder {
             // connectivity_manager_builder: None,
             peers_and_metadata,
             apps: Arc::new(ApplicationCollector::new()), // temporary empty app set
+            handle: None,
         }
     }
 
@@ -140,6 +143,7 @@ impl NetworkBuilder {
         if self.state != State::CREATED {
             panic!("NetworkBuilder.build but not in state CREATED");
         }
+        self.handle = Some(handle);
         self.state = State::BUILT;
     }
 
@@ -209,9 +213,29 @@ impl NetworkBuilder {
         if self.state != State::BUILT {
             panic!("NetworkBuilder.build but not in state BUILT");
         }
-        self.state = State::STARTED;
-
-
+        let mut tpm = self.build_transport();
+        let wat = match tpm {
+            #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
+            TransportPeerManager::Memory(mut pm) => { pm.listen(self.config.listen_address.clone(), self.handle.clone().unwrap() ) }
+            TransportPeerManager::Tcp(mut pm) => { pm.listen(self.config.listen_address.clone(), self.handle.clone().unwrap() ) }
+        };
+        let listen_addr = match wat {
+            Ok(listen_addr) => { listen_addr }
+            Err(err) => {
+                panic!("could not start network {:?}: {:?}", self.network_context.network_id(), err);
+            }
+        };
+        info!("network {:?} listening on {:?}", self.network_context.network_id(), listen_addr);
+        // self.state = State::STARTED;
+        // self.config.listen_address.clone()
+        // // authentication_mode,
+        // self.config.mutual_authentication
+        // self.config.max_frame_size
+        // self.config.max_message_size,
+        // self.config.enable_proxy_protocol,
+        // self.config.network_channel_size,
+        // self.config.max_concurrent_network_reqs,
+        // self.config.max_inbound_connections,
     }
 
     pub fn network_context(&self) -> NetworkContext {
@@ -259,12 +283,14 @@ impl ApplicationCollector {
     }
 }
 
+/// PeerManager might be more correctly "peer listener" in the new framework?ß
 struct PeerManager<TTransport, TSocket>
     where
         TTransport: Transport,
         TSocket: AsyncRead + AsyncWrite,
 {
-    _ph1 : PhantomData<TTransport>,
+    transport: TTransport,
+    // _ph1 : PhantomData<TTransport>,
     _ph2 : PhantomData<TSocket>,
 }
 
@@ -273,12 +299,35 @@ impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
         TTransport: Transport<Output = Connection<TSocket>> + Send + 'static,
         TSocket: aptos_network2::transport::TSocket,
 {
-    pub fn new(_transport: TTransport) -> Self {
+    pub fn new(transport: TTransport) -> Self {
         // TODO network2: rebuild
         Self{
-            _ph1: Default::default(),
+            transport,
+            // _ph1: Default::default(),
             _ph2: Default::default(),
         }
+    }
+
+    fn listen(
+        &mut self,
+        listen_addr: NetworkAddress,
+        executor: Handle,
+    ) -> Result<NetworkAddress, <TTransport>::Error> {
+        let (sockets, listen_addr_actual) = self.transport.listen_on(listen_addr)?;
+        executor.spawn(listener_thread::<TTransport,TSocket>(sockets));
+        Ok(listen_addr_actual)
+    }
+}
+
+
+async fn listener_thread<TTransport, TSocket>(mut sockets: <TTransport>::Listener)
+    where
+        TTransport: Transport<Output = Connection<TSocket>> + Send + 'static,
+        TSocket: aptos_network2::transport::TSocket,
+{
+    loop {
+        let _foo = sockets.next().await;
+
     }
 }
 

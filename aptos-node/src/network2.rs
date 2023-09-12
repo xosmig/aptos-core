@@ -45,10 +45,10 @@ pub fn consensus_protocols() -> Protocols {
 }
 
 pub fn mempool_protocols() -> Protocols {
-Protocols {
-    direct_send_protocols_and_preferences: vec![ProtocolId::MempoolDirectSend],
-    rpc_protocols_and_preferences: vec![],
-}
+    Protocols {
+        direct_send_protocols_and_preferences: vec![ProtocolId::MempoolDirectSend],
+        rpc_protocols_and_preferences: vec![],
+    }
 }
 
 pub fn peer_monitoring_protocols() -> Protocols {
@@ -72,13 +72,12 @@ impl<T: MessageTrait> ApplicationNetworkInterfaces<T> {
         peers_and_metadata: Arc<PeersAndMetadata>,
         // receive: tokio::sync::mpsc::Receiver<ReceivedMessage>,
         network_source: NetworkSource,
-        queue_size: usize,
+        network_ids: Vec<NetworkId>,
     ) -> Self {
         let mut network_senders = HashMap::new();
-        network_senders.insert(NetworkId::Validator, NetworkSender::new());
-        network_senders.insert(NetworkId::Internal, NetworkSender::new());
-        network_senders.insert(NetworkId::Vfn, NetworkSender::new());
-        network_senders.insert(NetworkId::Public, NetworkSender::new());
+        for network_id in network_ids.into_iter() {
+            network_senders.insert(network_id, NetworkSender::new());
+        }
         let network_client = NetworkClient::new(
             direct_send_protocols_and_preferences,
             rpc_protocols_and_preferences,
@@ -109,6 +108,7 @@ fn build_network_connections<T: MessageTrait>(
     counter_label: &str,
     peers_and_metadata: Arc<PeersAndMetadata>,
     apps: &mut ApplicationCollector,
+    network_ids: Vec<NetworkId>,
 ) -> ApplicationNetworkInterfaces<T> {
     // TODO: pack a map {ProtocolId: Receiver, ...} and allow app code to unpack that
     // let prots = BTreeMap::new();
@@ -139,7 +139,8 @@ fn build_network_connections<T: MessageTrait>(
         rpc_protocols,
         peers_and_metadata,
         network_source,
-        queue_size)
+        network_ids,
+    )
 }
 
 pub fn consensus_network_connections(
@@ -155,8 +156,9 @@ pub fn consensus_network_connections(
     let rpc_protocols: Vec<ProtocolId> = aptos_consensus::network_interface::RPC.into();
     let queue_size = node_config.consensus.max_network_channel_size;
     let counter_label = "consensus";
+    let network_ids = extract_network_ids(node_config);
 
-    Some(build_network_connections(direct_send_protocols, rpc_protocols, queue_size, counter_label, peers_and_metadata, apps))
+    Some(build_network_connections(direct_send_protocols, rpc_protocols, queue_size, counter_label, peers_and_metadata, apps, network_ids))
 }
 
 pub fn peer_monitoring_network_connections(
@@ -168,8 +170,9 @@ pub fn peer_monitoring_network_connections(
     let rpc_protocols = vec![ProtocolId::PeerMonitoringServiceRpc];
     let queue_size = node_config.peer_monitoring_service.max_network_channel_size as usize;
     let counter_label = "peer_monitoring";
+    let network_ids = extract_network_ids(node_config);
 
-    build_network_connections(direct_send_protocols, rpc_protocols, queue_size, counter_label, peers_and_metadata, apps)
+    build_network_connections(direct_send_protocols, rpc_protocols, queue_size, counter_label, peers_and_metadata, apps, network_ids)
 }
 
 pub fn storage_service_network_connections(
@@ -181,8 +184,9 @@ pub fn storage_service_network_connections(
     let rpc_protocols = vec![ProtocolId::StorageServiceRpc];
     let queue_size = node_config.state_sync.storage_service.max_network_channel_size as usize;
     let counter_label = "storage_service";
+    let network_ids = extract_network_ids(node_config);
 
-    build_network_connections(direct_send_protocols, rpc_protocols, queue_size, counter_label, peers_and_metadata, apps)
+    build_network_connections(direct_send_protocols, rpc_protocols, queue_size, counter_label, peers_and_metadata, apps, network_ids)
 }
 
 pub fn mempool_network_connections(
@@ -194,8 +198,9 @@ pub fn mempool_network_connections(
     let rpc_protocols = vec![];
     let queue_size = node_config.mempool.max_network_channel_size;
     let counter_label = "mempool";
+    let network_ids = extract_network_ids(node_config);
 
-    build_network_connections(direct_send_protocols, rpc_protocols, queue_size, counter_label, peers_and_metadata, apps)
+    build_network_connections(direct_send_protocols, rpc_protocols, queue_size, counter_label, peers_and_metadata, apps, network_ids)
 }
 
 /// Creates a network runtime for the given network config
@@ -226,10 +231,18 @@ fn extract_network_configs(node_config: &NodeConfig) -> Vec<NetworkConfig> {
 
 /// Extracts all network ids from the given node config
 fn extract_network_ids(node_config: &NodeConfig) -> Vec<NetworkId> {
-    extract_network_configs(node_config)
-        .into_iter()
-        .map(|network_config| network_config.network_id)
-        .collect()
+    // extract_network_configs(node_config)
+    //     .into_iter()
+    //     .map(|network_config| network_config.network_id)
+    //     .collect()
+    let mut out = vec![];
+    for network_config in node_config.full_node_networks.iter() {
+        out.push(network_config.network_id);
+    }
+    if let Some(network_config) = node_config.validator_network.as_ref() {
+        out.push(network_config.network_id);
+    }
+    out
 }
 
 /// Creates the global peers and metadata struct
