@@ -264,6 +264,7 @@ pub fn setup_networks(
 
     for network_config in network_configs.into_iter() {
         // Create a network runtime for the config
+        // TODO network2: each 'network' probably doesn't need a runtime?
         let runtime = create_network_runtime(&network_config);
 
         // Entering gives us a runtime to instantiate all the pieces of the builder

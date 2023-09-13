@@ -22,6 +22,7 @@ use std::{
     sync::Arc,
 };
 use std::sync::atomic::{AtomicU32, Ordering};
+use aptos_config::config::PeerRole;
 
 /// A simple container that tracks all peers and peer metadata for the node.
 /// This container is updated by both the networking code (e.g., for new
@@ -112,6 +113,37 @@ impl PeersAndMetadata {
         }
         let generation_actual = self.generation.load(Ordering::SeqCst);
         return Some((all_peers, generation_actual));
+    }
+
+    /// Return copy of list of peers if generation is different than previously held.
+    /// May optionally filter for connected peers only.
+    /// May optionally filter on match for any of a set of ProtocolId.
+    pub fn get_all_peers_and_metadata_generational(
+        &self,
+        generation: u32,
+        require_connected: bool,
+        protocol_ids: &[ProtocolId],
+    ) -> Option<(Vec<(PeerNetworkId,PeerMetadata)>, u32)> {
+        let generation_test = self.generation.load(Ordering::SeqCst);
+        if generation == generation_test {
+            return None;
+        }
+        let mut all_data = Vec::new();
+        let read = self.peers_and_metadata.read();
+        for (network_id, peers) in read.iter() {
+            for (peer_id, peer_metadata) in peers.iter() {
+                if require_connected && !peer_metadata.is_connected() {
+                    continue;
+                }
+                if (protocol_ids.len() != 0) && !peer_metadata.supports_any_protocol(protocol_ids) {
+                    continue;
+                }
+                let peer_network_id = PeerNetworkId::new(*network_id, *peer_id);
+                all_data.push((peer_network_id, peer_metadata.clone()));
+            }
+        }
+        let generation_actual = self.generation.load(Ordering::SeqCst);
+        return Some((all_data, generation_actual));
     }
 
     /// Returns all connected peers that support at least one of

@@ -1,26 +1,28 @@
 // Copyright © Aptos Foundation
 
 use std::collections::BTreeMap;
-use std::io::Chain;
+use std::io::{Chain, Error};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use futures::{AsyncRead, AsyncWrite};
 use futures::StreamExt;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::error::TrySendError;
-use aptos_config::config::{HANDSHAKE_VERSION, NetworkConfig, RoleType};
-use aptos_config::network_id::{NetworkContext, PeerNetworkId};
+use aptos_config::config::{HANDSHAKE_VERSION, NetworkConfig, PeerRole, RoleType};
+use aptos_config::network_id::{NetworkContext, NetworkId, PeerNetworkId};
 use aptos_crypto::x25519;
 use aptos_event_notifications::{DbBackedOnChainConfig,EventSubscriptionService};
 use aptos_logger::{error, info};
 #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
 use aptos_netcore::transport::memory::MemoryTransport;
 use aptos_netcore::transport::tcp::{TCPBufferCfg, TcpSocket, TcpTransport};
-use aptos_netcore::transport::Transport;
+use aptos_netcore::transport::{ConnectionOrigin, Transport};
+use aptos_network2::application::metadata::PeerMetadata;
 // use aptos_network_discovery::DiscoveryChangeListener;
 use aptos_time_service::TimeService;
 use aptos_types::chain_id::ChainId;
 use aptos_network2::application::storage::PeersAndMetadata;
+use aptos_network2::logging::NetworkSchema;
 use aptos_network2::noise::stream::NoiseStream;
 use aptos_network2::protocols::wire::handshake::v1::{ProtocolId, ProtocolIdSet};
 use aptos_network2::protocols::wire::messaging::v1::NetworkMessage;
@@ -81,15 +83,7 @@ impl NetworkBuilder {
         mut reconfig_subscription_service: Option<&mut EventSubscriptionService>,
         peers_and_metadata: Arc<PeersAndMetadata>,
     ) -> NetworkBuilder {
-        let peer_id = config.peer_id();
-        // let identity_key = config.identity_key();
-        // let pubkey = identity_key.public_key();
-        let network_context = NetworkContext::new(role, config.network_id, peer_id);
-        // let authentication_mode = if config.mutual_authentication {
-        //     AuthenticationMode::Mutual(identity_key)
-        // } else {
-        //     AuthenticationMode::MaybeMutual(identity_key)
-        // };
+        let network_context = NetworkContext::new(role, config.network_id, config.peer_id());
         NetworkBuilder{
             state: State::CREATED,
             executor: None,
@@ -117,10 +111,11 @@ impl NetworkBuilder {
         out
     }
 
+    // TODO network2: use this or move it where we need it
     pub fn deliver_message(&self, protocol_id: &ProtocolId, msg: ReceivedMessage) {
         match self.apps.apps.get(protocol_id) {
             None => {
-                // TODO network2: peer sent to a ProtocolId we don't process. disconnect. inc a counter
+                // TODO network2: peer sent to a ProtocolId we don't process. log error. disconnect. inc a counter
             }
             Some(connections) => {
                 match connections.sender.try_send(msg) {
@@ -183,12 +178,12 @@ impl NetworkBuilder {
                     protos,
                     enable_proxy_protocol,
                 );
-                let pm = PeerManager::new(ant);
+                let pm = PeerManager::new(ant, self.peers_and_metadata.clone(), self.config.clone(), self.network_context);
                 TransportPeerManager::Tcp(pm)
             }
             #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
             Protocol::Memory(_) => {
-                TransportPeerManager::Memory(PeerManager::new(AptosNetTransport::new(
+                let ant = AptosNetTransport::new(
                     MemoryTransport,
                     self.network_context,
                     self.time_service.clone(),
@@ -200,7 +195,9 @@ impl NetworkBuilder {
                     self.chain_id,
                     protos,
                     enable_proxy_protocol,
-                )))
+                );
+                let pm = PeerManager::new(ant, self.peers_and_metadata.clone(), self.config.clone(), self.network_context);
+                TransportPeerManager::Memory(pm)
             }
             _ => {
                 panic!("cannot listen on address {:?}", self.config.listen_address);
@@ -213,18 +210,12 @@ impl NetworkBuilder {
         if self.state != State::BUILT {
             panic!("NetworkBuilder.build but not in state BUILT");
         }
-        let mut tpm = self.build_transport();
-        let wat = match tpm {
-            #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
-            TransportPeerManager::Memory(mut pm) => { pm.listen(self.config.listen_address.clone(), self.handle.clone().unwrap() ) }
-            TransportPeerManager::Tcp(mut pm) => { pm.listen(self.config.listen_address.clone(), self.handle.clone().unwrap() ) }
-        };
-        let listen_addr = match wat {
-            Ok(listen_addr) => { listen_addr }
-            Err(err) => {
-                panic!("could not start network {:?}: {:?}", self.network_context.network_id(), err);
-            }
-        };
+        let listen_addr = transport_peer_manager_start(
+            self.build_transport(),
+            self.config.listen_address.clone(),
+            self.handle.clone().unwrap(),
+            self.network_context.network_id(),
+        );
         info!("network {:?} listening on {:?}", self.network_context.network_id(), listen_addr);
         // self.state = State::STARTED;
         // self.config.listen_address.clone()
@@ -240,6 +231,21 @@ impl NetworkBuilder {
 
     pub fn network_context(&self) -> NetworkContext {
         self.network_context.clone()
+    }
+}
+
+// single function to wrap variants of templated enum
+fn transport_peer_manager_start(tpm: TransportPeerManager, listen_address: NetworkAddress, executor: Handle, network_id: NetworkId) -> NetworkAddress {
+    let result = match tpm {
+        #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
+        TransportPeerManager::Memory(mut pm) => { pm.listen(listen_address, executor ) }
+        TransportPeerManager::Tcp(mut pm) => { pm.listen(listen_address, executor ) }
+    };
+    match result {
+        Ok(listen_address) => { listen_address }
+        Err(err) => {
+            panic!("could not start network {:?}: {:?}", network_id, err);
+        }
     }
 }
 
@@ -283,14 +289,18 @@ impl ApplicationCollector {
     }
 }
 
-/// PeerManager might be more correctly "peer listener" in the new framework?ß
+/// PeerManager might be more correctly "peer listener" in the new framework?
 struct PeerManager<TTransport, TSocket>
     where
         TTransport: Transport,
         TSocket: AsyncRead + AsyncWrite,
 {
     transport: TTransport,
-    // _ph1 : PhantomData<TTransport>,
+    peers_and_metadata: Arc<PeersAndMetadata>,
+    peer_cache: Vec<(PeerNetworkId,PeerMetadata)>,
+    peer_cache_generation: u32,
+    config: NetworkConfig,
+    network_context: NetworkContext,
     _ph2 : PhantomData<TSocket>,
 }
 
@@ -299,37 +309,118 @@ impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
         TTransport: Transport<Output = Connection<TSocket>> + Send + 'static,
         TSocket: aptos_network2::transport::TSocket,
 {
-    pub fn new(transport: TTransport) -> Self {
+    pub fn new(
+        transport: TTransport,
+        peers_and_metadata: Arc<PeersAndMetadata>,
+        config: NetworkConfig,
+        network_context: NetworkContext,
+    ) -> Self {
         // TODO network2: rebuild
         Self{
             transport,
-            // _ph1: Default::default(),
+            peers_and_metadata,
+            peer_cache: vec![],
+            peer_cache_generation: 0,
+            config,
+            network_context,
             _ph2: Default::default(),
         }
     }
 
+    fn maybe_update_peer_cache(&mut self) {
+        // if no update is needed, this should be very fast
+        // otherwise make copy of peers for use by this thread/task
+        if let Some((update, update_generation)) = self.peers_and_metadata.get_all_peers_and_metadata_generational(self.peer_cache_generation, true, &[]) {
+            self.peer_cache = update;
+            self.peer_cache_generation = update_generation;
+        }
+    }
+
     fn listen(
-        &mut self,
+        mut self,
         listen_addr: NetworkAddress,
         executor: Handle,
     ) -> Result<NetworkAddress, <TTransport>::Error> {
         let (sockets, listen_addr_actual) = self.transport.listen_on(listen_addr)?;
-        executor.spawn(listener_thread::<TTransport,TSocket>(sockets));
+        executor.spawn(self.listener_thread(sockets));
         Ok(listen_addr_actual)
     }
-}
 
+    async fn listener_thread(mut self, mut sockets: <TTransport>::Listener) {
+        // TODO: leave some connection that can close and shutdown this listener?
+        loop {
+            let (conn_fut, remote_addr) = match sockets.next().await {
+                Some(result) => match result {
+                    Ok(conn) => { conn }
+                    Err(err) => {
+                        error!("listener_thread {:?} got err {:?}, exiting", self.config.network_id, err);
+                        return;
+                    }
+                }
+                None => {
+                    info!("listener_thread {:?} got None, assuming source closed, exiting", self.config.network_id, );
+                    return;
+                }
+            };
+            match conn_fut.await {
+                Ok(connection) => {
+                    let ok = self.check_new_inbound_connection(connection);
+                    info!("got connection {:?}, ok={:?}", remote_addr, ok);
+                }
+                Err(err) => {
+                    error!("listener_thread {:?} connection post-processing failed (continuing): {:?}", self.config.network_id, err);
+                }
+            }
+        }
+    }
 
-async fn listener_thread<TTransport, TSocket>(mut sockets: <TTransport>::Listener)
-    where
-        TTransport: Transport<Output = Connection<TSocket>> + Send + 'static,
-        TSocket: aptos_network2::transport::TSocket,
-{
-    loop {
-        let _foo = sockets.next().await;
+    // is the new inbound connection okay? => true
+    // no, we should disconnect => false
+    fn check_new_inbound_connection(&mut self, conn: Connection<TSocket>) -> bool {
+        // Everything below here is meant for unknown peers only. The role comes from
+        // the Noise handshake and if it's not `Unknown` then it is trusted.
+        // TODO: trust "trusted" peers less, _someday_ there will be a buggy/malicious validator
+        if conn.metadata.role != PeerRole::Unknown {
+            return true;
+        }
 
+        // Count unknown inbound connections
+        self.maybe_update_peer_cache();
+        let mut unknown_inbound_conns = 0;
+        let mut already_connected = false;
+        let remote_peer_id = conn.metadata.remote_peer_id;
+        for wat in self.peer_cache.iter() {
+            if wat.0.peer_id() == remote_peer_id {
+                already_connected = true;
+            }
+            let remote_metadata = wat.1.get_connection_metadata();
+            if remote_metadata.origin == ConnectionOrigin::Inbound && remote_metadata.role == PeerRole::Unknown {
+                unknown_inbound_conns += 1;
+            }
+        }
+
+        // Reject excessive inbound connections made by unknown peers
+        // We control outbound connections with Connectivity manager before we even send them
+        // and we must allow connections that already exist to pass through tie breaking.
+        if !already_connected
+            && unknown_inbound_conns + 1 > self.config.max_inbound_connections
+        {
+            info!(
+                        NetworkSchema::new(&self.network_context)
+                            .connection_metadata_with_address(&conn.metadata),
+                        "{} Connection rejected due to connection limit: {}",
+                        self.network_context,
+                        conn.metadata
+                    );
+            // TODO network2: rebuild counters
+            // counters::connections_rejected(&self.network_context, conn.metadata.origin)
+            //     .inc();
+            return false;
+        }
+        return true;
     }
 }
+
 
 #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
 type MemoryPeerManager =
