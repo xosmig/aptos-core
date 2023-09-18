@@ -538,7 +538,9 @@ impl<TMessage> NetworkSender<TMessage> {
 }
 
 impl<TMessage: Message> NetworkSender<TMessage> {
-    fn peer_try_send(&self, peer_network_id: &PeerNetworkId, protocol: ProtocolId, message: TMessage) -> Result<(), NetworkError> {
+    fn peer_try_send<F>(&self, peer_network_id: &PeerNetworkId, msg_src: F) -> Result<(), NetworkError>
+    where F: Fn() -> Result<NetworkMessage,NetworkError>
+    {
         match self.peers.read() {
             Ok(x) => {
                 match x.get(peer_network_id) {
@@ -546,12 +548,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                         Err(NetworkErrorKind::NotConnected.into())
                     }
                     Some(peer) => {
-                        let mdata = protocol.to_bytes(&message)?.into();
-                        let msg = NetworkMessage::DirectSendMsg(DirectSendMsg{
-                            protocol_id: protocol,
-                            priority: 0,
-                            raw_msg: mdata,
-                        });
+                        let msg = msg_src()?;
                         match peer.sender.try_send(msg) {
                             Ok(_) => {Ok(())}
                             Err(tse) => match &tse {
@@ -575,35 +572,62 @@ impl<TMessage: Message> NetworkSender<TMessage> {
         }
     }
 
-    /// Send a protobuf message to a single recipient. Provides a wrapper over
-    /// `[peer_manager::PeerManagerRequestSender::send_to]`.
+    /// Send a message to a single recipient.
     pub fn send_to(
         &self,
         recipient: PeerId,
         protocol: ProtocolId,
         message: TMessage,
     ) -> Result<(), NetworkError> {
-        self.update_peers();
         let peer_network_id = PeerNetworkId::new(self.network_id, recipient);
-        self.peer_try_send(&peer_network_id, protocol, message)
+        let msg_src = || -> Result<NetworkMessage,NetworkError> {
+            let mdata = protocol.to_bytes(&message)?.into();
+            Ok(NetworkMessage::DirectSendMsg(DirectSendMsg {
+                protocol_id: protocol,
+                priority: 0,
+                raw_msg: mdata,
+            }))
+        };
+        self.update_peers();
+        self.peer_try_send(&peer_network_id, msg_src)
     }
 
-    /// Send a protobuf message to a many recipients. Provides a wrapper over
-    /// `[peer_manager::PeerManagerRequestSender::send_to_many]`.
+    /// Send a message to a many recipients.
     pub fn send_to_many(
         &self,
         recipients: impl Iterator<Item = PeerId>,
         protocol: ProtocolId,
         message: TMessage,
     ) -> Result<(), NetworkError> {
-        // Serialize message.
-        // let mdata = protocol.to_bytes(&message)?.into();
-        // self.peer_mgr_reqs_tx
-        //     .send_to_many(recipients, protocol, mdata)?;
-        Ok(())
+        let mdata : Vec<u8> = protocol.to_bytes(&message)?.into();
+        let msg_src = || -> Result<NetworkMessage,NetworkError> {
+            Ok(NetworkMessage::DirectSendMsg(DirectSendMsg {
+                protocol_id: protocol,
+                priority: 0,
+                raw_msg: mdata.clone(),
+            }))
+        };
+        self.update_peers();
+        let mut errs = vec![];
+        for recipient in recipients {
+            let peer_network_id = PeerNetworkId::new(self.network_id, recipient);
+            match self.peer_try_send(&peer_network_id, msg_src) {
+                Ok(_) => {}
+                Err(xe) => {errs.push(xe)}
+            }
+        }
+        if errs.is_empty() {
+            Ok(())
+        } else {
+            // return first error. TODO: return summary or concatenation of all errors
+            for err in errs.into_iter() {
+                return Err(err);
+            }
+            Ok(())
+        }
     }
 
-    /// Send a protobuf rpc request to a single recipient while handling
+    /// Send a rpc request to a single recipient while handling
     /// serialization and deserialization of the request and response respectively.
     /// Assumes that the request and response both have the same message type.
     pub async fn send_rpc(
