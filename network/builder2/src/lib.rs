@@ -4,15 +4,15 @@ use std::collections::BTreeMap;
 use std::io::{Chain, Error};
 use std::marker::PhantomData;
 use std::sync::Arc;
-use futures::{AsyncRead, AsyncWrite};
-use futures::StreamExt;
+use futures::{AsyncRead, AsyncWrite, AsyncWriteExt, StreamExt};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::error::TrySendError;
+use tokio::sync::mpsc::Receiver;
 use aptos_config::config::{HANDSHAKE_VERSION, NetworkConfig, PeerRole, RoleType};
 use aptos_config::network_id::{NetworkContext, NetworkId, PeerNetworkId};
 use aptos_crypto::x25519;
 use aptos_event_notifications::{DbBackedOnChainConfig,EventSubscriptionService};
-use aptos_logger::{error, info};
+use aptos_logger::{error, info, warn};
 #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
 use aptos_netcore::transport::memory::MemoryTransport;
 use aptos_netcore::transport::tcp::{TCPBufferCfg, TcpSocket, TcpTransport};
@@ -26,9 +26,12 @@ use aptos_network2::logging::NetworkSchema;
 use aptos_network2::noise::stream::NoiseStream;
 use aptos_network2::protocols::wire::handshake::v1::{ProtocolId, ProtocolIdSet};
 use aptos_network2::protocols::wire::messaging::v1::NetworkMessage;
-use aptos_network2::protocols::network::ReceivedMessage;
+use aptos_network2::protocols::network::{OutboundPeerConnections, PeerStub, ReceivedMessage};
 use aptos_network2::transport::{APTOS_TCP_TRANSPORT, AptosNetTransport, Connection};
+use aptos_short_hex_str::AsShortHexStr;
 use aptos_types::network_address::{NetworkAddress, Protocol};
+
+mod peer;
 
 #[derive(Debug, PartialEq, PartialOrd)]
 enum State {
@@ -70,6 +73,7 @@ pub struct NetworkBuilder {
     // peer_manager_builder: PeerManagerBuilder,
     peers_and_metadata: Arc<PeersAndMetadata>,
     apps: Arc<ApplicationCollector>,
+    peer_senders: Arc<OutboundPeerConnections>,
     handle: Option<Handle>,
 }
 
@@ -82,6 +86,7 @@ impl NetworkBuilder {
         time_service: TimeService,
         mut reconfig_subscription_service: Option<&mut EventSubscriptionService>,
         peers_and_metadata: Arc<PeersAndMetadata>,
+        peer_senders: Arc<OutboundPeerConnections>,
     ) -> NetworkBuilder {
         let network_context = NetworkContext::new(role, config.network_id, config.peer_id());
         NetworkBuilder{
@@ -94,6 +99,7 @@ impl NetworkBuilder {
             // discovery_listeners: None,
             // connectivity_manager_builder: None,
             peers_and_metadata,
+            peer_senders,
             apps: Arc::new(ApplicationCollector::new()), // temporary empty app set
             handle: None,
         }
@@ -178,7 +184,7 @@ impl NetworkBuilder {
                     protos,
                     enable_proxy_protocol,
                 );
-                let pm = PeerManager::new(ant, self.peers_and_metadata.clone(), self.config.clone(), self.network_context);
+                let pm = PeerManager::new(ant, self.peers_and_metadata.clone(), self.config.clone(), self.network_context, self.apps.clone(), self.peer_senders.clone());
                 TransportPeerManager::Tcp(pm)
             }
             #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
@@ -196,7 +202,7 @@ impl NetworkBuilder {
                     protos,
                     enable_proxy_protocol,
                 );
-                let pm = PeerManager::new(ant, self.peers_and_metadata.clone(), self.config.clone(), self.network_context);
+                let pm = PeerManager::new(ant, self.peers_and_metadata.clone(), self.config.clone(), self.network_context, self.apps.clone(), self.peer_senders.clone());
                 TransportPeerManager::Memory(pm)
             }
             _ => {
@@ -215,6 +221,7 @@ impl NetworkBuilder {
             self.config.listen_address.clone(),
             self.handle.clone().unwrap(),
             self.network_context.network_id(),
+            self.apps.clone(),
         );
         info!("network {:?} listening on {:?}", self.network_context.network_id(), listen_addr);
         // self.state = State::STARTED;
@@ -235,7 +242,13 @@ impl NetworkBuilder {
 }
 
 // single function to wrap variants of templated enum
-fn transport_peer_manager_start(tpm: TransportPeerManager, listen_address: NetworkAddress, executor: Handle, network_id: NetworkId) -> NetworkAddress {
+fn transport_peer_manager_start(
+    tpm: TransportPeerManager,
+    listen_address: NetworkAddress,
+    executor: Handle,
+    network_id: NetworkId,
+    apps: Arc<ApplicationCollector>,
+) -> NetworkAddress {
     let result = match tpm {
         #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
         TransportPeerManager::Memory(mut pm) => { pm.listen(listen_address, executor ) }
@@ -301,6 +314,8 @@ struct PeerManager<TTransport, TSocket>
     peer_cache_generation: u32,
     config: NetworkConfig,
     network_context: NetworkContext,
+    apps: Arc<ApplicationCollector>,
+    peer_senders: Arc<OutboundPeerConnections>,
     _ph2 : PhantomData<TSocket>,
 }
 
@@ -314,6 +329,8 @@ impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
         peers_and_metadata: Arc<PeersAndMetadata>,
         config: NetworkConfig,
         network_context: NetworkContext,
+        apps: Arc<ApplicationCollector>,
+        peer_senders: Arc<OutboundPeerConnections>,
     ) -> Self {
         // TODO network2: rebuild
         Self{
@@ -323,6 +340,8 @@ impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
             peer_cache_generation: 0,
             config,
             network_context,
+            apps,
+            peer_senders,
             _ph2: Default::default(),
         }
     }
@@ -363,9 +382,25 @@ impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
                 }
             };
             match conn_fut.await {
-                Ok(connection) => {
-                    let ok = self.check_new_inbound_connection(connection);
+                Ok(mut connection) => {
+                    let ok = self.check_new_inbound_connection(&connection);
                     info!("got connection {:?}, ok={:?}", remote_addr, ok);
+                    if !ok {
+                        // conted and logged inside check function above, just close here and be done.
+                        connection.socket.close();
+                        continue;
+                    }
+                    // let (sender, receiver) = tokio::sync::mpsc::channel::<ReceivedMessage>(self.config.network_channel_size);
+                    let (sender, receiver) = tokio::sync::mpsc::channel::<NetworkMessage>(self.config.network_channel_size);
+                    // TODO: make a peer! do protocol stuff!
+                    let remote_peer_network_id = PeerNetworkId::new(self.network_context.network_id(), connection.metadata.remote_peer_id);
+                    self.peers_and_metadata.insert_connection_metadata(remote_peer_network_id, connection.metadata);
+                    // TODO: keep a map<peer network id,PeerStub> to route outbound messages app->socket
+                    // TODO: connect to existing map<ProtocolId,Sender<ReceivedMessage>> for inbound messages socket->app
+                    let apps = self.apps.clone();
+                    let peers_and_metadata = self.peers_and_metadata.clone();
+                    let stub = PeerStub::new(sender);
+                    self.peer_senders.insert(remote_peer_network_id, stub);
                 }
                 Err(err) => {
                     error!("listener_thread {:?} connection post-processing failed (continuing): {:?}", self.config.network_id, err);
@@ -376,10 +411,10 @@ impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
 
     // is the new inbound connection okay? => true
     // no, we should disconnect => false
-    fn check_new_inbound_connection(&mut self, conn: Connection<TSocket>) -> bool {
+    fn check_new_inbound_connection(&mut self, conn: &Connection<TSocket>) -> bool {
         // Everything below here is meant for unknown peers only. The role comes from
         // the Noise handshake and if it's not `Unknown` then it is trusted.
-        // TODO: trust "trusted" peers less, _someday_ there will be a buggy/malicious validator
+        // TODO: do more checking for 'trusted' peers
         if conn.metadata.role != PeerRole::Unknown {
             return true;
         }
@@ -389,6 +424,17 @@ impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
         let mut unknown_inbound_conns = 0;
         let mut already_connected = false;
         let remote_peer_id = conn.metadata.remote_peer_id;
+
+        if remote_peer_id == self.network_context.peer_id() {
+            debug_assert!(false, "Self dials shouldn't happen");
+            warn!(
+                NetworkSchema::new(&self.network_context)
+                    .connection_metadata_with_address(&conn.metadata),
+                "Received self-dial, disconnecting it"
+            );
+            return false;
+        }
+
         for wat in self.peer_cache.iter() {
             if wat.0.peer_id() == remote_peer_id {
                 already_connected = true;
@@ -406,17 +452,30 @@ impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
             && unknown_inbound_conns + 1 > self.config.max_inbound_connections
         {
             info!(
-                        NetworkSchema::new(&self.network_context)
-                            .connection_metadata_with_address(&conn.metadata),
-                        "{} Connection rejected due to connection limit: {}",
-                        self.network_context,
-                        conn.metadata
-                    );
+                NetworkSchema::new(&self.network_context)
+                .connection_metadata_with_address(&conn.metadata),
+                "{} Connection rejected due to connection limit: {}",
+                self.network_context,
+                conn.metadata
+            );
             // TODO network2: rebuild counters
             // counters::connections_rejected(&self.network_context, conn.metadata.origin)
             //     .inc();
             return false;
         }
+
+        if already_connected {
+            // TODO network2: old code at network/framework/src/peer_manager/mod.rs PeerManager::add_peer() line 615 had provision for sometimes keeping the new connection, but this simplifies and always _drops_ the new connection
+            info!(
+                NetworkSchema::new(&self.network_context)
+                .connection_metadata_with_address(&conn.metadata),
+                "{} Closing incoming connection with Peer {} which is already connected",
+                self.network_context,
+                remote_peer_id.short_str()
+            );
+            return false;
+        }
+
         return true;
     }
 }

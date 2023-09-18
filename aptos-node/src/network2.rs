@@ -13,7 +13,7 @@ use aptos_network2_builder::{ApplicationCollector,ApplicationConnections,Network
 // use aptos_consensus::network_interface::{DIRECT_SEND, RPC};
 use aptos_logger::debug;
 use aptos_network2::application::interface::{NetworkClient,NetworkMessageTrait};
-use aptos_network2::protocols::network::{NetworkEvents,NetworkSender,NetworkSource,NewNetworkSender,ReceivedMessage,Message};
+use aptos_network2::protocols::network::{NetworkEvents, NetworkSender, NetworkSource, NewNetworkSender, ReceivedMessage, Message, OutboundPeerConnections};
 use aptos_network2::application::storage::PeersAndMetadata;
 use aptos_time_service::TimeService;
 use aptos_types::chain_id::ChainId;
@@ -73,10 +73,11 @@ impl<T: MessageTrait> ApplicationNetworkInterfaces<T> {
         // receive: tokio::sync::mpsc::Receiver<ReceivedMessage>,
         network_source: NetworkSource,
         network_ids: Vec<NetworkId>,
+        peer_senders: Arc<OutboundPeerConnections>,
     ) -> Self {
         let mut network_senders = HashMap::new();
         for network_id in network_ids.into_iter() {
-            network_senders.insert(network_id, NetworkSender::new());
+            network_senders.insert(network_id, NetworkSender::new(network_id, peer_senders.clone()));
         }
         let network_client = NetworkClient::new(
             direct_send_protocols_and_preferences,
@@ -109,6 +110,7 @@ fn build_network_connections<T: MessageTrait>(
     peers_and_metadata: Arc<PeersAndMetadata>,
     apps: &mut ApplicationCollector,
     network_ids: Vec<NetworkId>,
+    peer_senders: Arc<OutboundPeerConnections>,
 ) -> ApplicationNetworkInterfaces<T> {
     // TODO: pack a map {ProtocolId: Receiver, ...} and allow app code to unpack that
     // let prots = BTreeMap::new();
@@ -140,13 +142,17 @@ fn build_network_connections<T: MessageTrait>(
         peers_and_metadata,
         network_source,
         network_ids,
+        peer_senders,
     )
 }
+
+// TODO?: bundle up (node_config, peers_and_metadata, apps, peer_senders) into a network connection builder object?
 
 pub fn consensus_network_connections(
     node_config: &NodeConfig,
     peers_and_metadata: Arc<PeersAndMetadata>,
-    apps: &mut ApplicationCollector
+    apps: &mut ApplicationCollector,
+    peer_senders: Arc<OutboundPeerConnections>,
 ) -> Option<ApplicationNetworkInterfaces<ConsensusMsg>> {
     if !has_validator_network(node_config) {
         return None;
@@ -158,13 +164,14 @@ pub fn consensus_network_connections(
     let counter_label = "consensus";
     let network_ids = extract_network_ids(node_config);
 
-    Some(build_network_connections(direct_send_protocols, rpc_protocols, queue_size, counter_label, peers_and_metadata, apps, network_ids))
+    Some(build_network_connections(direct_send_protocols, rpc_protocols, queue_size, counter_label, peers_and_metadata, apps, network_ids, peer_senders))
 }
 
 pub fn peer_monitoring_network_connections(
     node_config: &NodeConfig,
     peers_and_metadata: Arc<PeersAndMetadata>,
-    apps: &mut ApplicationCollector
+    apps: &mut ApplicationCollector,
+    peer_senders: Arc<OutboundPeerConnections>,
 ) -> ApplicationNetworkInterfaces<PeerMonitoringServiceMessage> {
     let direct_send_protocols = Vec::<ProtocolId>::new();
     let rpc_protocols = vec![ProtocolId::PeerMonitoringServiceRpc];
@@ -172,13 +179,14 @@ pub fn peer_monitoring_network_connections(
     let counter_label = "peer_monitoring";
     let network_ids = extract_network_ids(node_config);
 
-    build_network_connections(direct_send_protocols, rpc_protocols, queue_size, counter_label, peers_and_metadata, apps, network_ids)
+    build_network_connections(direct_send_protocols, rpc_protocols, queue_size, counter_label, peers_and_metadata, apps, network_ids, peer_senders)
 }
 
 pub fn storage_service_network_connections(
     node_config: &NodeConfig,
     peers_and_metadata: Arc<PeersAndMetadata>,
-    apps: &mut ApplicationCollector
+    apps: &mut ApplicationCollector,
+    peer_senders: Arc<OutboundPeerConnections>,
 ) -> ApplicationNetworkInterfaces<StorageServiceMessage> {
     let direct_send_protocols = Vec::<ProtocolId>::new();
     let rpc_protocols = vec![ProtocolId::StorageServiceRpc];
@@ -186,13 +194,14 @@ pub fn storage_service_network_connections(
     let counter_label = "storage_service";
     let network_ids = extract_network_ids(node_config);
 
-    build_network_connections(direct_send_protocols, rpc_protocols, queue_size, counter_label, peers_and_metadata, apps, network_ids)
+    build_network_connections(direct_send_protocols, rpc_protocols, queue_size, counter_label, peers_and_metadata, apps, network_ids, peer_senders)
 }
 
 pub fn mempool_network_connections(
     node_config: &NodeConfig,
     peers_and_metadata: Arc<PeersAndMetadata>,
-    apps: &mut ApplicationCollector
+    apps: &mut ApplicationCollector,
+    peer_senders: Arc<OutboundPeerConnections>,
 ) -> ApplicationNetworkInterfaces<MempoolSyncMsg> {
     let direct_send_protocols = vec![ProtocolId::MempoolDirectSend];
     let rpc_protocols = vec![];
@@ -200,7 +209,7 @@ pub fn mempool_network_connections(
     let counter_label = "mempool";
     let network_ids = extract_network_ids(node_config);
 
-    build_network_connections(direct_send_protocols, rpc_protocols, queue_size, counter_label, peers_and_metadata, apps, network_ids)
+    build_network_connections(direct_send_protocols, rpc_protocols, queue_size, counter_label, peers_and_metadata, apps, network_ids, peer_senders)
 }
 
 /// Creates a network runtime for the given network config
@@ -255,6 +264,7 @@ pub fn setup_networks(
     node_config: &NodeConfig,
     chain_id: ChainId,
     peers_and_metadata: Arc<PeersAndMetadata>,
+    peer_senders: Arc<OutboundPeerConnections>,
     event_subscription_service: &mut EventSubscriptionService,
 ) -> (Vec<Runtime>, Vec<NetworkBuilder>) {
     let network_configs = extract_network_configs(node_config);
@@ -278,6 +288,7 @@ pub fn setup_networks(
             TimeService::real(),
             Some(event_subscription_service),
             peers_and_metadata.clone(),
+            peer_senders.clone(),
         );
 
         // Register consensus (both client and server) with the network

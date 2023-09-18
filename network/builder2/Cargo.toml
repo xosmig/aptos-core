@@ -23,6 +23,7 @@ aptos-netcore = { workspace = true }
 aptos-network2 = { workspace = true }
 aptos-network-discovery = { workspace = true }
 aptos-secure-storage = { workspace = true }
+aptos-short-hex-str = { workspace = true }
 aptos-time-service = { workspace = true }
 aptos-types = { workspace = true }
 async-trait = { workspace = true }

@@ -2622,6 +2622,7 @@ dependencies = [
  "aptos-network-discovery",
  "aptos-network2",
  "aptos-secure-storage",
+ "aptos-short-hex-str",
  "aptos-time-service",
  "aptos-types",
  "async-trait",

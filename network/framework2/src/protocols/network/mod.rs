@@ -28,11 +28,17 @@ use futures::{
 use pin_project::pin_project;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{cmp::min, fmt::Debug, marker::PhantomData, pin::Pin, time::Duration};
-use std::collections::BTreeMap;
-use tokio::sync::mpsc::error::TryRecvError;
+use std::cell::Cell;
+use std::collections::{BTreeMap, HashMap};
+use std::ops::DerefMut;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, LockResult, RwLock};
+use tokio::sync::mpsc::error::{TryRecvError, TrySendError};
 use tokio_stream::wrappers::ReceiverStream;
 use aptos_config::network_id::{NetworkId, PeerNetworkId};
-use crate::protocols::wire::messaging::v1::{NetworkMessage, RequestId};
+// use aptos_infallible::RwLock;
+use crate::error::NetworkErrorKind;
+use crate::protocols::wire::messaging::v1::{DirectSendMsg, NetworkMessage, RequestId};
 
 pub trait Message: DeserializeOwned + Serialize {}
 impl<T: DeserializeOwned + Serialize> Message for T {}
@@ -452,30 +458,53 @@ impl<TMessage: Message + Unpin> FusedStream for NetworkEvents<TMessage> {
 /// interface they need.
 ///
 /// Provide Protobuf wrapper over `[peer_manager::PeerManagerRequestSender]`
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct NetworkSender<TMessage> {
     // TODO: rebuild NetworkSender around single-level network::framework2
     // peer_mgr_reqs_tx: PeerManagerRequestSender,
     // connection_reqs_tx: ConnectionRequestSender,
+    // TODO: we don't actually need a "NetworkSender" per network id; leftover structure from pre-2023 networking code
+    network_id: NetworkId,
+    peer_senders: Arc<OutboundPeerConnections>,
+
+    peers: RwLock<HashMap<PeerNetworkId, PeerStub>>,
+    peers_generation: AtomicU32,
     _marker: PhantomData<TMessage>,
 }
 
 /// Trait specifying the signature for `new()` `NetworkSender`s
 pub trait NewNetworkSender {
     fn new(
-        // peer_mgr_reqs_tx: PeerManagerRequestSender,
-        // connection_reqs_tx: ConnectionRequestSender,
+        network_id: NetworkId,
+        peer_senders: Arc<OutboundPeerConnections>,
     ) -> Self;
 }
 
 impl<TMessage> NewNetworkSender for NetworkSender<TMessage> {
     fn new(
-        // peer_mgr_reqs_tx: PeerManagerRequestSender,
-        // connection_reqs_tx: ConnectionRequestSender,
+        network_id: NetworkId,
+        peer_senders: Arc<OutboundPeerConnections>,
     ) -> Self {
         Self {
-            // peer_mgr_reqs_tx,
-            // connection_reqs_tx,
+            network_id,
+            peer_senders,
+            peers: RwLock::new(HashMap::new()),
+            peers_generation: AtomicU32::new(0),
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<TMessage> Clone for NetworkSender<TMessage> {
+    fn clone(&self) -> Self {
+        let reader = self.peers.read().unwrap();
+        let peers_generation = self.peers_generation.load(Ordering::SeqCst);
+        let peers = reader.clone();
+        Self{
+            network_id: self.network_id,
+            peer_senders: self.peer_senders.clone(),
+            peers: RwLock::new(peers),
+            peers_generation: AtomicU32::new(peers_generation),
             _marker: PhantomData,
         }
     }
@@ -495,9 +524,57 @@ impl<TMessage> NetworkSender<TMessage> {
         // self.connection_reqs_tx.disconnect_peer(peer).await?;
         Ok(())
     }
+
+    fn update_peers(&self) {
+        let cur_generation = self.peers_generation.load(Ordering::SeqCst);
+        if let Some((new_peers, new_generation)) = self.peer_senders.get_generational(cur_generation) {
+            let mut writer = self.peers.write().unwrap();
+            self.peers_generation.store(new_generation, Ordering::SeqCst);
+            writer.clear();
+            writer.extend(new_peers);
+            // writer.deref_mut().from_iter(new_peers);
+        }
+    }
 }
 
 impl<TMessage: Message> NetworkSender<TMessage> {
+    fn peer_try_send(&self, peer_network_id: &PeerNetworkId, protocol: ProtocolId, message: TMessage) -> Result<(), NetworkError> {
+        match self.peers.read() {
+            Ok(x) => {
+                match x.get(peer_network_id) {
+                    None => {
+                        Err(NetworkErrorKind::NotConnected.into())
+                    }
+                    Some(peer) => {
+                        let mdata = protocol.to_bytes(&message)?.into();
+                        let msg = NetworkMessage::DirectSendMsg(DirectSendMsg{
+                            protocol_id: protocol,
+                            priority: 0,
+                            raw_msg: mdata,
+                        });
+                        match peer.sender.try_send(msg) {
+                            Ok(_) => {Ok(())}
+                            Err(tse) => match &tse {
+                                TrySendError::Full(_) => {
+                                    // TODO: counter for send drop due to full
+                                    Err(NetworkError::from(anyhow::Error::new(tse)))
+                                }
+                                TrySendError::Closed(_) => {
+                                    // TODO: counter for send drop due to closed (other code should remove peer from collection)
+                                    Err(NetworkError::from(anyhow::Error::new(tse)))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Err(_) => {
+                // lock fail, wtf
+                Err(NetworkError::from(NetworkErrorKind::IoError))
+            }
+        }
+    }
+
     /// Send a protobuf message to a single recipient. Provides a wrapper over
     /// `[peer_manager::PeerManagerRequestSender::send_to]`.
     pub fn send_to(
@@ -506,9 +583,9 @@ impl<TMessage: Message> NetworkSender<TMessage> {
         protocol: ProtocolId,
         message: TMessage,
     ) -> Result<(), NetworkError> {
-        // let mdata = protocol.to_bytes(&message)?.into();
-        // self.peer_mgr_reqs_tx.send_to(recipient, protocol, mdata)?;
-        Ok(())
+        self.update_peers();
+        let peer_network_id = PeerNetworkId::new(self.network_id, recipient);
+        self.peer_try_send(&peer_network_id, protocol, message)
     }
 
     /// Send a protobuf message to a many recipients. Provides a wrapper over
@@ -620,3 +697,98 @@ impl Stream for NetworkSource {
     //     }
     // }
 }
+
+#[derive(Clone, Debug)]
+pub struct PeerStub {
+    pub sender: tokio::sync::mpsc::Sender<NetworkMessage>,
+    // TODO: high-priority channel
+}
+
+impl PeerStub {
+    pub fn new(sender: tokio::sync::mpsc::Sender<NetworkMessage>) -> Self {
+        Self {
+            sender,
+        }
+    }
+}
+
+/// Container for map of PeerNetworkId and associated outbound channels.
+/// Generational fetch for fast no-change path. Local map copy can then operate lock free.
+#[derive(Debug)]
+pub struct OutboundPeerConnections {
+    peer_connections: RwLock<HashMap<PeerNetworkId, PeerStub>>,
+    generation: AtomicU32,
+}
+
+impl OutboundPeerConnections {
+    pub fn new() -> Self {
+        Self{
+            peer_connections: RwLock::new(HashMap::new()),
+            generation: AtomicU32::new(0),
+        }
+    }
+
+    /// pass in a generation number, if it is stale return new peer map and current generation, otherwise None
+    pub fn get_generational(&self, generation: u32) -> Option<(HashMap<PeerNetworkId,PeerStub>, u32)> {
+        let generation_test = self.generation.load(Ordering::SeqCst);
+        if generation == generation_test {
+            return None;
+        }
+        let read = self.peer_connections.read().unwrap();
+        let generation_actual = self.generation.load(Ordering::SeqCst);
+        let out = read.clone();
+        Some((out, generation_actual))
+    }
+
+    /// set a (PeerNetworkId, PeerStub) pair
+    /// return new generation counter
+    pub fn insert(&self, peer_network_id: PeerNetworkId, peer: PeerStub) -> u32 {
+        let mut write = self.peer_connections.write().unwrap();
+        write.insert(peer_network_id, peer);
+        self.generation.fetch_add(1 , Ordering::SeqCst)
+    }
+
+    /// remove a PeerNetworkId entry
+    /// return new generation counter
+    pub fn remove(&self, peer_network_id: &PeerNetworkId) -> u32 {
+        let mut write = self.peer_connections.write().unwrap();
+        write.remove(peer_network_id);
+        self.generation.fetch_add(1 , Ordering::SeqCst)
+    }
+}
+
+// pub struct CachedOutboundPeerConnections {
+//     peer_senders: Arc<OutboundPeerConnections>,
+//
+//     peers: RwLock<HashMap<PeerNetworkId, PeerStub>>,
+// }
+//
+// struct GenerationalPeers {
+//     peers: HashMap<PeerNetworkId, PeerStub>,
+//     peers_generation: u32,
+// }
+//
+// impl GenerationalPeers {
+//     fn new() -> Self {
+//         Self {
+//             peers: HashMap::new(),
+//             peers_generation: 0,
+//         }
+//     }
+// }
+//
+// impl CachedOutboundPeerConnections {
+//     pub fn new(peer_senders: Arc<OutboundPeerConnections>) -> Self {
+//         Self {
+//             peer_senders,
+//             peers: RwLock::new(GenerationalPeers::new()),
+//         }
+//     }
+//     fn update_peers(&self) {
+//         if let Some((new_peers, new_generation)) = self.peer_senders.get_generational(self.peers_generation.get()) {
+//             self.peers.set(new_peers);
+//             self.peers_generation.set(new_generation);
+//         }
+//     }
+//
+// }

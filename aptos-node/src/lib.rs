@@ -40,6 +40,7 @@ use std::{
     thread,
 };
 use tokio::runtime::Runtime;
+use aptos_network2::protocols::network::OutboundPeerConnections;
 
 const EPOCH_LENGTH_SECS: u64 = 60;
 
@@ -496,16 +497,19 @@ pub fn setup_environment_and_start_node(
         consensus_reconfig_subscription,
     ) = state_sync::create_event_subscription_service(&node_config, &db_rw);
 
+    let peer_senders = Arc::new(OutboundPeerConnections::new());
+
     let (network_runtimes, mut networks) = network2::setup_networks(
         &node_config,
         chain_id,
         peers_and_metadata.clone(),
+        peer_senders.clone(),
         &mut event_subscription_service);
 
     let mut apps = ApplicationCollector::new();
 
     // Start the peer monitoring service
-    let peer_monitoring_service_network_interfaces = network2::peer_monitoring_network_connections(&node_config, peers_and_metadata.clone(), &mut apps);
+    let peer_monitoring_service_network_interfaces = network2::peer_monitoring_network_connections(&node_config, peers_and_metadata.clone(), &mut apps, peer_senders.clone());
     let peer_monitoring_service_runtime = services::start_peer_monitoring_service(
         &node_config,
         peer_monitoring_service_network_interfaces,
@@ -513,7 +517,7 @@ pub fn setup_environment_and_start_node(
     );
 
     // Start state sync and get the notification endpoints for mempool and consensus
-    let storage_service_network_interfaces = network2::storage_service_network_connections(&node_config, peers_and_metadata.clone(), &mut apps);
+    let storage_service_network_interfaces = network2::storage_service_network_connections(&node_config, peers_and_metadata.clone(), &mut apps, peer_senders.clone());
     let (state_sync_runtimes, mempool_listener, consensus_notifier) =
         state_sync::start_state_sync_and_get_notification_handles(
             &node_config,
@@ -528,7 +532,7 @@ pub fn setup_environment_and_start_node(
         services::bootstrap_api_and_indexer(&node_config, aptos_db, chain_id)?;
 
     // Create mempool and get the consensus to mempool sender
-    let mempool_network_interfaces = network2::mempool_network_connections(&node_config, peers_and_metadata.clone(), &mut apps);
+    let mempool_network_interfaces = network2::mempool_network_connections(&node_config, peers_and_metadata.clone(), &mut apps, peer_senders.clone());
     let (mempool_runtime, consensus_to_mempool_sender) =
         services::start_mempool_runtime_and_get_consensus_sender(
             &mut node_config,
@@ -545,6 +549,7 @@ pub fn setup_environment_and_start_node(
         &node_config,
         peers_and_metadata.clone(),
         &mut apps,
+        peer_senders.clone(),
     );
     let consensus_runtime = consensus_network_interfaces.map(|consensus_network_interfaces| {
         // Wait until state sync has been initialized
