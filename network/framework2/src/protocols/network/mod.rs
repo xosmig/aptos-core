@@ -30,15 +30,17 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::{cmp::min, fmt::Debug, marker::PhantomData, pin::Pin, time::Duration};
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
-use std::ops::DerefMut;
+use std::ops::{Add, DerefMut, Sub};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, LockResult, RwLock};
-use tokio::sync::mpsc::error::{TryRecvError, TrySendError};
+use tokio::sync::mpsc::error::{SendError, TryRecvError, TrySendError};
+use tokio::time::error::Elapsed;
 use tokio_stream::wrappers::ReceiverStream;
 use aptos_config::network_id::{NetworkId, PeerNetworkId};
+// use crate::application::error::Error::RpcError;
 // use aptos_infallible::RwLock;
 use crate::error::NetworkErrorKind;
-use crate::protocols::wire::messaging::v1::{DirectSendMsg, NetworkMessage, RequestId};
+use crate::protocols::wire::messaging::v1::{DirectSendMsg, NetworkMessage, RequestId, RpcRequest};
 
 pub trait Message: DeserializeOwned + Serialize {}
 impl<T: DeserializeOwned + Serialize> Message for T {}
@@ -542,8 +544,8 @@ impl<TMessage: Message> NetworkSender<TMessage> {
     where F: Fn() -> Result<NetworkMessage,NetworkError>
     {
         match self.peers.read() {
-            Ok(x) => {
-                match x.get(peer_network_id) {
+            Ok(peers) => {
+                match peers.get(peer_network_id) {
                     None => {
                         Err(NetworkErrorKind::NotConnected.into())
                     }
@@ -637,6 +639,69 @@ impl<TMessage: Message> NetworkSender<TMessage> {
         req_msg: TMessage,
         timeout: Duration,
     ) -> Result<TMessage, RpcError> {
+        let deadline = tokio::time::Instant::now().add(timeout);
+        let peer_network_id = PeerNetworkId::new(self.network_id, recipient);
+        self.update_peers();
+        match self.peers.read() {
+            Ok(peers) => {
+                match peers.get(&peer_network_id) {
+                    None => {
+                        return Err(RpcError::NotConnected(recipient));
+                    }
+                    Some(peer) => {
+                        let mdata = protocol.to_bytes(&req_msg)?.into();
+                        let msg = NetworkMessage::RpcRequest(RpcRequest {
+                            protocol_id: protocol,
+                            request_id: peer.rpc_counter.fetch_add(1, Ordering::SeqCst),
+                            priority: 0,
+                            raw_request: mdata,
+                        });
+
+                        match peer.sender.try_send(msg) {
+                            Ok(_) => {
+                                // TODO: now we wait for rpc reply, connect to NetworkSource for this app
+                                // Ok(())
+                                return Err(RpcError::TimedOut);
+                            }
+                            Err(tse) => match &tse {
+                                TrySendError::Full(_) => {
+                                    // TODO: counter for send drop due to full
+                                    // TODO: we could wait, but we're holding a read lock on self.peers, and that would suck?
+                                    return Err(RpcError::TooManyPending(1)); // TODO: look up the channel size and return that many pending?
+                                }
+                                TrySendError::Closed(_) => {
+                                    // TODO: counter for send drop due to closed (other code should remove peer from collection)
+                                    return Err(RpcError::NotConnected(recipient));
+                                }
+                            }
+                        }
+                        // peer.sender.send(msg)
+                        // // TODO: use TimeService TimeSource thing?
+                        // let sub_timeout = match deadline.checked_duration_since(tokio::time::Instant::now()) {
+                        //     None => {
+                        //         return Err(RpcError::TimedOut);
+                        //     }
+                        //     Some(sub) => {sub}
+                        // };
+                        // match tokio::time::timeout(sub_timeout, send_fut).await {
+                        //     Ok(_) => {
+                        //         // TODO: now we wait for rpc reply, connect to NetworkSource for this app
+                        //         return Err(RpcError::TimedOut)
+                        //     }
+                        //     Err(elapsed) => {
+                        //         return Err(RpcError::TimedOut)
+                        //     }
+                        // }
+                    }
+                }
+            }
+            Err(le) => {
+                // lock fail, wtf
+                // TODO: better error for lock fail?
+                return Err(RpcError::TimedOut);
+            }
+        };
+        // self.peer_try_send(&peer_network_id, msg_src)
         // serialize request
         // let req_data = protocol.to_bytes(&req_msg)?.into();
         // let res_data = self
@@ -645,7 +710,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
         //     .await?;
         // let res_msg: TMessage = protocol.from_bytes(&res_data)?;
         //Ok(res_msg)
-        Err(RpcError::TimedOut)// TODO: implement send_rpc()
+        // Err(RpcError::TimedOut)// TODO: implement send_rpc()
     }
 }
 
@@ -672,6 +737,7 @@ pub struct NetworkSource {
     source: NetworkSourceUnion,
 }
 
+/// NetworkSource implements Stream<ReceivedMessage> and is all messages routed to this application from all peers
 impl NetworkSource {
     pub fn new_single_source(network_source: tokio::sync::mpsc::Receiver<ReceivedMessage>) -> Self {
         let network_source = ReceiverStream::new(network_source);
@@ -688,9 +754,6 @@ impl NetworkSource {
 }
 
 
-// tokio::sync::mpsc::Receiver<ReceivedMessage>
-// tokio_stream::wrappers::ReceiverStream
-//futures::stream::SelectAll
 fn merge_receivers(receivers: Vec<tokio::sync::mpsc::Receiver<ReceivedMessage>>) -> futures::stream::SelectAll<ReceiverStream<ReceivedMessage>> {
     futures::stream::select_all(
         receivers.into_iter().map(|x| tokio_stream::wrappers::ReceiverStream::new(x))
@@ -709,29 +772,20 @@ impl Stream for NetworkSource {
             NetworkSourceUnion::ManySource(sa) => { Pin::new(sa).poll_next(cx) }
         }
     }
-
-    // pub fn try_recv(&mut self) -> Result<ReceivedMessage, TryRecvError> {
-    //     match self {
-    //         NetworkSource::SingleSource(source) => {
-    //             source.try_recv()
-    //         }
-    //         NetworkSource::ManySource(sources) => {
-    //
-    //         }
-    //     }
-    // }
 }
 
 #[derive(Clone, Debug)]
 pub struct PeerStub {
     pub sender: tokio::sync::mpsc::Sender<NetworkMessage>,
     // TODO: high-priority channel
+    pub rpc_counter: Arc<AtomicU32>,
 }
 
 impl PeerStub {
     pub fn new(sender: tokio::sync::mpsc::Sender<NetworkMessage>) -> Self {
         Self {
             sender,
+            rpc_counter: Arc::new(AtomicU32::new(0))
         }
     }
 }
