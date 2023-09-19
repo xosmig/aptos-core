@@ -15,6 +15,12 @@ use aptos_types::network_address::NetworkAddress;
 use async_trait::async_trait;
 use itertools::Itertools;
 use std::{collections::HashMap, fmt::Debug, sync::Arc, time::Duration};
+use std::collections::BTreeMap;
+use std::sync::RwLock;
+use bytes::Bytes;
+use futures::channel::oneshot;
+use crate::protocols::network::RpcError;
+use crate::protocols::wire::messaging::v1::RequestId;
 
 /// A simple definition to handle all the trait bounds for messages.
 // TODO: we should remove the duplication across the different files
@@ -75,6 +81,7 @@ pub struct NetworkClient<Message> {
     rpc_protocols_and_preferences: Vec<ProtocolId>, // Protocols are sorted by preference (highest to lowest)
     network_senders: HashMap<NetworkId, NetworkSender<Message>>,
     peers_and_metadata: Arc<PeersAndMetadata>,
+    open_outbound_rpc: OutboundRpcMatcher,
 }
 
 impl<Message: NetworkMessageTrait + Clone> NetworkClient<Message> {
@@ -83,12 +90,14 @@ impl<Message: NetworkMessageTrait + Clone> NetworkClient<Message> {
         rpc_protocols_and_preferences: Vec<ProtocolId>,
         network_senders: HashMap<NetworkId, NetworkSender<Message>>,
         peers_and_metadata: Arc<PeersAndMetadata>,
+        open_outbound_rpc: OutboundRpcMatcher,
     ) -> Self {
         Self {
             direct_send_protocols_and_preferences,
             rpc_protocols_and_preferences,
             network_senders,
             peers_and_metadata,
+            open_outbound_rpc,
         }
     }
 
@@ -221,7 +230,7 @@ impl<Message: NetworkMessageTrait> NetworkClientInterface<Message> for NetworkCl
         let rpc_protocol_id =
             self.get_preferred_protocol_for_peer(&peer, &self.rpc_protocols_and_preferences)?;
         Ok(network_sender
-            .send_rpc(peer.peer_id(), rpc_protocol_id, message, rpc_timeout)
+            .send_rpc(peer.peer_id(), rpc_protocol_id, message, rpc_timeout, &self.open_outbound_rpc)
             .await?)
     }
 }
@@ -244,3 +253,44 @@ impl<Message: NetworkMessageTrait> NetworkClientInterface<Message> for NetworkCl
 // }
 
 pub type NetworkEvents<Message> = crate::protocols::network::NetworkEvents<Message>;
+
+#[derive(Debug)]
+pub struct OpenRpcRequestState {
+    pub id: RequestId,
+    // send on this to deliver a reply back to an open NetworkSender.send_rpc()
+    pub sender: oneshot::Sender<Result<Bytes, RpcError>>,
+    pub protocol_id: ProtocolId,
+    // TODO? add a deadline timeout field?
+}
+
+/// OutboundRpcMatcher contains an Arc-RwLock of oneshot reply channels
+#[derive(Clone,Debug)]
+pub struct OutboundRpcMatcher {
+    open_outbound_rpc: Arc<RwLock<BTreeMap<RequestId, OpenRpcRequestState>>>,
+}
+
+impl OutboundRpcMatcher {
+    pub fn new() -> Self {
+        Self {
+            open_outbound_rpc: Arc::new(RwLock::new(BTreeMap::new()))
+        }
+    }
+
+    pub fn remove(&self, request_id: &RequestId) -> Option<OpenRpcRequestState> {
+        self.open_outbound_rpc.write().unwrap().remove(request_id)
+    }
+
+    pub fn insert(
+        &self,
+        request_id: RequestId,
+        sender: oneshot::Sender<Result<Bytes, RpcError>>,
+        protocol_id: ProtocolId,
+    ) {
+        let val = OpenRpcRequestState{
+            id: request_id,
+            sender,
+            protocol_id,
+        };
+        self.open_outbound_rpc.write().unwrap().insert(request_id, val);
+    }
+}

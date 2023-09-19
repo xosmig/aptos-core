@@ -32,6 +32,7 @@ use aptos_short_hex_str::AsShortHexStr;
 use aptos_types::network_address::{NetworkAddress, Protocol};
 
 mod peer;
+// use peer::Peer;
 
 #[derive(Debug, PartialEq, PartialOrd)]
 enum State {
@@ -332,7 +333,6 @@ impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
         apps: Arc<ApplicationCollector>,
         peer_senders: Arc<OutboundPeerConnections>,
     ) -> Self {
-        // TODO network2: rebuild
         Self{
             transport,
             peers_and_metadata,
@@ -390,15 +390,10 @@ impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
                         connection.socket.close();
                         continue;
                     }
-                    // let (sender, receiver) = tokio::sync::mpsc::channel::<ReceivedMessage>(self.config.network_channel_size);
                     let (sender, receiver) = tokio::sync::mpsc::channel::<NetworkMessage>(self.config.network_channel_size);
-                    // TODO: make a peer! do protocol stuff!
                     let remote_peer_network_id = PeerNetworkId::new(self.network_context.network_id(), connection.metadata.remote_peer_id);
                     self.peers_and_metadata.insert_connection_metadata(remote_peer_network_id, connection.metadata);
-                    // TODO: keep a map<peer network id,PeerStub> to route outbound messages app->socket
-                    // TODO: connect to existing map<ProtocolId,Sender<ReceivedMessage>> for inbound messages socket->app
-                    let apps = self.apps.clone();
-                    let peers_and_metadata = self.peers_and_metadata.clone();
+                    peer::start_peer(connection.socket, receiver, self.apps.clone(), Handle::current(), remote_peer_network_id);
                     let stub = PeerStub::new(sender);
                     self.peer_senders.insert(remote_peer_network_id, stub);
                 }

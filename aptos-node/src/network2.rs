@@ -12,7 +12,7 @@ use aptos_network2::protocols::wire::handshake::v1::ProtocolId;
 use aptos_network2_builder::{ApplicationCollector,ApplicationConnections,NetworkBuilder};
 // use aptos_consensus::network_interface::{DIRECT_SEND, RPC};
 use aptos_logger::debug;
-use aptos_network2::application::interface::{NetworkClient,NetworkMessageTrait};
+use aptos_network2::application::interface::{NetworkClient, NetworkMessageTrait, OutboundRpcMatcher};
 use aptos_network2::protocols::network::{NetworkEvents, NetworkSender, NetworkSource, NewNetworkSender, ReceivedMessage, Message, OutboundPeerConnections};
 use aptos_network2::application::storage::PeersAndMetadata;
 use aptos_time_service::TimeService;
@@ -79,13 +79,16 @@ impl<T: MessageTrait> ApplicationNetworkInterfaces<T> {
         for network_id in network_ids.into_iter() {
             network_senders.insert(network_id, NetworkSender::new(network_id, peer_senders.clone()));
         }
+        let open_outbound_rpc = OutboundRpcMatcher::new();
         let network_client = NetworkClient::new(
             direct_send_protocols_and_preferences,
             rpc_protocols_and_preferences,
             network_senders,
             peers_and_metadata,
+            open_outbound_rpc.clone(),
         );
-        let network_events = NetworkEvents::new(network_source);
+        // TODO: connect rpc send and reply between NetworkClient and NetworkEvents
+        let network_events = NetworkEvents::new(network_source, open_outbound_rpc, peer_senders.clone());
         Self {
             network_client,
             network_events,
@@ -112,7 +115,7 @@ fn build_network_connections<T: MessageTrait>(
     network_ids: Vec<NetworkId>,
     peer_senders: Arc<OutboundPeerConnections>,
 ) -> ApplicationNetworkInterfaces<T> {
-    // TODO: pack a map {ProtocolId: Receiver, ...} and allow app code to unpack that
+    // TODO: pack a map {ProtocolId: Receiver, ...} and allow app code to unpack that out of NetworkSource
     // let prots = BTreeMap::new();
     let mut receivers = vec![];
 
