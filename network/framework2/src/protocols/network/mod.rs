@@ -790,7 +790,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
         protocol: ProtocolId,
         req_msg: TMessage,
         timeout: Duration,
-        open_outbound_rpc: &OutboundRpcMatcher,
+        // open_outbound_rpc: &OutboundRpcMatcher,
     ) -> Result<TMessage, RpcError> {
         let deadline = tokio::time::Instant::now().add(timeout);
         let peer_network_id = PeerNetworkId::new(self.network_id, recipient);
@@ -812,7 +812,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                         });
 
                         let (sender, receiver) = oneshot::channel();
-                        open_outbound_rpc.insert(request_id, sender, protocol);
+                        peer.open_outbound_rpc.insert(request_id, sender, protocol);
                         match peer.sender.try_send(msg) {
                             Ok(_) => {
                                 receiver
@@ -958,16 +958,18 @@ impl Stream for NetworkSource {
 #[derive(Clone, Debug)]
 pub struct PeerStub {
     /// channel to Peer's write thread
+    /// TODO: also add high-priority channel
     pub sender: tokio::sync::mpsc::Sender<NetworkMessage>,
-    // TODO: high-priority channel
     pub rpc_counter: Arc<AtomicU32>,
+    open_outbound_rpc: OutboundRpcMatcher,
 }
 
 impl PeerStub {
-    pub fn new(sender: tokio::sync::mpsc::Sender<NetworkMessage>) -> Self {
+    pub fn new(sender: tokio::sync::mpsc::Sender<NetworkMessage>, open_outbound_rpc: OutboundRpcMatcher) -> Self {
         Self {
             sender,
-            rpc_counter: Arc::new(AtomicU32::new(0))
+            rpc_counter: Arc::new(AtomicU32::new(0)),
+            open_outbound_rpc,
         }
     }
 }

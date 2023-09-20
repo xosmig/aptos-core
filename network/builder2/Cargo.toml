@@ -28,6 +28,7 @@ aptos-time-service = { workspace = true }
 aptos-types = { workspace = true }
 async-trait = { workspace = true }
 bcs = { workspace = true }
+bytes = { workspace = true }
 futures = { workspace = true }
 maplit = { workspace = true }
 rand = { workspace = true }

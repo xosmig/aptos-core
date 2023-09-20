@@ -85,7 +85,7 @@ impl<T: MessageTrait> ApplicationNetworkInterfaces<T> {
             rpc_protocols_and_preferences,
             network_senders,
             peers_and_metadata,
-            open_outbound_rpc.clone(),
+            // open_outbound_rpc.clone(),
         );
         // TODO: connect rpc send and reply between NetworkClient and NetworkEvents
         let network_events = NetworkEvents::new(network_source, open_outbound_rpc, peer_senders.clone());

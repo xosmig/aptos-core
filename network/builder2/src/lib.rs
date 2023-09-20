@@ -17,6 +17,7 @@ use aptos_logger::{error, info, warn};
 use aptos_netcore::transport::memory::MemoryTransport;
 use aptos_netcore::transport::tcp::{TCPBufferCfg, TcpSocket, TcpTransport};
 use aptos_netcore::transport::{ConnectionOrigin, Transport};
+use aptos_network2::application::interface::OutboundRpcMatcher;
 use aptos_network2::application::metadata::PeerMetadata;
 // use aptos_network_discovery::DiscoveryChangeListener;
 use aptos_time_service::TimeService;
@@ -393,8 +394,9 @@ impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
                     let (sender, receiver) = tokio::sync::mpsc::channel::<NetworkMessage>(self.config.network_channel_size);
                     let remote_peer_network_id = PeerNetworkId::new(self.network_context.network_id(), connection.metadata.remote_peer_id);
                     self.peers_and_metadata.insert_connection_metadata(remote_peer_network_id, connection.metadata);
-                    peer::start_peer(connection.socket, receiver, self.apps.clone(), Handle::current(), remote_peer_network_id);
-                    let stub = PeerStub::new(sender);
+                    let open_outbound_rpc = OutboundRpcMatcher::new();
+                    peer::start_peer(&self.config, connection.socket, receiver, self.apps.clone(), Handle::current(), remote_peer_network_id, open_outbound_rpc.clone());
+                    let stub = PeerStub::new(sender, open_outbound_rpc);
                     self.peer_senders.insert(remote_peer_network_id, stub);
                 }
                 Err(err) => {

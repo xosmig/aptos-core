@@ -81,7 +81,7 @@ pub struct NetworkClient<Message> {
     rpc_protocols_and_preferences: Vec<ProtocolId>, // Protocols are sorted by preference (highest to lowest)
     network_senders: HashMap<NetworkId, NetworkSender<Message>>,
     peers_and_metadata: Arc<PeersAndMetadata>,
-    open_outbound_rpc: OutboundRpcMatcher,
+    // open_outbound_rpc: OutboundRpcMatcher,
 }
 
 impl<Message: NetworkMessageTrait + Clone> NetworkClient<Message> {
@@ -90,14 +90,14 @@ impl<Message: NetworkMessageTrait + Clone> NetworkClient<Message> {
         rpc_protocols_and_preferences: Vec<ProtocolId>,
         network_senders: HashMap<NetworkId, NetworkSender<Message>>,
         peers_and_metadata: Arc<PeersAndMetadata>,
-        open_outbound_rpc: OutboundRpcMatcher,
+        // open_outbound_rpc: OutboundRpcMatcher,
     ) -> Self {
         Self {
             direct_send_protocols_and_preferences,
             rpc_protocols_and_preferences,
             network_senders,
             peers_and_metadata,
-            open_outbound_rpc,
+            // open_outbound_rpc,
         }
     }
 
@@ -230,7 +230,7 @@ impl<Message: NetworkMessageTrait> NetworkClientInterface<Message> for NetworkCl
         let rpc_protocol_id =
             self.get_preferred_protocol_for_peer(&peer, &self.rpc_protocols_and_preferences)?;
         Ok(network_sender
-            .send_rpc(peer.peer_id(), rpc_protocol_id, message, rpc_timeout, &self.open_outbound_rpc)
+            .send_rpc(peer.peer_id(), rpc_protocol_id, message, rpc_timeout)
             .await?)
     }
 }
