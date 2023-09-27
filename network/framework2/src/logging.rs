@@ -22,7 +22,7 @@
 //! ```
 
 use crate::{
-    // connectivity_manager::DiscoverySource,
+    connectivity_manager::DiscoverySource,
     transport::{ConnectionId, ConnectionMetadata},
 };
 use aptos_config::network_id::NetworkContext;
@@ -36,31 +36,31 @@ use serde::Serialize;
 
 /// Different sources for peer addresses, ordered by priority (Onchain=highest,
 /// Config=lowest).
-#[repr(u8)]
-#[derive(Copy, Clone, Eq, Hash, PartialEq, Ord, PartialOrd, NumVariants, Serialize)]
-pub enum DiscoverySource {
-    OnChainValidatorSet,
-    File,
-    Rest,
-    Config,
-}
-
-impl std::fmt::Debug for DiscoverySource {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self)
-    }
-}
-
-impl std::fmt::Display for DiscoverySource {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", match self {
-            DiscoverySource::OnChainValidatorSet => "OnChainValidatorSet",
-            DiscoverySource::File => "File",
-            DiscoverySource::Config => "Config",
-            DiscoverySource::Rest => "Rest",
-        })
-    }
-}
+// #[repr(u8)]
+// #[derive(Copy, Clone, Eq, Hash, PartialEq, Ord, PartialOrd, NumVariants, Serialize)]
+// pub enum DiscoverySource {
+//     OnChainValidatorSet,
+//     File,
+//     Rest,
+//     Config,
+// }
+//
+// impl std::fmt::Debug for DiscoverySource {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         write!(f, "{}", self)
+//     }
+// }
+//
+// impl std::fmt::Display for DiscoverySource {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         write!(f, "{}", match self {
+//             DiscoverySource::OnChainValidatorSet => "OnChainValidatorSet",
+//             DiscoverySource::File => "File",
+//             DiscoverySource::Config => "Config",
+//             DiscoverySource::Rest => "Rest",
+//         })
+//     }
+// }
 
 #[derive(Schema)]
 pub struct NetworkSchema<'a> {

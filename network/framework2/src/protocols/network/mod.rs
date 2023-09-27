@@ -272,7 +272,7 @@ pub struct NetworkEvents<TMessage> {
     network_source: NetworkSource, //::sync::mpsc::Receiver<ReceivedMessage>,
     done: bool,
     // this handle to outbound RPC catches replies and puts them on their oneshot channel
-    open_outbound_rpc: OutboundRpcMatcher,//Arc<RwLock<BTreeMap<RequestId, OpenRpcRequestState>>>,
+    // open_outbound_rpc: OutboundRpcMatcher,//Arc<RwLock<BTreeMap<RequestId, OpenRpcRequestState>>>,
 
     peer_senders: Arc<OutboundPeerConnections>,
     peers: HashMap<PeerNetworkId, PeerStub>,
@@ -285,13 +285,13 @@ pub struct NetworkEvents<TMessage> {
 impl<TMessage: Message + Unpin> NetworkEvents<TMessage> {
     pub fn new(
         network_source: NetworkSource,
-        open_outbound_rpc: OutboundRpcMatcher,
+        // open_outbound_rpc: OutboundRpcMatcher,
         peer_senders: Arc<OutboundPeerConnections>,
     ) -> Self {
         Self {
             network_source,
             done: false,
-            open_outbound_rpc,//Arc::new(RwLock::new(BTreeMap::new())),
+            // open_outbound_rpc,//Arc::new(RwLock::new(BTreeMap::new())),
             peer_senders,
             peers: HashMap::new(),
             peers_generation: 0,
@@ -373,6 +373,7 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
                         // fall through, maybe get another
                     }
                     NetworkMessage::RpcRequest(request) => {
+                        // TODO: figure out a way to multi-core protocol_id.from_bytes()
                         let app_msg = match request.protocol_id.from_bytes(request.raw_request.as_slice()) {
                             Ok(x) => { x },
                             Err(_) => {
@@ -401,30 +402,32 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
                             msg.sender, app_msg, request.protocol_id, responder)))
                     }
                     NetworkMessage::RpcResponse(response) => {
+                        unreachable!("NetworkMessage::RpcResponse should not arrive in NetworkEvents because it is handled by Peer and reconnected with oneshot there");
                         // TODO network2: add rpc-response matching at the application level here
-                        let request_state = mself.open_outbound_rpc.remove(&response.request_id);
-                        let request_state = match request_state {
-                            None => {
-                                // timeout or garbage collection or something. drop response.
-                                // TODO network2 log/count dropped response
-                                // TODO: drop this one message, but go back to local loop
-                                return Poll::Pending;
-                            }
-                            Some(x) => { x }
-                        };
-                        let app_msg = match request_state.protocol_id.from_bytes(response.raw_response.as_slice()) {
-                            Ok(x) => { x },
-                            Err(_) => {
-                                mself.done = true;
-                                // TODO network2: log error, count error, close connection
-                                return Poll::Ready(None);
-                            }
-                        };
-                        request_state.sender.send(Ok(response.raw_response.into()));
-                        // we processed a legit message, even if it didn't come back through the expected channel, yield
+                        // let request_state = mself.open_outbound_rpc.remove(&response.request_id);
+                        // let request_state = match request_state {
+                        //     None => {
+                        //         // timeout or garbage collection or something. drop response.
+                        //         // TODO network2 log/count dropped response
+                        //         // TODO: drop this one message, but go back to local loop
+                        //         return Poll::Pending;
+                        //     }
+                        //     Some(x) => { x }
+                        // };
+                        // let app_msg = match request_state.protocol_id.from_bytes(response.raw_response.as_slice()) {
+                        //     Ok(x) => { x },
+                        //     Err(_) => {
+                        //         mself.done = true;
+                        //         // TODO network2: log error, count error, close connection
+                        //         return Poll::Ready(None);
+                        //     }
+                        // };
+                        // request_state.sender.send(Ok(response.raw_response.into()));
+                        // // we processed a legit message, even if it didn't come back through the expected channel, yield
                         return Poll::Pending
                     }
                     NetworkMessage::DirectSendMsg(message) => {
+                        // TODO: figure out a way to multi-core protocol_id.from_bytes()
                         let app_msg = match message.protocol_id.from_bytes(message.raw_msg.as_slice()) {
                             Ok(x) => { x },
                             Err(_) => {
@@ -735,6 +738,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
     ) -> Result<(), NetworkError> {
         let peer_network_id = PeerNetworkId::new(self.network_id, recipient);
         let msg_src = || -> Result<NetworkMessage,NetworkError> {
+            // TODO: figure out a way to multi-core protocol_id.to_bytes()
             let mdata = protocol.to_bytes(&message)?.into();
             Ok(NetworkMessage::DirectSendMsg(DirectSendMsg {
                 protocol_id: protocol,
@@ -753,6 +757,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
         protocol: ProtocolId,
         message: TMessage,
     ) -> Result<(), NetworkError> {
+        // TODO: figure out a way to multi-core protocol_id.to_bytes()
         let mdata : Vec<u8> = protocol.to_bytes(&message)?.into();
         let msg_src = || -> Result<NetworkMessage,NetworkError> {
             Ok(NetworkMessage::DirectSendMsg(DirectSendMsg {
@@ -790,11 +795,13 @@ impl<TMessage: Message> NetworkSender<TMessage> {
         protocol: ProtocolId,
         req_msg: TMessage,
         timeout: Duration,
-        // open_outbound_rpc: &OutboundRpcMatcher,
     ) -> Result<TMessage, RpcError> {
         let deadline = tokio::time::Instant::now().add(timeout);
         let peer_network_id = PeerNetworkId::new(self.network_id, recipient);
         self.update_peers();
+        // This holds a read-lock on the application's local cache of the peer map for a little while.
+        // The big part is probably serialization in protocol.to_bytes().
+        // peer.sender.try_send() should either accept or fail quickly.
         let receiver = match self.peers.read() {
             Ok(peers) => {
                 match peers.get(&peer_network_id) {
@@ -802,6 +809,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                         return Err(RpcError::NotConnected(recipient));
                     }
                     Some(peer) => {
+                        // TODO: figure out a way to multi-core protocol_id.to_bytes()
                         let mdata = protocol.to_bytes(&req_msg)?.into();
                         let request_id = peer.rpc_counter.fetch_add(1, Ordering::SeqCst);
                         let msg = NetworkMessage::RpcRequest(RpcRequest {
@@ -812,7 +820,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                         });
 
                         let (sender, receiver) = oneshot::channel();
-                        peer.open_outbound_rpc.insert(request_id, sender, protocol);
+                        peer.open_outbound_rpc.insert(request_id, sender, protocol, deadline);
                         match peer.sender.try_send(msg) {
                             Ok(_) => {
                                 receiver
@@ -832,8 +840,6 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                                 }
                             }
                         }
-                        // peer.sender.send(msg)
-                        // // TODO: use TimeService TimeSource thing?
                     }
                 }
             }

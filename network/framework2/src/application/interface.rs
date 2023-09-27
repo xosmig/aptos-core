@@ -260,7 +260,7 @@ pub struct OpenRpcRequestState {
     // send on this to deliver a reply back to an open NetworkSender.send_rpc()
     pub sender: oneshot::Sender<Result<Bytes, RpcError>>,
     pub protocol_id: ProtocolId,
-    // TODO? add a deadline timeout field?
+    pub deadline: tokio::time::Instant,
 }
 
 /// OutboundRpcMatcher contains an Arc-RwLock of oneshot reply channels
@@ -276,6 +276,8 @@ impl OutboundRpcMatcher {
         }
     }
 
+    /// Get an OpenRpcRequestState so we can reply to it.
+    /// May return None if request_id was already handled, timed out, or never existed.
     pub fn remove(&self, request_id: &RequestId) -> Option<OpenRpcRequestState> {
         self.open_outbound_rpc.write().unwrap().remove(request_id)
     }
@@ -285,12 +287,74 @@ impl OutboundRpcMatcher {
         request_id: RequestId,
         sender: oneshot::Sender<Result<Bytes, RpcError>>,
         protocol_id: ProtocolId,
+        deadline: tokio::time::Instant,
     ) {
         let val = OpenRpcRequestState{
             id: request_id,
             sender,
             protocol_id,
+            deadline,
         };
         self.open_outbound_rpc.write().unwrap().insert(request_id, val);
+    }
+
+    /// Periodic cleanup task, run ~ 10Hz
+    /// Assume normal flow is for RPCs to _not_ timeout.
+    pub async fn cleanup(self, period: Duration, mut closed: Closer) {
+        loop {
+            tokio::select!{
+                () = tokio::time::sleep(period) => {}
+                _ = closed.wait() => {return}
+            }
+            self.cleanup_internal();
+        }
+    }
+
+    fn cleanup_internal(&self) {
+        let mut they = self.open_outbound_rpc.write().unwrap();
+        let mut to_delete = vec![];
+        let now = tokio::time::Instant::now();
+        {
+            for (k, v) in they.iter() {
+                if v.deadline >= now {
+                    to_delete.push(k.clone());
+                }
+            }
+        }
+        if !to_delete.is_empty() {
+            // TODO: counter add to_delete.len() RPCs timed out and dropped
+            for k in to_delete.into_iter() {
+                they.remove(&k);
+            }
+        }
+    }
+}
+
+/// Closer someone replicates Go Context.Done() or a Mutex+Condition variable
+#[derive(Clone)]
+pub struct Closer {
+    pub wat: Arc<tokio::sync::Mutex<tokio::sync::watch::Sender<bool>>>,
+    pub done: tokio::sync::watch::Receiver<bool>,
+}
+
+impl Closer {
+    pub fn new() -> Self {
+        let (sender, receiver) = tokio::sync::watch::channel(false);
+        Self {
+            wat: Arc::new(tokio::sync::Mutex::new(sender)),
+            done: receiver,
+        }
+    }
+
+    pub async fn wait(&mut self) {
+        self.done.wait_for(|x| *x).await;
+    }
+
+    pub async fn close(&self) {
+        self.wat.lock().await.send_modify(|x| *x = true);
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.done.borrow().clone()
     }
 }

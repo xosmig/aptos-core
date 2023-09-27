@@ -4,11 +4,12 @@ use std::collections::BTreeMap;
 use std::io::{Chain, Error};
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::time::Duration;
 use futures::{AsyncRead, AsyncWrite, AsyncWriteExt, StreamExt};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::Receiver;
-use aptos_config::config::{HANDSHAKE_VERSION, NetworkConfig, PeerRole, RoleType};
+use aptos_config::config::{HANDSHAKE_VERSION, NetworkConfig, Peer, PeerRole, PeerSet, RoleType};
 use aptos_config::network_id::{NetworkContext, NetworkId, PeerNetworkId};
 use aptos_crypto::x25519;
 use aptos_event_notifications::{DbBackedOnChainConfig,EventSubscriptionService};
@@ -23,6 +24,7 @@ use aptos_network2::application::metadata::PeerMetadata;
 use aptos_time_service::TimeService;
 use aptos_types::chain_id::ChainId;
 use aptos_network2::application::storage::PeersAndMetadata;
+use aptos_network2::connectivity_manager::ConnectivityManager;
 use aptos_network2::logging::NetworkSchema;
 use aptos_network2::noise::stream::NoiseStream;
 use aptos_network2::protocols::wire::handshake::v1::{ProtocolId, ProtocolIdSet};
@@ -31,6 +33,8 @@ use aptos_network2::protocols::network::{OutboundPeerConnections, PeerStub, Rece
 use aptos_network2::transport::{APTOS_TCP_TRANSPORT, AptosNetTransport, Connection};
 use aptos_short_hex_str::AsShortHexStr;
 use aptos_types::network_address::{NetworkAddress, Protocol};
+use aptos_types::PeerId;
+use tokio_retry::strategy::ExponentialBackoff;
 
 mod peer;
 // use peer::Peer;
@@ -89,6 +93,7 @@ impl NetworkBuilder {
         mut reconfig_subscription_service: Option<&mut EventSubscriptionService>,
         peers_and_metadata: Arc<PeersAndMetadata>,
         peer_senders: Arc<OutboundPeerConnections>,
+        handle: Option<Handle>,
     ) -> NetworkBuilder {
         let network_context = NetworkContext::new(role, config.network_id, config.peer_id());
         NetworkBuilder{
@@ -103,7 +108,7 @@ impl NetworkBuilder {
             peers_and_metadata,
             peer_senders,
             apps: Arc::new(ApplicationCollector::new()), // temporary empty app set
-            handle: None,
+            handle,
         }
     }
 
@@ -218,12 +223,16 @@ impl NetworkBuilder {
         if self.state != State::BUILT {
             panic!("NetworkBuilder.build but not in state BUILT");
         }
+        let handle = self.handle.clone().unwrap();
+        handle.enter();
         let listen_addr = transport_peer_manager_start(
             self.build_transport(),
             self.config.listen_address.clone(),
-            self.handle.clone().unwrap(),
+            handle,
             self.network_context.network_id(),
             self.apps.clone(),
+            &self.config,
+            self.time_service.clone(),
         );
         info!("network {:?} listening on {:?}", self.network_context.network_id(), listen_addr);
         // self.state = State::STARTED;
@@ -250,11 +259,13 @@ fn transport_peer_manager_start(
     executor: Handle,
     network_id: NetworkId,
     apps: Arc<ApplicationCollector>,
+    config: &NetworkConfig,
+    time_service: TimeService,
 ) -> NetworkAddress {
     let result = match tpm {
         #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
-        TransportPeerManager::Memory(mut pm) => { pm.listen(listen_address, executor ) }
-        TransportPeerManager::Tcp(mut pm) => { pm.listen(listen_address, executor ) }
+        TransportPeerManager::Memory(mut pm) => { pm.listen(config, listen_address, time_service, executor ) }
+        TransportPeerManager::Tcp(mut pm) => { pm.listen(config, listen_address, time_service, executor ) }
     };
     match result {
         Ok(listen_address) => { listen_address }
@@ -264,19 +275,18 @@ fn transport_peer_manager_start(
     }
 }
 
+// TODO: move into network/framework2
 pub struct ApplicationConnections {
     pub protocol_id: ProtocolId,
 
     /// sender receives messages from network, towards application code
     pub sender: tokio::sync::mpsc::Sender<ReceivedMessage>,
 
-    /// receiver is where application code takes messages from network peers
-    //pub receiver: tokio::sync::mpsc::Receiver<ReceivedMessage>,
-
     /// label used in metrics counters
     pub label: String,
 }
 
+// TODO: move into network/framework2
 impl ApplicationConnections {
     pub fn build(protocol_id: ProtocolId, queue_size: usize, label: &str) -> (ApplicationConnections, tokio::sync::mpsc::Receiver<ReceivedMessage>) {
         let (sender, receiver) = tokio::sync::mpsc::channel(queue_size);
@@ -288,10 +298,12 @@ impl ApplicationConnections {
     }
 }
 
+// TODO: move into network/framework2
 pub struct ApplicationCollector {
     apps: BTreeMap<ProtocolId,ApplicationConnections>,
 }
 
+// TODO: move into network/framework2
 impl ApplicationCollector {
     pub fn new() -> Self {
         Self {
@@ -305,6 +317,7 @@ impl ApplicationCollector {
 }
 
 /// PeerManager might be more correctly "peer listener" in the new framework?
+/// TODO: move into network/framework2
 struct PeerManager<TTransport, TSocket>
     where
         TTransport: Transport,
@@ -321,6 +334,7 @@ struct PeerManager<TTransport, TSocket>
     _ph2 : PhantomData<TSocket>,
 }
 
+// TODO: move into network/framework2
 impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
     where
         TTransport: Transport<Output = Connection<TSocket>> + Send + 'static,
@@ -356,17 +370,75 @@ impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
         }
     }
 
+    async fn connect_outbound(
+        &self,
+        peer_id: PeerId,
+        addr: NetworkAddress,
+    ) {
+        // TODO: rebuild connection init time counter
+        let outbound = match self.transport.dial(peer_id, addr.clone()) {
+            Ok(outbound) => {
+                outbound
+            }
+            Err(err) => {
+                warn!("dial err: {:?}", err);
+                // TODO: counter
+                return;
+            }
+        };
+        let mut connection = match outbound.await {
+            Ok(connection) => { // Connection<TSocket>
+                connection
+            }
+            Err(err) => {
+                warn!("dial err 2: {:?}", err);
+                // TODO: counter
+                return
+            }
+        };
+        let dialed_peer_id = connection.metadata.remote_peer_id;
+        if dialed_peer_id != peer_id {
+            warn!("dial {:?} did not reach peer {:?} but peer {:?}", addr, peer_id, dialed_peer_id);
+            connection.socket.close();
+            return;
+        }
+        // TODO: store connection, start stuff
+    }
+
     fn listen(
         mut self,
+        config: &NetworkConfig,
         listen_addr: NetworkAddress,
+        time_service: TimeService,
         executor: Handle,
     ) -> Result<NetworkAddress, <TTransport>::Error> {
-        let (sockets, listen_addr_actual) = self.transport.listen_on(listen_addr)?;
-        executor.spawn(self.listener_thread(sockets));
+        // let (sockets, listen_addr_actual) = self.transport.listen_on(listen_addr)?;
+        let (sockets, listen_addr_actual) = executor.block_on(self.first_listen(listen_addr))?;
+        let seeds = config.merge_seeds();
+        let cm = ConnectivityManager::new(
+            self.network_context,
+            time_service,
+            self.peers_and_metadata.clone(),
+            seeds,
+            // connection_reqs_tx,
+            // connection_notifs_rx,
+            // conn_mgr_reqs_rx,
+            Duration::from_millis(config.connectivity_check_interval_ms),
+            ExponentialBackoff::from_millis(config.connection_backoff_base).factor(1000),
+            Duration::from_millis(config.max_connection_delay_ms),
+            Some(config.max_outbound_connections),
+            config.mutual_authentication,
+        );
+        executor.spawn(cm.start());
+        executor.spawn(self.listener_thread(sockets, executor.clone()));
         Ok(listen_addr_actual)
     }
 
-    async fn listener_thread(mut self, mut sockets: <TTransport>::Listener) {
+    async fn first_listen(&mut self, listen_addr: NetworkAddress) -> Result<(<TTransport>::Listener, NetworkAddress), TTransport::Error> {
+        self.transport.listen_on(listen_addr)
+    }
+
+    async fn listener_thread(mut self, mut sockets: <TTransport>::Listener, executor: Handle) {
         // TODO: leave some connection that can close and shutdown this listener?
         loop {
             let (conn_fut, remote_addr) = match sockets.next().await {
@@ -395,9 +467,19 @@ impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
                     let remote_peer_network_id = PeerNetworkId::new(self.network_context.network_id(), connection.metadata.remote_peer_id);
                     self.peers_and_metadata.insert_connection_metadata(remote_peer_network_id, connection.metadata);
                     let open_outbound_rpc = OutboundRpcMatcher::new();
-                    peer::start_peer(&self.config, connection.socket, receiver, self.apps.clone(), Handle::current(), remote_peer_network_id, open_outbound_rpc.clone());
+                    // TODO: how do we shut down a peer on disconnect?
+                    peer::start_peer(
+                        &self.config,
+                        connection.socket,
+                        receiver,
+                        self.apps.clone(),
+                        executor.clone(),
+                        remote_peer_network_id,
+                        open_outbound_rpc.clone());
                     let stub = PeerStub::new(sender, open_outbound_rpc);
                     self.peer_senders.insert(remote_peer_network_id, stub);
+                    // TODO: peer connection counter
+                    // TODO: peer connection event
                 }
                 Err(err) => {
                     error!("listener_thread {:?} connection post-processing failed (continuing): {:?}", self.config.network_id, err);

@@ -2604,6 +2604,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "tokio-retry",
  "tokio-stream",
  "tokio-util 0.7.3",
 ]
@@ -2633,6 +2634,7 @@ dependencies = [
  "rand 0.7.3",
  "serde",
  "tokio",
+ "tokio-retry",
 ]
 
 [[package]]

@@ -79,7 +79,7 @@ impl<T: MessageTrait> ApplicationNetworkInterfaces<T> {
         for network_id in network_ids.into_iter() {
             network_senders.insert(network_id, NetworkSender::new(network_id, peer_senders.clone()));
         }
-        let open_outbound_rpc = OutboundRpcMatcher::new();
+        // let open_outbound_rpc = OutboundRpcMatcher::new();
         let network_client = NetworkClient::new(
             direct_send_protocols_and_preferences,
             rpc_protocols_and_preferences,
@@ -88,7 +88,7 @@ impl<T: MessageTrait> ApplicationNetworkInterfaces<T> {
             // open_outbound_rpc.clone(),
         );
         // TODO: connect rpc send and reply between NetworkClient and NetworkEvents
-        let network_events = NetworkEvents::new(network_source, open_outbound_rpc, peer_senders.clone());
+        let network_events = NetworkEvents::new(network_source, peer_senders.clone());
         Self {
             network_client,
             network_events,
@@ -292,6 +292,7 @@ pub fn setup_networks(
             Some(event_subscription_service),
             peers_and_metadata.clone(),
             peer_senders.clone(),
+            Some(runtime.handle().clone()),
         );
 
         // Register consensus (both client and server) with the network

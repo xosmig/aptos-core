@@ -22,7 +22,11 @@ use std::{
     sync::Arc,
 };
 use std::sync::atomic::{AtomicU32, Ordering};
-use aptos_config::config::PeerRole;
+use aptos_config::config::{PeerRole, RoleType};
+use aptos_config::network_id::NetworkContext;
+use std::fmt;
+use tokio::sync::mpsc::error::TrySendError;
+use serde::Serialize;
 
 /// A simple container that tracks all peers and peer metadata for the node.
 /// This container is updated by both the networking code (e.g., for new
@@ -36,6 +40,8 @@ pub struct PeersAndMetadata {
 
     // trusted_peers have separate locking and access
     trusted_peers: HashMap<NetworkId, Arc<RwLock<PeerSet>>>,
+
+    subscribers: RwLock<Vec<tokio::sync::mpsc::Sender<ConnectionNotification>>>,
 }
 
 impl PeersAndMetadata {
@@ -47,6 +53,7 @@ impl PeersAndMetadata {
             peers_and_metadata: RwLock::new(HashMap::new()),
             generation: AtomicU32::new(1),
             trusted_peers: HashMap::new(),
+            subscribers: RwLock::new(vec![]),
         };
 
         // Initialize each network mapping and trusted peer set
@@ -214,6 +221,41 @@ impl PeersAndMetadata {
         })
     }
 
+    fn broadcast(&self, event: ConnectionNotification) {
+        let mut listeners = self.subscribers.write();
+        let mut to_del = vec![];
+        for i in 0..listeners.len() {
+            let dest = listeners.get_mut(i).unwrap();
+            match dest.try_send(event.clone()) {
+                Ok(_) => {}
+                Err(err) => match err {
+                    TrySendError::Full(_) => {
+                        // meh, drop message, maybe counter?
+                    }
+                    TrySendError::Closed(_) => {
+                        // TODO: remove this entry
+                        to_del.push(i);
+                    }
+                }
+            }
+        }
+        while !to_del.is_empty() {
+            let evict = to_del.pop().unwrap();
+            let llast = listeners.len() - 1;
+            if evict != llast {
+                listeners.swap(evict, llast);
+            }
+            listeners.pop();
+        }
+    }
+
+    pub fn subscribe(&self) -> tokio::sync::mpsc::Receiver<ConnectionNotification> {
+        let (sender, receiver) = tokio::sync::mpsc::channel(10); // TODO configure or name the constant or something
+        let mut listeners = self.subscribers.write();
+        listeners.push(sender);
+        receiver
+    }
+
     /// Updates the connection metadata associated with the given peer.
     /// If no peer metadata exists, a new one is created.
     pub fn insert_connection_metadata(
@@ -224,12 +266,15 @@ impl PeersAndMetadata {
         let mut writer = self.peers_and_metadata.write();
         let mut peer_metadata_for_network = writer.get_mut(&peer_network_id.network_id()).unwrap();
         self.generation.fetch_add(1 , Ordering::SeqCst);
+        let net_context = NetworkContext::new(peer_role_to_role_type(connection_metadata.role), peer_network_id.network_id(), peer_network_id.peer_id());
         peer_metadata_for_network.entry(peer_network_id.peer_id())
             .and_modify(|peer_metadata| {
                 println!("");
                 peer_metadata.connection_metadata = connection_metadata.clone()
             })
-            .or_insert_with(|| PeerMetadata::new(connection_metadata));
+            .or_insert_with(|| PeerMetadata::new(connection_metadata.clone()));
+        let event = ConnectionNotification::NewPeer(connection_metadata, net_context);
+        self.broadcast(event);
 
         Ok(())
     }
@@ -343,3 +388,58 @@ fn missing_metadata_error(peer_network_id: &PeerNetworkId) -> Error {
 //
 //     }
 // }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum DisconnectReason {
+    Requested,
+    ConnectionLost,
+}
+
+impl fmt::Display for DisconnectReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            DisconnectReason::Requested => "Requested",
+            DisconnectReason::ConnectionLost => "ConnectionLost",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
+pub enum ConnectionNotification {
+    /// Connection with a new peer has been established.
+    NewPeer(ConnectionMetadata, NetworkContext),
+    /// Connection to a peer has been terminated. This could have been triggered from either end.
+    LostPeer(ConnectionMetadata, NetworkContext, DisconnectReason),
+}
+
+impl fmt::Debug for ConnectionNotification {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
+impl fmt::Display for ConnectionNotification {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConnectionNotification::NewPeer(metadata, context) => {
+                write!(f, "[{},{}]", metadata, context)
+            },
+            ConnectionNotification::LostPeer(metadata, context, reason) => {
+                write!(f, "[{},{},{}]", metadata, context, reason)
+            },
+        }
+    }
+}
+
+pub fn peer_role_to_role_type(role: PeerRole) -> RoleType {
+    match role {
+        PeerRole::Validator => {RoleType::Validator}
+        PeerRole::PreferredUpstream => {RoleType::Validator}
+        PeerRole::Upstream => {RoleType::Validator}
+        PeerRole::ValidatorFullNode => {RoleType::FullNode}
+        PeerRole::Downstream => {RoleType::FullNode}
+        PeerRole::Known => {RoleType::FullNode}
+        PeerRole::Unknown => {RoleType::FullNode}
+    }
+}
