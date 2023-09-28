@@ -72,10 +72,11 @@ pub enum Event<TMessage> {
         ProtocolId,
         oneshot::Sender<Result<Bytes, RpcError>>,
     ),
-    /// Peer which we have a newly established connection with. TODO network2: remove this from Event?
-    NewPeer(ConnectionMetadata),
-    /// Peer with which we've lost our connection. TODO network2: remove this from Event?
-    LostPeer(ConnectionMetadata),
+    // Peer connect/disconnect events are now served out of a subscription on PeersAndMetadata object
+    // Peer which we have a newly established connection with. TODO network2: remove this from Event?
+    // NewPeer(ConnectionMetadata),
+    // Peer with which we've lost our connection. TODO network2: remove this from Event?
+    // LostPeer(ConnectionMetadata),
 }
 
 /// impl PartialEq for simpler testing
@@ -88,8 +89,8 @@ impl<TMessage: PartialEq> PartialEq for Event<TMessage> {
             (RpcRequest(pid1, msg1, proto1, _), RpcRequest(pid2, msg2, proto2, _)) => {
                 pid1 == pid2 && msg1 == msg2 && proto1 == proto2
             },
-            (NewPeer(metadata1), NewPeer(metadata2)) => metadata1 == metadata2,
-            (LostPeer(metadata1), LostPeer(metadata2)) => metadata1 == metadata2,
+            // (NewPeer(metadata1), NewPeer(metadata2)) => metadata1 == metadata2,
+            // (LostPeer(metadata1), LostPeer(metadata2)) => metadata1 == metadata2,
             _ => false,
         }
     }

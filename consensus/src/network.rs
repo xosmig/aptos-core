@@ -646,7 +646,7 @@ impl NetworkTask {
                                 );
                                 info!(
                                     LogSchema::new(LogEvent::NetworkReceiveProposal)
-                                        .remote_peer(peer_id),
+                                        .remote_peer(peer_id.peer_id()),
                                     block_round = proposal.proposal().round(),
                                     block_hash = proposal.proposal().id(),
                                 );

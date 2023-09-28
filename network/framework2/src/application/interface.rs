@@ -80,7 +80,7 @@ pub struct NetworkClient<Message> {
     direct_send_protocols_and_preferences: Vec<ProtocolId>, // Protocols are sorted by preference (highest to lowest)
     rpc_protocols_and_preferences: Vec<ProtocolId>, // Protocols are sorted by preference (highest to lowest)
     network_senders: HashMap<NetworkId, NetworkSender<Message>>,
-    peers_and_metadata: Arc<PeersAndMetadata>,
+    pub peers_and_metadata: Arc<PeersAndMetadata>,
     // open_outbound_rpc: OutboundRpcMatcher,
 }
 

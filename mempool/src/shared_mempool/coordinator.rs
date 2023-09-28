@@ -268,12 +268,12 @@ async fn handle_network_event<NetworkClient, TransactionValidator>(
     TransactionValidator: TransactionValidation + 'static,
 {
     match event {
-        Event::NewPeer(_) => {
-            // TODO: remove Event
-        },
-        Event::LostPeer(_) => {
-            // TODO: remove Event
-        },
+        // Event::NewPeer(_) => {
+        //     // TODO: remove Event
+        // },
+        // Event::LostPeer(_) => {
+        //     // TODO: remove Event
+        // },
         Event::Message(peer_network_id, msg) => {
             counters::shared_mempool_event_inc("message");
             match msg {

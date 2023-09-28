@@ -11,8 +11,8 @@ use aptos_logger::{
     warn,
 };
 use aptos_metrics_core::{register_int_counter_vec, IntCounter, IntCounterVec};
-use aptos_network::{
-    application::interface::{NetworkClient, NetworkClientInterface, NetworkServiceEvents},
+use aptos_network2::{
+    application::interface::{NetworkClient, NetworkClientInterface, NetworkEvents},
     protocols::{network::Event, rpc::error::RpcError, wire::handshake::v1::ProtocolId},
 };
 use aptos_time_service::{TimeService, TimeServiceTrait};
@@ -61,15 +61,15 @@ pub static PENDING_NETBENCH_NETWORK_EVENTS: Lazy<IntCounterVec> = Lazy::new(|| {
 
 // Get messages from the network and quickly shuffle them to N threads of workers.
 async fn source_loop(
-    network_requests: NetworkServiceEvents<NetbenchMessage>,
-    work: async_channel::Sender<(NetworkId, Event<NetbenchMessage>)>,
+    mut network_events: NetworkEvents<NetbenchMessage>,
+    work: async_channel::Sender<Event<NetbenchMessage>>,
 ) {
-    let network_events: Vec<_> = network_requests
-        .into_network_and_events()
-        .into_iter()
-        .map(|(network_id, events)| events.map(move |event| (network_id, event)))
-        .collect();
-    let mut network_events = futures::stream::select_all(network_events).fuse();
+    // let network_events: Vec<_> = network_requests
+    //     .into_network_and_events()
+    //     .into_iter()
+    //     .map(|(network_id, events)| events.map(move |event| (network_id, event)))
+    //     .collect();
+    // let mut network_events = futures::stream::select_all(network_events).fuse();
 
     loop {
         match network_events.next().await {
@@ -182,13 +182,14 @@ async fn handle_rpc(
 async fn handler_task(
     node_config: NodeConfig,
     network_client: NetworkClient<NetbenchMessage>,
-    work_rx: async_channel::Receiver<(NetworkId, Event<NetbenchMessage>)>,
+    work_rx: async_channel::Receiver<Event<NetbenchMessage>>,
     time_service: TimeService,
     shared: Arc<RwLock<NetbenchSharedState>>,
 ) {
     let config = node_config.netbench.unwrap();
+    let peer_events = network_client.peers_and_metadata.subscribe();
     loop {
-        let (network_id, event) = match work_rx.recv().await {
+        let event = match work_rx.recv().await {
             Ok(v) => v,
             Err(_) => {
                 // RecvError means source was closed, we're done here.
@@ -200,8 +201,8 @@ async fn handler_task(
                 let msg_wrapper: NetbenchMessage = wat;
                 handle_direct(
                     &network_client,
-                    network_id,
-                    peer_id,
+                    peer_id.network_id(),
+                    peer_id.peer_id(),
                     msg_wrapper,
                     time_service.clone(),
                     shared.clone(),
@@ -210,7 +211,7 @@ async fn handler_task(
             },
             Event::RpcRequest(peer_id, msg_wrapper, protocol_id, sender) => {
                 handle_rpc(
-                    peer_id,
+                    peer_id.peer_id(),
                     msg_wrapper,
                     protocol_id,
                     time_service.clone(),
@@ -218,29 +219,30 @@ async fn handler_task(
                 )
                 .await;
             },
-            Event::NewPeer(wat) => {
-                if config.enable_direct_send_testing {
-                    Handle::current().spawn(direct_sender(
-                        node_config.clone(),
-                        network_client.clone(),
-                        time_service.clone(),
-                        network_id,
-                        wat.remote_peer_id,
-                        shared.clone(),
-                    ));
-                }
-                if config.enable_rpc_testing {
-                    Handle::current().spawn(rpc_sender(
-                        node_config.clone(),
-                        network_client.clone(),
-                        time_service.clone(),
-                        network_id,
-                        wat.remote_peer_id,
-                        shared.clone(),
-                    ));
-                }
-            },
-            Event::LostPeer(_) => {}, // don't care
+            // TODO: rebuild around subscription to PeersAndMetadata
+            // Event::NewPeer(wat) => {
+            //     if config.enable_direct_send_testing {
+            //         Handle::current().spawn(direct_sender(
+            //             node_config.clone(),
+            //             network_client.clone(),
+            //             time_service.clone(),
+            //             wat.network_id,
+            //             wat.remote_peer_id,
+            //             shared.clone(),
+            //         ));
+            //     }
+            //     if config.enable_rpc_testing {
+            //         Handle::current().spawn(rpc_sender(
+            //             node_config.clone(),
+            //             network_client.clone(),
+            //             time_service.clone(),
+            //             wat.network_id,
+            //             wat.remote_peer_id,
+            //             shared.clone(),
+            //         ));
+            //     }
+            // },
+            // Event::LostPeer(_) => {}, // don't care
         }
     }
 }
@@ -249,7 +251,7 @@ async fn handler_task(
 pub async fn run_netbench_service(
     node_config: NodeConfig,
     network_client: NetworkClient<NetbenchMessage>,
-    network_requests: NetworkServiceEvents<NetbenchMessage>,
+    network_requests: NetworkEvents<NetbenchMessage>,
     time_service: TimeService,
 ) {
     let shared = Arc::new(RwLock::new(NetbenchSharedState::new()));

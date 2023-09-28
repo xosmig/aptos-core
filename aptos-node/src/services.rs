@@ -194,7 +194,7 @@ pub fn start_netbench_service(
     runtime.spawn(run_netbench_service(
         node_config.clone(),
         network_client,
-        network_interfaces.network_service_events,
+        network_interfaces.network_events,
         TimeService::real(),
     ));
 }

@@ -2559,7 +2559,7 @@ dependencies = [
  "aptos-config",
  "aptos-logger",
  "aptos-metrics-core",
- "aptos-network",
+ "aptos-network2",
  "aptos-runtimes",
  "aptos-time-service",
  "aptos-types",
