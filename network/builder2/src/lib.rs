@@ -9,7 +9,7 @@ use futures::{AsyncRead, AsyncWrite, AsyncWriteExt, StreamExt};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::Receiver;
-use aptos_config::config::{HANDSHAKE_VERSION, NetworkConfig, Peer, PeerRole, PeerSet, RoleType};
+use aptos_config::config::{DiscoveryMethod, HANDSHAKE_VERSION, NetworkConfig, Peer, PeerRole, PeerSet, RoleType};
 use aptos_config::network_id::{NetworkContext, NetworkId, PeerNetworkId};
 use aptos_crypto::x25519;
 use aptos_event_notifications::{DbBackedOnChainConfig,EventSubscriptionService};
@@ -24,13 +24,14 @@ use aptos_network2::application::metadata::PeerMetadata;
 use aptos_time_service::TimeService;
 use aptos_types::chain_id::ChainId;
 use aptos_network2::application::storage::PeersAndMetadata;
-use aptos_network2::connectivity_manager::ConnectivityManager;
+use aptos_network2::connectivity_manager::{ConnectivityManager, ConnectivityRequest};
 use aptos_network2::logging::NetworkSchema;
 use aptos_network2::noise::stream::NoiseStream;
 use aptos_network2::protocols::wire::handshake::v1::{ProtocolId, ProtocolIdSet};
 use aptos_network2::protocols::wire::messaging::v1::NetworkMessage;
 use aptos_network2::protocols::network::{OutboundPeerConnections, PeerStub, ReceivedMessage};
 use aptos_network2::transport::{APTOS_TCP_TRANSPORT, AptosNetTransport, Connection};
+use aptos_network_discovery::DiscoveryChangeListener;
 use aptos_short_hex_str::AsShortHexStr;
 use aptos_types::network_address::{NetworkAddress, Protocol};
 use aptos_types::PeerId;
@@ -73,7 +74,7 @@ pub struct NetworkBuilder {
     network_context: NetworkContext,
     chain_id: ChainId,
     config: NetworkConfig,
-    // discovery_listeners: Option<Vec<DiscoveryChangeListener<DbBackedOnChainConfig>>>, // TODO network2: re-build known-peer-directory
+    discovery_listeners: Vec<DiscoveryChangeListener<DbBackedOnChainConfig>>,
     // connectivity_manager_builder: Option<ConnectivityManagerBuilder>, // TODO network2: re-enable connectivity manager
     // health_checker_builder: Option<HealthCheckerBuilder>,
     // peer_manager_builder: PeerManagerBuilder,
@@ -81,6 +82,9 @@ pub struct NetworkBuilder {
     apps: Arc<ApplicationCollector>,
     peer_senders: Arc<OutboundPeerConnections>,
     handle: Option<Handle>,
+    // cm: ConnectivityManager<ExponentialBackoff>,
+    // temporarily hold a value from create() until start()
+    connectivity_req_rx: Option<tokio::sync::mpsc::Receiver<ConnectivityRequest>>,
 }
 
 impl NetworkBuilder {
@@ -90,26 +94,46 @@ impl NetworkBuilder {
         role: RoleType,
         config: &NetworkConfig,
         time_service: TimeService,
-        mut reconfig_subscription_service: Option<&mut EventSubscriptionService>,
+        reconfig_subscription_service: Option<&mut EventSubscriptionService>,
         peers_and_metadata: Arc<PeersAndMetadata>,
         peer_senders: Arc<OutboundPeerConnections>,
         handle: Option<Handle>,
     ) -> NetworkBuilder {
         let network_context = NetworkContext::new(role, config.network_id, config.peer_id());
-        NetworkBuilder{
+        let (connectivity_req_sender, connectivity_req_rx) = tokio::sync::mpsc::channel::<ConnectivityRequest>(10);
+        // let seeds = config.merge_seeds();
+        // let cm = ConnectivityManager::new(
+        //     network_context,
+        //     time_service.clone(),
+        //     peers_and_metadata.clone(),
+        //     seeds,
+        //     // connection_reqs_tx,
+        //     // connection_notifs_rx,
+        //     connectivity_req_rx,
+        //     Duration::from_millis(config.connectivity_check_interval_ms),
+        //     ExponentialBackoff::from_millis(config.connection_backoff_base).factor(1000),
+        //     Duration::from_millis(config.max_connection_delay_ms),
+        //     Some(config.max_outbound_connections),
+        //     config.mutual_authentication,
+        // );
+        let mut nb = NetworkBuilder{
             state: State::CREATED,
             executor: None,
             time_service,
             network_context,
             chain_id,
             config: config.clone(),
-            // discovery_listeners: None,
+            discovery_listeners: vec![],
             // connectivity_manager_builder: None,
             peers_and_metadata,
             peer_senders,
             apps: Arc::new(ApplicationCollector::new()), // temporary empty app set
             handle,
-        }
+            // cm,
+            connectivity_req_rx: Some(connectivity_req_rx),
+        };
+        nb.setup_discovery(reconfig_subscription_service, connectivity_req_sender);
+        nb
     }
 
     pub fn set_apps(&mut self, apps: Arc<ApplicationCollector>) {
@@ -153,6 +177,50 @@ impl NetworkBuilder {
         }
         self.handle = Some(handle);
         self.state = State::BUILT;
+    }
+
+    fn setup_discovery(
+        &mut self,
+        mut reconfig_subscription_service: Option<&mut EventSubscriptionService>,
+        conn_mgr_reqs_tx: tokio::sync::mpsc::Sender<ConnectivityRequest>,
+    ) {
+        for disco in self.config.discovery_methods().into_iter() {
+            let listener = match disco {
+                DiscoveryMethod::Onchain => {
+                    let reconfig_events = reconfig_subscription_service
+                        .as_mut()
+                        .expect("An event subscription service is required for on-chain discovery!")
+                        .subscribe_to_reconfigurations()
+                        .expect("On-chain discovery is unable to subscribe to reconfigurations!");
+                    let identity_key = self.config.identity_key();
+                    let pubkey = identity_key.public_key();
+                    DiscoveryChangeListener::validator_set(
+                        self.network_context,
+                        conn_mgr_reqs_tx.clone(),
+                        pubkey,
+                        reconfig_events,
+                    )
+                }
+                DiscoveryMethod::File(file_discovery) => DiscoveryChangeListener::file(
+                    self.network_context,
+                    conn_mgr_reqs_tx.clone(),
+                    file_discovery.path.as_path(),
+                    Duration::from_secs(file_discovery.interval_secs),
+                    self.time_service.clone(),
+                ),
+                DiscoveryMethod::Rest(rest_discovery) => DiscoveryChangeListener::rest(
+                    self.network_context,
+                    conn_mgr_reqs_tx.clone(),
+                    rest_discovery.url.clone(),
+                    Duration::from_secs(rest_discovery.interval_secs),
+                    self.time_service.clone(),
+                ),
+                DiscoveryMethod::None => {
+                    continue;
+                }
+            };
+            self.discovery_listeners.push(listener);
+        }
     }
 
     fn get_tcp_buffers_cfg(&self) -> TCPBufferCfg {
@@ -225,17 +293,36 @@ impl NetworkBuilder {
         }
         let handle = self.handle.clone().unwrap();
         handle.enter();
+        let config = &self.config;
+        let seeds = config.merge_seeds();
+        let connectivity_req_rx = self.connectivity_req_rx.take().unwrap();
+        let cm = ConnectivityManager::new(
+            self.network_context,
+            self.time_service.clone(),
+            self.peers_and_metadata.clone(),
+            seeds,
+            // connection_reqs_tx,
+            // connection_notifs_rx,
+            connectivity_req_rx,
+            Duration::from_millis(config.connectivity_check_interval_ms),
+            ExponentialBackoff::from_millis(config.connection_backoff_base).factor(1000),
+            Duration::from_millis(config.max_connection_delay_ms),
+            Some(config.max_outbound_connections),
+            config.mutual_authentication,
+        );
+        handle.spawn(cm.start());
+        for disco in self.discovery_listeners.drain(..) {
+            disco.start(&handle);
+        }
         let listen_addr = transport_peer_manager_start(
             self.build_transport(),
             self.config.listen_address.clone(),
             handle,
             self.network_context.network_id(),
             self.apps.clone(),
-            &self.config,
-            self.time_service.clone(),
         );
         info!("network {:?} listening on {:?}", self.network_context.network_id(), listen_addr);
-        // self.state = State::STARTED;
+        self.state = State::STARTED;
         // self.config.listen_address.clone()
         // // authentication_mode,
         // self.config.mutual_authentication
@@ -259,13 +346,14 @@ fn transport_peer_manager_start(
     executor: Handle,
     network_id: NetworkId,
     apps: Arc<ApplicationCollector>,
-    config: &NetworkConfig,
-    time_service: TimeService,
+    // config: &NetworkConfig,
+    // time_service: TimeService,
+    // connectivity_req_rx: tokio::sync::mpsc::Receiver<ConnectivityRequest>,
 ) -> NetworkAddress {
     let result = match tpm {
         #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
-        TransportPeerManager::Memory(mut pm) => { pm.listen(config, listen_address, time_service, executor ) }
-        TransportPeerManager::Tcp(mut pm) => { pm.listen(config, listen_address, time_service, executor ) }
+        TransportPeerManager::Memory(mut pm) => { pm.listen( listen_address,  executor ) }
+        TransportPeerManager::Tcp(mut pm) => { pm.listen( listen_address,  executor ) }
     };
     match result {
         Ok(listen_address) => { listen_address }
@@ -407,29 +495,30 @@ impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
 
     fn listen(
         mut self,
-        config: &NetworkConfig,
+        // config: &NetworkConfig,
         listen_addr: NetworkAddress,
-        time_service: TimeService,
+        // time_service: TimeService,
         executor: Handle,
+        // connectivity_req_rx: tokio::sync::mpsc::Receiver<ConnectivityRequest>,
     ) -> Result<NetworkAddress, <TTransport>::Error> {
         // let (sockets, listen_addr_actual) = self.transport.listen_on(listen_addr)?;
         let (sockets, listen_addr_actual) = executor.block_on(self.first_listen(listen_addr))?;
-        let seeds = config.merge_seeds();
-        let cm = ConnectivityManager::new(
-            self.network_context,
-            time_service,
-            self.peers_and_metadata.clone(),
-            seeds,
-            // connection_reqs_tx,
-            // connection_notifs_rx,
-            // conn_mgr_reqs_rx,
-            Duration::from_millis(config.connectivity_check_interval_ms),
-            ExponentialBackoff::from_millis(config.connection_backoff_base).factor(1000),
-            Duration::from_millis(config.max_connection_delay_ms),
-            Some(config.max_outbound_connections),
-            config.mutual_authentication,
-        );
-        executor.spawn(cm.start());
+        // let seeds = config.merge_seeds();
+        // let cm = ConnectivityManager::new(
+        //     self.network_context,
+        //     time_service,
+        //     self.peers_and_metadata.clone(),
+        //     seeds,
+        //     // connection_reqs_tx,
+        //     // connection_notifs_rx,
+        //     connectivity_req_rx,
+        //     Duration::from_millis(config.connectivity_check_interval_ms),
+        //     ExponentialBackoff::from_millis(config.connection_backoff_base).factor(1000),
+        //     Duration::from_millis(config.max_connection_delay_ms),
+        //     Some(config.max_outbound_connections),
+        //     config.mutual_authentication,
+        // );
+        // executor.spawn(cm.start());
         executor.spawn(self.listener_thread(sockets, executor.clone()));
         Ok(listen_addr_actual)
     }

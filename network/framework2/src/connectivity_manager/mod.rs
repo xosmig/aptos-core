@@ -63,6 +63,7 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime},
 };
+use futures_util::stream::Fuse;
 use tokio_retry::strategy::jitter;
 use tokio_stream::wrappers::ReceiverStream;
 use crate::application::storage::ConnectionNotification;
@@ -102,7 +103,7 @@ pub struct ConnectivityManager<TBackoff> {
     // connection_notifs_rx: conn_notifs_channel::Receiver,
     // connection_notifs_rx: tokio::sync::mpsc::Receiver<ConnectionNotification>,
     /// Channel over which we receive requests from other actors.
-    // requests_rx: aptos_channels::Receiver<ConnectivityRequest>, // TODO: rebuild API?
+    requests_rx: Fuse<ReceiverStream<ConnectivityRequest>>,//futures::Stream<Item=ConnectivityRequest>,
     /// Peers queued to be dialed, potentially with some delay. The dial can be canceled by
     /// sending over (or dropping) the associated oneshot sender.
     dial_queue: HashMap<PeerId, oneshot::Sender<()>>,
@@ -314,7 +315,8 @@ where
         seeds: PeerSet,
         // connection_reqs_tx: ConnectionRequestSender, // TODO: rebuild request system?
         // connection_notifs_rx: conn_notifs_channel::Receiver,
-        // requests_rx: aptos_channels::Receiver<ConnectivityRequest>,
+        // requests_rx: futures::Stream<Item=ConnectivityRequest>,
+        requests_rx: tokio::sync::mpsc::Receiver<ConnectivityRequest>,
         connectivity_check_interval: Duration,
         backoff_strategy: TBackoff,
         max_delay: Duration,
@@ -338,6 +340,8 @@ where
             "{} Initialized connectivity manager", network_context
         );
 
+        let requests_rx = ReceiverStream::new(requests_rx).fuse();
+
         let mut connmgr = Self {
             network_context,
             time_service,
@@ -346,7 +350,7 @@ where
             discovered_peers: DiscoveredPeerSet::default(),
             // connection_reqs_tx,
             // connection_notifs_rx,
-            // requests_rx,
+            requests_rx,
             dial_queue: HashMap::new(),
             dial_states: HashMap::new(),
             connectivity_check_interval,
@@ -390,9 +394,9 @@ where
                 _ = ticker.select_next_some() => {
                     self.check_connectivity(&mut pending_dials).await;
                 },
-                // req = self.requests_rx.select_next_some() => { // TODO: rebuild API?
-                //     self.handle_request(req);
-                // },
+                req = self.requests_rx.select_next_some() => {
+                    self.handle_request(req);
+                },
                 maybe_notif = connection_notifs_rx.next() => {
                     // Shutdown the connectivity manager when the PeerManager
                     // shuts down.
@@ -537,6 +541,7 @@ where
         let network_id = self.network_context.network_id();
         let role = self.network_context.role();
         let roles_to_dial = network_id.upstream_roles(&role);
+        let num_discovered = self.discovered_peers.0.len();
         let mut eligible: Vec<_> = self
             .discovered_peers
             .0
@@ -548,6 +553,8 @@ where
                     && roles_to_dial.contains(&peer.role) // We can dial this role
             })
             .collect();
+        let num_eligible = eligible.len();
+        info!("peers: {} discovered, {} eligible", num_discovered, num_eligible);
 
         // Prioritize by PeerRole
         // Shuffle so we don't get stuck on certain peers
