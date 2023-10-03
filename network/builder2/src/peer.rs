@@ -20,9 +20,11 @@ use aptos_config::config::NetworkConfig;
 use aptos_config::network_id::PeerNetworkId;
 use aptos_logger::{error, info, warn};
 use aptos_network2::application::interface::{Closer, OpenRpcRequestState, OutboundRpcMatcher};
+use aptos_network2::application::storage::PeersAndMetadata;
 use aptos_network2::ProtocolId;
-use aptos_network2::protocols::network::{PeerStub, ReceivedMessage, RpcError};
+use aptos_network2::protocols::network::{OutboundPeerConnections, PeerStub, ReceivedMessage, RpcError};
 use aptos_network2::protocols::stream::{StreamFragment, StreamHeader, StreamMessage};
+use aptos_network2::transport::ConnectionMetadata;
 
 //
 // /// Peer holds what is needed by the write thread
@@ -65,15 +67,18 @@ use aptos_network2::protocols::stream::{StreamFragment, StreamHeader, StreamMess
 pub fn start_peer<TSocket>(
     config: &NetworkConfig,
     socket: TSocket,
-    to_send: Receiver<NetworkMessage>,
+    connection_metadata: ConnectionMetadata,
     apps: Arc<ApplicationCollector>,
     handle: Handle,
     remote_peer_network_id: PeerNetworkId,
-    open_outbound_rpc: OutboundRpcMatcher,
+    peers_and_metadata: Arc<PeersAndMetadata>,
+    peer_senders: Arc<OutboundPeerConnections>,
 )
 where
     TSocket: aptos_network2::transport::TSocket
 {
+    let (sender, to_send) = tokio::sync::mpsc::channel::<NetworkMessage>(config.network_channel_size);
+    let open_outbound_rpc = OutboundRpcMatcher::new();
     let max_frame_size = config.max_frame_size;
     let (read_socket, write_socket) = socket.split();
     let reader =
@@ -82,7 +87,11 @@ where
     let closed = Closer::new();
     handle.spawn(open_outbound_rpc.clone().cleanup(Duration::from_millis(100), closed.clone()));
     handle.spawn(writer_task(to_send, writer, max_frame_size, closed.clone()));
-    handle.spawn(reader_task(reader, apps, remote_peer_network_id, open_outbound_rpc, handle.clone(), closed));
+    handle.spawn(reader_task(reader, apps, remote_peer_network_id, open_outbound_rpc.clone(), handle.clone(), closed.clone()));
+    let stub = PeerStub::new(sender, open_outbound_rpc);
+    peers_and_metadata.insert_connection_metadata(remote_peer_network_id, connection_metadata.clone());
+    peer_senders.insert(remote_peer_network_id, stub);
+    handle.spawn(peer_cleanup_task(remote_peer_network_id, connection_metadata, closed, peers_and_metadata, peer_senders));
 }
 
 /// state needed in writer_task()
@@ -585,4 +594,16 @@ async fn reader_task(
     let rc = ReaderContext::new(reader, apps, remote_peer_network_id, open_outbound_rpc, handle);
     rc.run(closed).await;
     info!("peer reader finished"); // TODO: cause the writer to close?
+}
+
+async fn peer_cleanup_task(
+    remote_peer_network_id: PeerNetworkId,
+    connection_metadata: ConnectionMetadata,
+    mut closed: Closer,
+    peers_and_metadata: Arc<PeersAndMetadata>,
+    peer_senders: Arc<OutboundPeerConnections>,
+) {
+    closed.wait().await;
+    peer_senders.remove(&remote_peer_network_id);
+    peers_and_metadata.remove_peer_metadata(remote_peer_network_id, connection_metadata.connection_id);
 }

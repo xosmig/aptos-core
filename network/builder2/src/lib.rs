@@ -495,30 +495,10 @@ impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
 
     fn listen(
         mut self,
-        // config: &NetworkConfig,
         listen_addr: NetworkAddress,
-        // time_service: TimeService,
         executor: Handle,
-        // connectivity_req_rx: tokio::sync::mpsc::Receiver<ConnectivityRequest>,
     ) -> Result<NetworkAddress, <TTransport>::Error> {
-        // let (sockets, listen_addr_actual) = self.transport.listen_on(listen_addr)?;
         let (sockets, listen_addr_actual) = executor.block_on(self.first_listen(listen_addr))?;
-        // let seeds = config.merge_seeds();
-        // let cm = ConnectivityManager::new(
-        //     self.network_context,
-        //     time_service,
-        //     self.peers_and_metadata.clone(),
-        //     seeds,
-        //     // connection_reqs_tx,
-        //     // connection_notifs_rx,
-        //     connectivity_req_rx,
-        //     Duration::from_millis(config.connectivity_check_interval_ms),
-        //     ExponentialBackoff::from_millis(config.connection_backoff_base).factor(1000),
-        //     Duration::from_millis(config.max_connection_delay_ms),
-        //     Some(config.max_outbound_connections),
-        //     config.mutual_authentication,
-        // );
-        // executor.spawn(cm.start());
         executor.spawn(self.listener_thread(sockets, executor.clone()));
         Ok(listen_addr_actual)
     }
@@ -552,21 +532,18 @@ impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
                         connection.socket.close();
                         continue;
                     }
-                    let (sender, receiver) = tokio::sync::mpsc::channel::<NetworkMessage>(self.config.network_channel_size);
                     let remote_peer_network_id = PeerNetworkId::new(self.network_context.network_id(), connection.metadata.remote_peer_id);
-                    self.peers_and_metadata.insert_connection_metadata(remote_peer_network_id, connection.metadata);
-                    let open_outbound_rpc = OutboundRpcMatcher::new();
                     // TODO: how do we shut down a peer on disconnect?
                     peer::start_peer(
                         &self.config,
                         connection.socket,
-                        receiver,
+                        connection.metadata,
                         self.apps.clone(),
                         executor.clone(),
                         remote_peer_network_id,
-                        open_outbound_rpc.clone());
-                    let stub = PeerStub::new(sender, open_outbound_rpc);
-                    self.peer_senders.insert(remote_peer_network_id, stub);
+                        self.peers_and_metadata.clone(),
+                        self.peer_senders.clone(),
+                    );
                     // TODO: peer connection counter
                     // TODO: peer connection event
                 }
