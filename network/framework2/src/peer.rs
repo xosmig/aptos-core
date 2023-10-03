@@ -8,7 +8,7 @@ use std::time::Duration;
 use futures::channel::oneshot;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::Receiver;
-use aptos_network2::protocols::wire::messaging::v1::{MultiplexMessage, MultiplexMessageSink, MultiplexMessageStream, NetworkMessage, WriteError};
+use crate::protocols::wire::messaging::v1::{MultiplexMessage, MultiplexMessageSink, MultiplexMessageStream, NetworkMessage, WriteError};
 use bytes::Bytes;
 use futures::io::{AsyncRead,AsyncReadExt,AsyncWrite};
 use futures::StreamExt;
@@ -18,13 +18,13 @@ use tokio::sync::mpsc::error::{SendError, TryRecvError};
 use aptos_config::config::NetworkConfig;
 use aptos_config::network_id::PeerNetworkId;
 use aptos_logger::{error, info, warn};
-use aptos_network2::application::ApplicationCollector;
-use aptos_network2::application::interface::{Closer, OpenRpcRequestState, OutboundRpcMatcher};
-use aptos_network2::application::storage::PeersAndMetadata;
-use aptos_network2::ProtocolId;
-use aptos_network2::protocols::network::{OutboundPeerConnections, PeerStub, ReceivedMessage, RpcError};
-use aptos_network2::protocols::stream::{StreamFragment, StreamHeader, StreamMessage};
-use aptos_network2::transport::ConnectionMetadata;
+use crate::application::ApplicationCollector;
+use crate::application::interface::{Closer, OpenRpcRequestState, OutboundRpcMatcher};
+use crate::application::storage::PeersAndMetadata;
+use crate::ProtocolId;
+use crate::protocols::network::{OutboundPeerConnections, PeerStub, ReceivedMessage, RpcError};
+use crate::protocols::stream::{StreamFragment, StreamHeader, StreamMessage};
+use crate::transport::ConnectionMetadata;
 
 // TODO: move into network/framework2
 pub fn start_peer<TSocket>(
@@ -38,7 +38,7 @@ pub fn start_peer<TSocket>(
     peer_senders: Arc<OutboundPeerConnections>,
 )
 where
-    TSocket: aptos_network2::transport::TSocket
+    TSocket: crate::transport::TSocket
 {
     let (sender, to_send) = tokio::sync::mpsc::channel::<NetworkMessage>(config.network_channel_size);
     let open_outbound_rpc = OutboundRpcMatcher::new();

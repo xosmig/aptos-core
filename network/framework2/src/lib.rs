@@ -10,5 +10,6 @@ pub mod protocols;
 pub mod setup;
 pub mod transport;
 pub mod util;
+pub mod peer;
 
 pub type ProtocolId = protocols::wire::handshake::v1::ProtocolId;

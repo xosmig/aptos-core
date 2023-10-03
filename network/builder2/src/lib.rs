@@ -28,6 +28,7 @@ use aptos_network2::application::storage::PeersAndMetadata;
 use aptos_network2::connectivity_manager::{ConnectivityManager, ConnectivityRequest};
 use aptos_network2::logging::NetworkSchema;
 use aptos_network2::noise::stream::NoiseStream;
+use aptos_network2::peer;
 use aptos_network2::protocols::wire::handshake::v1::{ProtocolId, ProtocolIdSet};
 use aptos_network2::protocols::wire::messaging::v1::NetworkMessage;
 use aptos_network2::protocols::network::{OutboundPeerConnections, PeerStub, ReceivedMessage};
@@ -38,7 +39,6 @@ use aptos_types::network_address::{NetworkAddress, Protocol};
 use aptos_types::PeerId;
 use tokio_retry::strategy::ExponentialBackoff;
 
-mod peer;
 // use peer::Peer;
 
 #[derive(Debug, PartialEq, PartialOrd)]
