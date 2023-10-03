@@ -10,7 +10,6 @@ use tokio::runtime::Handle;
 use tokio::sync::mpsc::Receiver;
 use aptos_network2::protocols::wire::messaging::v1::{MultiplexMessage, MultiplexMessageSink, MultiplexMessageStream, NetworkMessage, WriteError};
 use bytes::Bytes;
-use crate::{ApplicationCollector, ApplicationConnections};
 use futures::io::{AsyncRead,AsyncReadExt,AsyncWrite};
 use futures::StreamExt;
 use futures::SinkExt;
@@ -19,49 +18,13 @@ use tokio::sync::mpsc::error::{SendError, TryRecvError};
 use aptos_config::config::NetworkConfig;
 use aptos_config::network_id::PeerNetworkId;
 use aptos_logger::{error, info, warn};
+use aptos_network2::application::ApplicationCollector;
 use aptos_network2::application::interface::{Closer, OpenRpcRequestState, OutboundRpcMatcher};
 use aptos_network2::application::storage::PeersAndMetadata;
 use aptos_network2::ProtocolId;
 use aptos_network2::protocols::network::{OutboundPeerConnections, PeerStub, ReceivedMessage, RpcError};
 use aptos_network2::protocols::stream::{StreamFragment, StreamHeader, StreamMessage};
 use aptos_network2::transport::ConnectionMetadata;
-
-//
-// /// Peer holds what is needed by the write thread
-// pub struct Peer<TSocket>
-// where
-// TSocket: aptos_network2::transport::TSocket
-// {
-//     // socket: TSocket,
-//     /// messages from apps to write out to socket
-//     to_send: Receiver<NetworkMessage>,
-//     apps: Arc<ApplicationCollector>,
-// }
-//
-// impl<TSocket> Peer<TSocket>
-//     where
-//         TSocket: aptos_network2::transport::TSocket
-// {
-//     pub fn new(
-//         socket: TSocket,
-//         to_send: Receiver<NetworkMessage>,
-//         apps: Arc<ApplicationCollector>,
-//     ) -> Self {
-//         Self{
-//             socket,
-//             to_send,
-//             apps,
-//         }
-//     }
-//
-//     pub fn start(handle: Handle) {
-//         let (reader, writer) = tokio:io::split(self.socket);
-//     }
-// }
-
-// TODO: use values from net config
-// pub const MAX_FRAME_SIZE: usize = 4 * 1024 * 1024; /* 4 MiB large messages will be chunked into multiple frames and streamed */
-// pub const MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024; /* 64 MiB */
 
 // TODO: move into network/framework2
 pub fn start_peer<TSocket>(
@@ -113,8 +76,6 @@ struct WriterContext<WriteThing: AsyncWrite + Unpin + Send> {
     to_send: Receiver<NetworkMessage>,
     /// encoder wrapper around socket write half
     writer: MultiplexMessageSink<WriteThing>,
-
-    // closed: Closer,
 }
 
 impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
@@ -122,7 +83,6 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
         to_send: Receiver<NetworkMessage>,
         writer: MultiplexMessageSink<WriteThing>,
         max_frame_size: usize,
-        // closed: Closer,
     ) -> Self {
         Self {
             stream_request_id: 0,
@@ -133,7 +93,6 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
             max_frame_size,
             to_send,
             writer,
-            // closed,
         }
     }
 
@@ -237,32 +196,13 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                         }
                     },
                     },
+                    // TODO: why does select on close.wait() work below but I did this workaround here?
                     wait_result = closed.done.wait_for(|x| *x) => {
                         info!("wait result {:?}", wait_result);
                         break;
                     },
-                    // _ = self.closed.wait() => {
-                    //     break;
-                    // }
                 }
-                // match self.to_send.recv().await {
-                //     None => {
-                //         info!("peer writer source closed");
-                //         break;
-                //     }
-                //     Some(msg) => {
-                //         if msg.data_len() > self.max_frame_size {
-                //             // start stream
-                //             self.start_large(msg)
-                //         } else {
-                //             MultiplexMessage::Message(msg)
-                //         }
-                //     }
-                // }
             };
-            // while let Some(msg) = to_send.recv().await {
-            // TODO: rebuild large message chunking
-            // let mm = MultiplexMessage::Message(msg);
             tokio::select! {
                 send_result = self.writer.send(&mm) => match send_result {
                     Ok(_) => {
@@ -278,21 +218,9 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                     break;
                 }
             }
-            // match self.writer.send(&mm).await {
-            //     Ok(_) => {
-            //         // TODO: counter msg sent, msg size sent
-            //     }
-            //     Err(err) => {
-            //         // TODO: counter net write err
-            //         warn!("error sending message to peer: {:?}", err);
-            //         break;
-            //     }
-            // }
         }
         closed.close();
         info!("peer writer closing");
-        // TODO: cause the reader to close?
-        // TODO: close the reader, join its thread, remove from peer_senders and peers_and_metadata
     }
 
     fn split_message(&self, msg: &mut NetworkMessage) -> Vec<u8> {
@@ -346,8 +274,6 @@ struct ReaderContext<ReadThing: AsyncRead + Unpin> {
     remote_peer_network_id: PeerNetworkId,
     open_outbound_rpc: OutboundRpcMatcher,
     handle: Handle,
-    // closed: tokio::sync::watch::Receiver<bool>,
-    // closed: Closer,
 
     // defragment context
     current_stream_id : u32,
@@ -363,8 +289,6 @@ impl<ReadThing: AsyncRead + Unpin> ReaderContext<ReadThing> {
         remote_peer_network_id: PeerNetworkId,
         open_outbound_rpc: OutboundRpcMatcher,
         handle: Handle,
-        // closed: tokio::sync::watch::Receiver<bool>,
-        // closed: Closer,
     ) -> Self {
         Self {
             reader,
@@ -372,7 +296,6 @@ impl<ReadThing: AsyncRead + Unpin> ReaderContext<ReadThing> {
             remote_peer_network_id,
             open_outbound_rpc,
             handle,
-            // closed,
 
             current_stream_id: 0,
             large_message: None,
@@ -485,10 +408,6 @@ impl<ReadThing: AsyncRead + Unpin> ReaderContext<ReadThing> {
     }
 
     async fn run(mut self, mut closed: Closer) {
-        // let mut current_stream_id : u32 = 0;
-        // let mut large_message : Option<NetworkMessage> = None;
-        // let mut fragment_index : u8 = 0;
-        // let mut num_fragments : u8 = 0;
         loop {
             tokio::select! {
                 rrmm = self.reader.next() => match rrmm {
@@ -507,78 +426,12 @@ impl<ReadThing: AsyncRead + Unpin> ReaderContext<ReadThing> {
                         break;
                     }
                 },
-                //_ = self.closed.wait_for(|x| x) => {return},
-                // _ = self.closed.wait() {return},
-                _ = closed.done.wait_for(|x| *x) => {break;},
+                _ = closed.done.wait_for(|x| *x) => {
+                    return;
+                },
             }
         }
         closed.close();
-        // while let Some(msg) = self.reader.next().await {
-        //     let msg = match msg {
-        //         Ok(msg) => {msg}
-        //         Err(err) => {
-        //             // TODO: counter
-        //             warn!("read error {:?}", err);
-        //             continue;
-        //         }
-        //     };
-        //     match msg {
-        //         MultiplexMessage::Message(nmsg) => {
-        //             self.handle_message(nmsg);
-        //         }
-        //         MultiplexMessage::Stream(fragment) => match fragment {
-        //             StreamMessage::Header(head) => {
-        //                 if num_fragments != fragment_index {
-        //                     warn!("fragment index = {:?} of {:?} total fragments with new stream header", fragment_index, num_fragments);
-        //                 }
-        //                 current_stream_id = head.request_id;
-        //                 num_fragments = head.num_fragments;
-        //                 large_message = Some(head.message);
-        //                 fragment_index = 1;
-        //             }
-        //             StreamMessage::Fragment(more) => {
-        //                 if more.request_id != current_stream_id {
-        //                     warn!("got stream request_id={:?} while {:?} was in progress", more.request_id, current_stream_id);
-        //                     // TODO: counter? disconnect from peer?
-        //                     num_fragments = 0;
-        //                     fragment_index = 0;
-        //                     continue;
-        //                 }
-        //                 if more.fragment_id != fragment_index {
-        //                     warn!("got fragment_id {:?}, expected {:?}", more.fragment_id, fragment_index);
-        //                     // TODO: counter? disconnect from peer?
-        //                     num_fragments = 0;
-        //                     fragment_index = 0;
-        //                     continue;
-        //                 }
-        //                 match large_message.as_mut() {
-        //                     None => {
-        //                         warn!("got fragment without header");
-        //                         continue;
-        //                     }
-        //                     Some(lm) => match lm {
-        //                         NetworkMessage::Error(_) => {
-        //                             unreachable!("stream fragment should never be NetworkMessage::Error")
-        //                         }
-        //                         NetworkMessage::RpcRequest(request) => {
-        //                             request.raw_request.extend_from_slice(more.raw_data.as_slice());
-        //                         }
-        //                         NetworkMessage::RpcResponse(response) => {
-        //                             response.raw_response.extend_from_slice(more.raw_data.as_slice());
-        //                         }
-        //                         NetworkMessage::DirectSendMsg(message) => {
-        //                             message.raw_msg.extend_from_slice(more.raw_data.as_slice());
-        //                         }
-        //                     }
-        //                 }
-        //                 fragment_index += 1;
-        //                 if fragment_index == num_fragments {
-        //                     self.handle_message(large_message.take().unwrap());
-        //                 }
-        //             }
-        //         }
-        //     }
-        // }
     }
 }
 
@@ -588,7 +441,6 @@ async fn reader_task(
     remote_peer_network_id: PeerNetworkId,
     open_outbound_rpc: OutboundRpcMatcher,
     handle: Handle,
-    // closed: tokio::sync::watch::Receiver<bool>,
     closed: Closer,
 ) {
     let rc = ReaderContext::new(reader, apps, remote_peer_network_id, open_outbound_rpc, handle);

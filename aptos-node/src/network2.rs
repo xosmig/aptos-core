@@ -9,7 +9,7 @@ use aptos_config::config::{NetworkConfig, NodeConfig};
 use aptos_config::network_id::NetworkId;
 use aptos_consensus::network_interface::ConsensusMsg;
 use aptos_network2::protocols::wire::handshake::v1::ProtocolId;
-use aptos_network2_builder::{ApplicationCollector,ApplicationConnections,NetworkBuilder};
+use aptos_network2_builder::NetworkBuilder;
 // use aptos_consensus::network_interface::{DIRECT_SEND, RPC};
 use aptos_logger::debug;
 use aptos_network2::application::interface::{NetworkClient, NetworkMessageTrait, OutboundRpcMatcher};
@@ -21,6 +21,7 @@ use aptos_event_notifications::EventSubscriptionService;
 use aptos_peer_monitoring_service_types::PeerMonitoringServiceMessage;
 use aptos_storage_service_types::StorageServiceMessage;
 use aptos_mempool::MempoolSyncMsg;
+use aptos_network2::application::{ApplicationCollector, ApplicationConnections};
 
 pub trait MessageTrait : Clone + DeserializeOwned + Serialize + Send + Sync + Unpin + 'static {}
 impl<T: Clone + DeserializeOwned + Serialize + Send + Sync + Unpin + 'static> MessageTrait for T {}

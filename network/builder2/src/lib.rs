@@ -18,6 +18,7 @@ use aptos_logger::{error, info, warn};
 use aptos_netcore::transport::memory::MemoryTransport;
 use aptos_netcore::transport::tcp::{TCPBufferCfg, TcpSocket, TcpTransport};
 use aptos_netcore::transport::{ConnectionOrigin, Transport};
+use aptos_network2::application::ApplicationCollector;
 use aptos_network2::application::interface::OutboundRpcMatcher;
 use aptos_network2::application::metadata::PeerMetadata;
 // use aptos_network_discovery::DiscoveryChangeListener;
@@ -360,47 +361,6 @@ fn transport_peer_manager_start(
         Err(err) => {
             panic!("could not start network {:?}: {:?}", network_id, err);
         }
-    }
-}
-
-// TODO: move into network/framework2
-pub struct ApplicationConnections {
-    pub protocol_id: ProtocolId,
-
-    /// sender receives messages from network, towards application code
-    pub sender: tokio::sync::mpsc::Sender<ReceivedMessage>,
-
-    /// label used in metrics counters
-    pub label: String,
-}
-
-// TODO: move into network/framework2
-impl ApplicationConnections {
-    pub fn build(protocol_id: ProtocolId, queue_size: usize, label: &str) -> (ApplicationConnections, tokio::sync::mpsc::Receiver<ReceivedMessage>) {
-        let (sender, receiver) = tokio::sync::mpsc::channel(queue_size);
-        (ApplicationConnections {
-            protocol_id,
-            sender,
-            label: label.to_string(),
-        }, receiver)
-    }
-}
-
-// TODO: move into network/framework2
-pub struct ApplicationCollector {
-    apps: BTreeMap<ProtocolId,ApplicationConnections>,
-}
-
-// TODO: move into network/framework2
-impl ApplicationCollector {
-    pub fn new() -> Self {
-        Self {
-            apps: BTreeMap::new(),
-        }
-    }
-
-    pub fn add(&mut self, connections: ApplicationConnections) {
-        self.apps.insert(connections.protocol_id, connections);
     }
 }
 
