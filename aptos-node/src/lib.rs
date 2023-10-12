@@ -638,7 +638,7 @@ pub fn setup_environment_and_start_node(
         )
     });
 
-    for (protocol_id, ac) in apps.apps.iter() {
+    for (protocol_id, ac) in apps.iter() {
         info!("app_int setup {} -> {} {:?}", protocol_id.as_str(), ac.label, &ac.sender);
     }
     let apps = Arc::new(apps);

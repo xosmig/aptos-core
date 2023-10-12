@@ -261,14 +261,15 @@ async fn complete_rpc(sender: oneshot::Sender<Result<Bytes,RpcError>>, nmsg: Net
         match sender.send(Ok(blob.into())) {
             Ok(_) => {
                 // TODO: counter rpc completion to app
+                info!("read_thread rpc completion delivered")
             }
             Err(err) => {
                 // TODO: counter rpc completion dropped at app
-                warn!("rpc completion dropped at app")
+                warn!("read_thread rpc completion dropped at app")
             }
         }
     } else {
-        unreachable!("complete_rpc called on other than NetworkMessage::RpcResponse")
+        unreachable!("read_thread complete_rpc called on other than NetworkMessage::RpcResponse")
     }
 }
 
@@ -309,7 +310,7 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
     }
 
     async fn forward(&self, protocol_id: ProtocolId, nmsg: NetworkMessage) {
-        match self.apps.apps.get(&protocol_id) {
+        match self.apps.get(&protocol_id) {
             None => {
                 // TODO: counter
                 warn!("read_thread got rpc req for protocol {:?} we don't handle", protocol_id);
@@ -317,8 +318,8 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
             }
             Some(app) => {
                 if app.protocol_id != protocol_id {
-                    for (protocol_id, ac) in self.apps.apps.iter() {
-                        error!("read_thread app err {} -> {} {} {:?}", protocol_id.as_str(), ac.protocol_id, ac.label, &ac.sender);
+                    for (xpi, ac) in self.apps.iter() {
+                        error!("read_thread app err {} -> {} {} {:?}", xpi.as_str(), ac.protocol_id, ac.label, &ac.sender);
                     }
                     unreachable!("read_thread apps[{}] => {} {:?}", protocol_id, app.protocol_id, &app.sender);
                 }

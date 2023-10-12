@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::BTreeMap;
+use std::marker::PhantomData;
 use aptos_logger::info;
 use crate::ProtocolId;
 use crate::protocols::network::ReceivedMessage;
@@ -38,20 +39,62 @@ impl ApplicationConnections {
 /// Routing by ProtocolId for all application code built into a node.
 /// Typically built early in startup code and then read-only.
 pub struct ApplicationCollector {
-    pub apps: BTreeMap<ProtocolId,ApplicationConnections>,
+    // apps: BTreeMap<ProtocolId,ApplicationConnections>,
+    apps: Vec<ApplicationConnections>,
 }
+
+// type Iter<'a,K,V> = std::collections::btree_map::Iter<'a,K,V>;
 
 impl ApplicationCollector {
     pub fn new() -> Self {
         Self {
-            apps: BTreeMap::new(),
+            // apps: BTreeMap::new(),
+            apps: Vec::new(),
         }
     }
 
     pub fn add(&mut self, connections: ApplicationConnections) {
-        self.apps.insert(connections.protocol_id, connections);
+        // self.apps.insert(connections.protocol_id, connections);
+        self.apps.push(connections);
+    }
+
+    pub fn get(&self, protocol_id: &ProtocolId) -> Option<&ApplicationConnections> {
+        // self.apps.get(protocol_id)
+        for ac in self.apps.iter() {
+            if ac.protocol_id == *protocol_id {
+                return Some(ac);
+            }
+        }
+        None
+    }
+
+    pub fn iter(&self) -> Iter {
+        // self.apps.iter()
+        Iter::new(self.apps.iter())
     }
 }
+
+pub struct Iter<'a> {
+    subi: std::slice::Iter<'a,ApplicationConnections>,
+}
+
+impl<'a> Iter<'a> {
+    fn new(subi: std::slice::Iter<'a,ApplicationConnections>) -> Self {
+        Self{subi}
+    }
+}
+
+impl<'a> Iterator for Iter<'a> {
+    type Item = (&'a ProtocolId,&'a ApplicationConnections);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.subi.next() {
+            None => {None}
+            Some(sv) => {Some((&sv.protocol_id,sv))}
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod tests;

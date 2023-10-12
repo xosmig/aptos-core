@@ -145,7 +145,7 @@ impl NetworkBuilder {
 
     pub fn active_protocol_ids(&self) -> ProtocolIdSet {
         let mut out = ProtocolIdSet::empty();
-        for (protocol_id, _) in self.apps.apps.iter() {
+        for (protocol_id, _) in self.apps.iter() {
             out.insert(*protocol_id);
         }
         out
@@ -153,7 +153,7 @@ impl NetworkBuilder {
 
     // TODO network2: use this or move it where we need it
     pub fn deliver_message(&self, protocol_id: &ProtocolId, msg: ReceivedMessage) {
-        match self.apps.apps.get(protocol_id) {
+        match self.apps.get(protocol_id) {
             None => {
                 // TODO network2: peer sent to a ProtocolId we don't process. log error. disconnect. inc a counter
             }

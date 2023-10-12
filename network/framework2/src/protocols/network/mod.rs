@@ -333,20 +333,23 @@ async fn rpc_response_sender(
     peer_sender: tokio::sync::mpsc::Sender<NetworkMessage>
 ) {
     // TODO: reimplement timeout
-    info!("app_int rpc_respond {}", rpc_id);
+    // info!("app_int rpc_respond {}", rpc_id);
     let bytes = match receiver.await {
         Ok(iresult) => match iresult{
             Ok(bytes) => {bytes}
-            Err(_) => {
+            Err(err2) => {
                 // TODO: counter
+                info!("app_int rpc_respond rpc_err: {}", err2);
                 return;
             }
         }
-        Err(_) => {
+        Err(err) => {
             // TODO: counter
+            info!("app_int rpc_respond cancelled: {}", err);
             return;
         }
     };
+    let blen = bytes.len();
     let msg = NetworkMessage::RpcResponse(RpcResponse{
         request_id: rpc_id,
         priority: 0,
@@ -354,9 +357,11 @@ async fn rpc_response_sender(
     });
     match peer_sender.send(msg).await {
         Ok(_) => {
+            info!("app_int rpc_respond {} bytes OK", blen);
             // TODO: counter
         }
         Err(_) => {
+            info!("app_int rpc_respond {} bytes ERR", blen);
             // TODO: counter
         }
     }
@@ -887,20 +892,24 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                 Ok(content_result) => match content_result {
                     Ok(bytes) => {
                         let wat = protocol.from_bytes(bytes.as_ref())?;
+                        info!("app_int rpc reply good {} bytes", bytes.len());
                         return Ok(wat);
                     }
                     Err(err) => {
                         // TODO: counter
+                        warn!("app_int rpc reply err: {}", err);
                         return Err(err);
                     }
                 }
-                Err(err) => {
+                Err(_cancelled) => {
                     // TODO: counter
+                    warn!("app_int rpc reply cancelled");
                     return Err(RpcError::UnexpectedResponseChannelCancel);
                 }
             }
-            Err(elapsed) => {
+            Err(_timeout) => {
                 // TODO: counter
+                warn!("app_int rpc reply timeout");
                 return Err(RpcError::TimedOut)
             }
         }
