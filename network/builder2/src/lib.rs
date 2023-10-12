@@ -1,7 +1,8 @@
 // Copyright © Aptos Foundation
 
 use std::collections::BTreeMap;
-use std::io::{Chain, Error};
+use std::io;
+use std::io::{Chain, Error, ErrorKind};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,9 +33,10 @@ use aptos_network2::peer;
 use aptos_network2::protocols::wire::handshake::v1::{ProtocolId, ProtocolIdSet};
 use aptos_network2::protocols::wire::messaging::v1::NetworkMessage;
 use aptos_network2::protocols::network::{OutboundPeerConnections, PeerStub, ReceivedMessage};
-use aptos_network2::transport::{APTOS_TCP_TRANSPORT, AptosNetTransport, Connection};
+use aptos_network2::transport::{APTOS_TCP_TRANSPORT, AptosNetTransport, AptosNetTransportActual, Connection};
 use aptos_network_discovery::DiscoveryChangeListener;
 use aptos_short_hex_str::AsShortHexStr;
+use aptos_types::account_address::AccountAddress;
 use aptos_types::network_address::{NetworkAddress, Protocol};
 use aptos_types::PeerId;
 use tokio_retry::strategy::ExponentialBackoff;
@@ -233,7 +235,7 @@ impl NetworkBuilder {
         )
     }
 
-    fn build_transport(&mut self) -> TransportPeerManager {
+    fn build_transport(&mut self) -> (TransportPeerManager, AptosNetTransportActual) {
         let listen_parts = self.config.listen_address.as_slice();
         let key = self.config.identity_key();
         // let trusted_peers = self.peers_and_metadata.get_trusted_peers(&self.config.network_id).unwrap();
@@ -260,8 +262,8 @@ impl NetworkBuilder {
                     protos,
                     enable_proxy_protocol,
                 );
-                let pm = PeerManager::new(ant, self.peers_and_metadata.clone(), self.config.clone(), self.network_context, self.apps.clone(), self.peer_senders.clone());
-                TransportPeerManager::Tcp(pm)
+                let pm = PeerManager::new(ant.clone(), self.peers_and_metadata.clone(), self.config.clone(), self.network_context, self.apps.clone(), self.peer_senders.clone());
+                (TransportPeerManager::Tcp(pm), AptosNetTransportActual::Tcp(ant))
             }
             #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
             Protocol::Memory(_) => {
@@ -278,8 +280,8 @@ impl NetworkBuilder {
                     protos,
                     enable_proxy_protocol,
                 );
-                let pm = PeerManager::new(ant, self.peers_and_metadata.clone(), self.config.clone(), self.network_context, self.apps.clone(), self.peer_senders.clone());
-                TransportPeerManager::Memory(pm)
+                let pm = PeerManager::new(ant.clone(), self.peers_and_metadata.clone(), self.config.clone(), self.network_context, self.apps.clone(), self.peer_senders.clone());
+                (TransportPeerManager::Memory(pm), AptosNetTransportActual::Memory(ant))
             }
             _ => {
                 panic!("cannot listen on address {:?}", self.config.listen_address);
@@ -294,10 +296,12 @@ impl NetworkBuilder {
         }
         let handle = self.handle.clone().unwrap();
         handle.enter();
-        let config = &self.config;
-        let seeds = config.merge_seeds();
+        // let config = self.config.clone();
+        let seeds = self.config.merge_seeds();
         let connectivity_req_rx = self.connectivity_req_rx.take().unwrap();
+        let (tpm, ant) = self.build_transport();
         let cm = ConnectivityManager::new(
+            self.config.clone(),
             self.network_context,
             self.time_service.clone(),
             self.peers_and_metadata.clone(),
@@ -305,18 +309,21 @@ impl NetworkBuilder {
             // connection_reqs_tx,
             // connection_notifs_rx,
             connectivity_req_rx,
-            Duration::from_millis(config.connectivity_check_interval_ms),
-            ExponentialBackoff::from_millis(config.connection_backoff_base).factor(1000),
-            Duration::from_millis(config.max_connection_delay_ms),
-            Some(config.max_outbound_connections),
-            config.mutual_authentication,
+            // Duration::from_millis(config.connectivity_check_interval_ms),
+            ExponentialBackoff::from_millis(self.config.connection_backoff_base).factor(1000),
+            // Duration::from_millis(config.max_connection_delay_ms),
+            // Some(config.max_outbound_connections),
+            // config.mutual_authentication,
+            ant,
+            self.apps.clone(),
+            self.peer_senders.clone(),
         );
-        handle.spawn(cm.start());
+        handle.spawn(cm.start(handle.clone()));
         for disco in self.discovery_listeners.drain(..) {
             disco.start(&handle);
         }
         let listen_addr = transport_peer_manager_start(
-            self.build_transport(),
+            tpm,
             self.config.listen_address.clone(),
             handle,
             self.network_context.network_id(),
@@ -352,9 +359,9 @@ fn transport_peer_manager_start(
     // connectivity_req_rx: tokio::sync::mpsc::Receiver<ConnectivityRequest>,
 ) -> NetworkAddress {
     let result = match tpm {
+        TransportPeerManager::Tcp(mut pm) => { pm.listen( listen_address,  executor ) }
         #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
         TransportPeerManager::Memory(mut pm) => { pm.listen( listen_address,  executor ) }
-        TransportPeerManager::Tcp(mut pm) => { pm.listen( listen_address,  executor ) }
     };
     match result {
         Ok(listen_address) => { listen_address }
@@ -459,6 +466,7 @@ impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
         executor: Handle,
     ) -> Result<NetworkAddress, <TTransport>::Error> {
         let (sockets, listen_addr_actual) = executor.block_on(self.first_listen(listen_addr))?;
+        info!("listener_thread to spawn ({:?})", listen_addr_actual);
         executor.spawn(self.listener_thread(sockets, executor.clone()));
         Ok(listen_addr_actual)
     }
@@ -469,6 +477,7 @@ impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
 
     async fn listener_thread(mut self, mut sockets: <TTransport>::Listener, executor: Handle) {
         // TODO: leave some connection that can close and shutdown this listener?
+        info!("listener_thread start");
         loop {
             let (conn_fut, remote_addr) = match sockets.next().await {
                 Some(result) => match result {
@@ -486,7 +495,7 @@ impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
             match conn_fut.await {
                 Ok(mut connection) => {
                     let ok = self.check_new_inbound_connection(&connection);
-                    info!("got connection {:?}, ok={:?}", remote_addr, ok);
+                    info!("listener_thread got connection {:?}, ok={:?}", remote_addr, ok);
                     if !ok {
                         // conted and logged inside check function above, just close here and be done.
                         connection.socket.close();
@@ -586,13 +595,103 @@ impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
 }
 
 
+type TcpPeerManager = PeerManager<AptosNetTransport<TcpTransport>, NoiseStream<TcpSocket>>;
 #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
 type MemoryPeerManager =
 PeerManager<AptosNetTransport<MemoryTransport>, NoiseStream<aptos_memsocket::MemorySocket>>;
-type TcpPeerManager = PeerManager<AptosNetTransport<TcpTransport>, NoiseStream<TcpSocket>>;
 
 enum TransportPeerManager {
+    Tcp(TcpPeerManager),
     #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
     Memory(MemoryPeerManager),
-    Tcp(TcpPeerManager),
 }
+//
+// pub enum AptosNetTransportActual {
+//     Tcp(AptosNetTransport<TcpTransport>),
+//     #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
+//     Memory(AptosNetTransport<MemoryTransport>),
+// }
+//
+// impl AptosNetTransportActual {
+//     pub fn dial(
+//         &mut self,
+//         remote_peer_network_id: PeerNetworkId,
+//         network_address: NetworkAddress,
+//         config: &NetworkConfig,
+//         apps: Arc<ApplicationCollector>,
+//         handle: Handle,
+//         peers_and_metadata: Arc<PeersAndMetadata>,
+//         peer_senders: Arc<OutboundPeerConnections>,
+//     ) {
+//         match self {
+//             AptosNetTransportActual::Tcp(tt) => {
+//                 connect_outbound(tt, remote_peer_network_id, network_address, config, apps, handle, peers_and_metadata, peer_senders);
+//             }
+//             #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
+//             AptosNetTransportActual::Memory(tt) => {
+//                 connect_outbound(tt, remote_peer_network_id, network_address, config, apps, handle, peers_and_metadata, peer_senders);
+//             }
+//         }
+//     }
+// }
+
+// TTransport: Transport<Error = io::Error>,
+// TTransport::Output: TSocket,
+// TTransport::Outbound: Send + 'static,
+// TTransport::Inbound: Send + 'static,
+// TTransport::Listener: Send + 'static,
+//
+// async fn connect_outbound<TTransport, TSocket>(
+//     transport: &AptosNetTransport<TTransport>,
+//     remote_peer_network_id: PeerNetworkId,
+//     addr: NetworkAddress,
+//     config: &NetworkConfig,
+//     apps: Arc<ApplicationCollector>,
+//     handle: Handle,
+//     peers_and_metadata: Arc<PeersAndMetadata>,
+//     peer_senders: Arc<OutboundPeerConnections>,
+// ) -> io::Result<()>
+//     where
+//         TSocket: aptos_network2::transport::TSocket,
+//         TTransport: Transport<Output = TSocket, Error = io::Error> + Send + 'static,
+// {
+//     let peer_id = remote_peer_network_id.peer_id();
+//     // TODO: rebuild connection init time counter
+//     let outbound = match transport.dial(peer_id, addr.clone()) {
+//         Ok(outbound) => {
+//             outbound
+//         }
+//         Err(err) => {
+//             warn!("dial err: {:?}", err);
+//             // TODO: counter
+//             return Err(err);
+//         }
+//     };
+//     let mut connection = match outbound.await {
+//         Ok(connection) => { // Connection<TSocket>
+//             connection
+//         }
+//         Err(err) => {
+//             warn!("dial err 2: {:?}", err);
+//             // TODO: counter
+//             return Err(err);
+//         }
+//     };
+//     let dialed_peer_id = connection.metadata.remote_peer_id;
+//     if dialed_peer_id != peer_id {
+//         warn!("dial {:?} did not reach peer {:?} but peer {:?}", addr, peer_id, dialed_peer_id);
+//         connection.socket.close();
+//         return Err(Error::new(ErrorKind::InvalidData, "peer_id mismatch"));
+//     }
+//     peer::start_peer(
+//         config,
+//         connection.socket,
+//         connection.metadata,
+//         apps,
+//         handle,
+//         remote_peer_network_id,
+//         peers_and_metadata,
+//         peer_senders,
+//     );
+//     Ok(())
+// }

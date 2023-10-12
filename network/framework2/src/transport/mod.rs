@@ -37,6 +37,10 @@ use std::{collections::BTreeMap, convert::TryFrom, fmt, io, pin::Pin, sync::Arc,
 use std::sync::RwLock;
 use crate::application::storage::PeersAndMetadata;
 
+pub mod util;
+
+pub use crate::transport::util::AptosNetTransportActual;
+
 #[cfg(test)]
 mod test;
 
@@ -420,6 +424,7 @@ pub async fn upgrade_outbound<T: TSocket>(
 /// the `Handshake` protocol.
 // TODO(philiphayes): rework Transport trait, possibly include Upgrade trait.
 // ideas in this PR thread: https://github.com/aptos-labs/aptos-core/pull/3478#issuecomment-617385633
+#[derive(Clone)]
 pub struct AptosNetTransport<TTransport> {
     base_transport: TTransport,
     ctxt: Arc<UpgradeContext>,

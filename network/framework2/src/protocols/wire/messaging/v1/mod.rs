@@ -52,6 +52,15 @@ pub enum MultiplexMessage {
     Stream(StreamMessage),
 }
 
+impl MultiplexMessage {
+    pub fn data_len(&self) -> usize {
+        match self {
+            MultiplexMessage::Message(msg) => {msg.data_len()}
+            MultiplexMessage::Stream(sm) => {sm.data_len()}
+        }
+    }
+}
+
 impl NetworkMessage {
     /// The size of the raw data excluding the headers
     pub fn data_len(&self) -> usize {
@@ -60,6 +69,15 @@ impl NetworkMessage {
             NetworkMessage::RpcRequest(request) => request.raw_request.len(),
             NetworkMessage::RpcResponse(response) => response.raw_response.len(),
             NetworkMessage::DirectSendMsg(message) => message.raw_msg.len(),
+        }
+    }
+
+    pub fn protocol_id_as_str(&self) -> &'static str {
+        match self {
+            NetworkMessage::Error(_) => {"err"}
+            NetworkMessage::RpcRequest(r) => {r.protocol_id.as_str()}
+            NetworkMessage::RpcResponse(_) => {"rpc_resp"}
+            NetworkMessage::DirectSendMsg(m) => {m.protocol_id.as_str()}
         }
     }
 }
@@ -175,12 +193,12 @@ pub fn network_message_frame_codec(max_frame_size: usize) -> LengthDelimitedCode
 /// A `Stream` of inbound `MultiplexMessage`s read and deserialized from an
 /// underlying socket.
 #[pin_project]
-pub struct MultiplexMessageStream<TReadSocket: AsyncRead + Unpin> {
+pub struct MultiplexMessageStream<TReadSocket: AsyncRead + Unpin + Send> {
     #[pin]
     framed_read: FramedRead<Compat<TReadSocket>, LengthDelimitedCodec>,
 }
 
-impl<TReadSocket: AsyncRead + Unpin> MultiplexMessageStream<TReadSocket> {
+impl<TReadSocket: AsyncRead + Unpin + Send> MultiplexMessageStream<TReadSocket> {
     pub fn new(socket: TReadSocket, max_frame_size: usize) -> Self {
         let frame_codec = network_message_frame_codec(max_frame_size);
         let compat_socket = socket.compat();
@@ -189,7 +207,7 @@ impl<TReadSocket: AsyncRead + Unpin> MultiplexMessageStream<TReadSocket> {
     }
 }
 
-impl<TReadSocket: AsyncRead + Unpin> Stream for MultiplexMessageStream<TReadSocket> {
+impl<TReadSocket: AsyncRead + Unpin + Send> Stream for MultiplexMessageStream<TReadSocket> {
     type Item = Result<MultiplexMessage, ReadError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {

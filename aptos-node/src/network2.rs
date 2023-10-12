@@ -33,63 +33,27 @@ pub struct ApplicationNetworkInterfaces<T> {
     pub network_events: NetworkEvents<T>,
 }
 
-pub struct Protocols {
-    pub direct_send_protocols_and_preferences: Vec<ProtocolId>,
-    pub rpc_protocols_and_preferences: Vec<ProtocolId>,
-}
-
-pub fn consensus_protocols() -> Protocols {
-    Protocols {
-        direct_send_protocols_and_preferences: aptos_consensus::network_interface::DIRECT_SEND.into(),
-        rpc_protocols_and_preferences: aptos_consensus::network_interface::RPC.into(),
-    }
-}
-
-pub fn mempool_protocols() -> Protocols {
-    Protocols {
-        direct_send_protocols_and_preferences: vec![ProtocolId::MempoolDirectSend],
-        rpc_protocols_and_preferences: vec![],
-    }
-}
-
-pub fn peer_monitoring_protocols() -> Protocols {
-    Protocols {
-        direct_send_protocols_and_preferences: vec![],
-        rpc_protocols_and_preferences: vec![ProtocolId::PeerMonitoringServiceRpc],
-    }
-}
-
-pub fn storage_service_protocols() -> Protocols {
-    Protocols {
-        direct_send_protocols_and_preferences: vec![],
-        rpc_protocols_and_preferences: vec![ProtocolId::StorageServiceRpc],
-    }
-}
-
 impl<T: MessageTrait> ApplicationNetworkInterfaces<T> {
     pub fn new(
         direct_send_protocols_and_preferences: Vec<ProtocolId>,
         rpc_protocols_and_preferences: Vec<ProtocolId>,
         peers_and_metadata: Arc<PeersAndMetadata>,
-        // receive: tokio::sync::mpsc::Receiver<ReceivedMessage>,
         network_source: NetworkSource,
         network_ids: Vec<NetworkId>,
         peer_senders: Arc<OutboundPeerConnections>,
+        label: &str,
     ) -> Self {
         let mut network_senders = HashMap::new();
         for network_id in network_ids.into_iter() {
             network_senders.insert(network_id, NetworkSender::new(network_id, peer_senders.clone()));
         }
-        // let open_outbound_rpc = OutboundRpcMatcher::new();
         let network_client = NetworkClient::new(
             direct_send_protocols_and_preferences,
             rpc_protocols_and_preferences,
             network_senders,
             peers_and_metadata,
-            // open_outbound_rpc.clone(),
         );
-        // TODO: connect rpc send and reply between NetworkClient and NetworkEvents
-        let network_events = NetworkEvents::new(network_source, peer_senders.clone());
+        let network_events = NetworkEvents::new(network_source, peer_senders.clone(), label);
         Self {
             network_client,
             network_events,
@@ -117,18 +81,15 @@ fn build_network_connections<T: MessageTrait>(
     peer_senders: Arc<OutboundPeerConnections>,
 ) -> ApplicationNetworkInterfaces<T> {
     // TODO: pack a map {ProtocolId: Receiver, ...} and allow app code to unpack that out of NetworkSource
-    // let prots = BTreeMap::new();
     let mut receivers = vec![];
 
     for protocol_id in direct_send_protocols.iter() {
         let (app_con, receiver) = ApplicationConnections::build(*protocol_id, queue_size, counter_label);
-        // prots.insert(*protocol_id, receiver);
         receivers.push(receiver);
         apps.add(app_con);
     }
     for protocol_id in rpc_protocols.iter() {
         let (app_con, receiver) = ApplicationConnections::build(*protocol_id, queue_size, counter_label);
-        // prots.insert(*protocol_id, receiver);
         receivers.push(receiver);
         apps.add(app_con);
     }
@@ -147,6 +108,7 @@ fn build_network_connections<T: MessageTrait>(
         network_source,
         network_ids,
         peer_senders,
+        counter_label,
     )
 }
 

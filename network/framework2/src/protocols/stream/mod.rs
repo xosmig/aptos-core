@@ -18,6 +18,16 @@ pub enum StreamMessage {
     Fragment(StreamFragment),
 }
 
+impl StreamMessage {
+    pub fn data_len(&self) -> usize {
+        match self {
+            StreamMessage::Header(head) => {head.message.data_len()}
+            StreamMessage::Fragment(frag) => {frag.raw_data.len()}
+        }
+    }
+}
+
+
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(any(test, feature = "fuzzing"), derive(Arbitrary))]
 pub struct StreamHeader {

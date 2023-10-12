@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::BTreeMap;
+use aptos_logger::info;
 use crate::ProtocolId;
 use crate::protocols::network::ReceivedMessage;
 
@@ -25,6 +26,7 @@ pub struct ApplicationConnections {
 impl ApplicationConnections {
     pub fn build(protocol_id: ProtocolId, queue_size: usize, label: &str) -> (ApplicationConnections, tokio::sync::mpsc::Receiver<ReceivedMessage>) {
         let (sender, receiver) = tokio::sync::mpsc::channel(queue_size);
+        info!("app_int setup AC.build {} {} -> {:?} -> {:?}", label, protocol_id.as_str(), &sender, &receiver);
         (ApplicationConnections {
             protocol_id,
             sender,

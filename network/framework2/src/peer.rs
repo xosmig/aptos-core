@@ -1,5 +1,4 @@
 // Copyright © Aptos Foundation
-// TODO: move into network/framework2
 
 use std::io::{Error, ErrorKind};
 use std::ops::DerefMut;
@@ -26,7 +25,6 @@ use crate::protocols::network::{OutboundPeerConnections, PeerStub, ReceivedMessa
 use crate::protocols::stream::{StreamFragment, StreamHeader, StreamMessage};
 use crate::transport::ConnectionMetadata;
 
-// TODO: move into network/framework2
 pub fn start_peer<TSocket>(
     config: &NetworkConfig,
     socket: TSocket,
@@ -155,6 +153,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                 } else {
                     match self.to_send.try_recv() {
                         Ok(msg) => {
+                            info!("writer_thread to_send {} bytes prot={}", msg.data_len(), msg.protocol_id_as_str());
                             if msg.data_len() > self.max_frame_size {
                                 // finish prior large message before starting a new large message
                                 self.next_large_msg = Some(msg);
@@ -171,7 +170,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                                 self.next_large()
                             }
                             TryRecvError::Disconnected => {
-                                info!("peer writer source closed");
+                                info!("writer_thread source closed");
                                 break
                             }
                         }
@@ -184,10 +183,11 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                 tokio::select! {
                     send_result = self.to_send.recv() => match send_result {
                     None => {
-                        info!("peer writer source closed");
+                        info!("writer_thread source closed");
                         break;
                     },
                     Some(msg) => {
+                            info!("writer_thread to_send {} bytes prot={}", msg.data_len(), msg.protocol_id_as_str());
                         if msg.data_len() > self.max_frame_size {
                             // start stream
                             self.start_large(msg)
@@ -198,29 +198,32 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                     },
                     // TODO: why does select on close.wait() work below but I did this workaround here?
                     wait_result = closed.done.wait_for(|x| *x) => {
-                        info!("wait result {:?}", wait_result);
+                        info!("writer_thread wait result {:?}", wait_result);
                         break;
                     },
                 }
             };
+            let data_len = mm.data_len();
             tokio::select! {
                 send_result = self.writer.send(&mm) => match send_result {
-                    Ok(_) => {
+                    Ok(wat) => {
                         // TODO: counter msg sent, msg size sent
+                        info!("writer_thread sent {}", data_len);
                     }
                     Err(err) => {
                         // TODO: counter net write err
-                        warn!("error sending message to peer: {:?}", err);
+                        warn!("writer_thread error sending message to peer: {:?}", err);
                         break;
                     }
                 },
                 _ = closed.wait() => {
+                    info!("writer_thread peer writer got closed");
                     break;
                 }
             }
         }
         closed.close();
-        info!("peer writer closing");
+        info!("writer_thread closing");
     }
 
     fn split_message(&self, msg: &mut NetworkMessage) -> Vec<u8> {
@@ -249,6 +252,7 @@ async fn writer_task(
 ) {
     let wt = WriterContext::new(to_send, writer, max_frame_size);
     wt.run(closed).await;
+    info!("peer writer exited")
 }
 
 async fn complete_rpc(sender: oneshot::Sender<Result<Bytes,RpcError>>, nmsg: NetworkMessage) {
@@ -268,7 +272,7 @@ async fn complete_rpc(sender: oneshot::Sender<Result<Bytes,RpcError>>, nmsg: Net
     }
 }
 
-struct ReaderContext<ReadThing: AsyncRead + Unpin> {
+struct ReaderContext<ReadThing: AsyncRead + Unpin + Send> {
     reader: Fuse<MultiplexMessageStream<ReadThing>>,
     apps: Arc<ApplicationCollector>,
     remote_peer_network_id: PeerNetworkId,
@@ -282,7 +286,7 @@ struct ReaderContext<ReadThing: AsyncRead + Unpin> {
     num_fragments : u8,
 }
 
-impl<ReadThing: AsyncRead + Unpin> ReaderContext<ReadThing> {
+impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
     fn new(
         reader: Fuse<MultiplexMessageStream<ReadThing>>,
         apps: Arc<ApplicationCollector>,
@@ -308,17 +312,24 @@ impl<ReadThing: AsyncRead + Unpin> ReaderContext<ReadThing> {
         match self.apps.apps.get(&protocol_id) {
             None => {
                 // TODO: counter
-                warn!("got rpc req for protocol {:?} we don't handle", protocol_id);
+                warn!("read_thread got rpc req for protocol {:?} we don't handle", protocol_id);
                 // TODO: drop connection
             }
             Some(app) => {
+                if app.protocol_id != protocol_id {
+                    for (protocol_id, ac) in self.apps.apps.iter() {
+                        error!("read_thread app err {} -> {} {} {:?}", protocol_id.as_str(), ac.protocol_id, ac.label, &ac.sender);
+                    }
+                    unreachable!("read_thread apps[{}] => {} {:?}", protocol_id, app.protocol_id, &app.sender);
+                }
                 match app.sender.send(ReceivedMessage{ message: nmsg, sender: self.remote_peer_network_id }).await {
                     Ok(_) => {
                         // TODO: counter
+                        info!("read_thread forwarded to app {} {}", app.label, protocol_id.as_str());
                     }
                     Err(err) => {
                         // TODO: counter
-                        error!("app channel protocol_id={:?} err={:?}", protocol_id, err);
+                        error!("read_thread app channel protocol_id={:?} err={:?}", protocol_id, err);
                     }
                 }
             }
@@ -326,28 +337,33 @@ impl<ReadThing: AsyncRead + Unpin> ReaderContext<ReadThing> {
     }
 
     async fn handle_message(&self, nmsg: NetworkMessage) {
+        // info!("read_thread h msg");
         match &nmsg {
             NetworkMessage::Error(errm) => {
                 // TODO: counter
-                warn!("got error message: {:?}", errm)
+                warn!("read_thread got error message: {:?}", errm)
             }
             NetworkMessage::RpcRequest(request) => {
                 let protocol_id = request.protocol_id;
-                self.forward(protocol_id, nmsg);
+                info!("read_thread rpc_req {} bytes, prot={} id={}", request.raw_request.len(), protocol_id, request.request_id);
+                self.forward(protocol_id, nmsg).await;
             }
             NetworkMessage::RpcResponse(response) => {
                 match self.open_outbound_rpc.remove(&response.request_id) {
                     None => {
                         // TODO: counter rpc response dropped, no receiver
+                        warn!("read_thread rpc response no local match {}", response.request_id);
                     }
                     Some(rpc_state) => {
+                        info!("read_thread rpc response id={}", response.request_id);
                         self.handle.spawn(complete_rpc(rpc_state.sender, nmsg));//response.raw_response));
                     }
                 }
             }
             NetworkMessage::DirectSendMsg(message) => {
                 let protocol_id = message.protocol_id;
-                self.forward(protocol_id, nmsg);
+                info!("read_thread dm {} bytes, prot={}", message.raw_msg.len(), protocol_id);
+                self.forward(protocol_id, nmsg).await;
             }
         }
     }
@@ -358,6 +374,7 @@ impl<ReadThing: AsyncRead + Unpin> ReaderContext<ReadThing> {
                 if self.num_fragments != self.fragment_index {
                     warn!("fragment index = {:?} of {:?} total fragments with new stream header", self.fragment_index, self.num_fragments);
                 }
+                info!("read_thread shed id={}, {}b {}", head.request_id, head.message.data_len(), head.message.protocol_id_as_str());
                 self.current_stream_id = head.request_id;
                 self.num_fragments = head.num_fragments;
                 self.large_message = Some(head.message);
@@ -378,6 +395,7 @@ impl<ReadThing: AsyncRead + Unpin> ReaderContext<ReadThing> {
                     self.fragment_index = 0;
                     return;
                 }
+                info!("read_thread more id={}, {}b", more.request_id, more.raw_data.len());
                 match self.large_message.as_mut() {
                     None => {
                         warn!("got fragment without header");
@@ -401,42 +419,51 @@ impl<ReadThing: AsyncRead + Unpin> ReaderContext<ReadThing> {
                 self.fragment_index += 1;
                 if self.fragment_index == self.num_fragments {
                     let large_message = self.large_message.take().unwrap();
-                    self.handle_message(large_message);
+                    self.handle_message(large_message).await;
                 }
             }
         }
     }
 
     async fn run(mut self, mut closed: Closer) {
+        info!("read_thread start");
         loop {
-            tokio::select! {
-                rrmm = self.reader.next() => match rrmm {
-                    Some(rmm) => match rmm {
-                        Ok(msg) => match msg {
-                            MultiplexMessage::Message(nmsg) => {
-                                self.handle_message(nmsg);
-                            }
-                            MultiplexMessage::Stream(fragment) => {
-                                self.handle_stream(fragment);
-                            }
-                        }
-                        Err(_) => {}
-                    }
-                    None => {
-                        break;
-                    }
-                },
+            let rrmm = tokio::select! {
+                rrmm = self.reader.next() => {rrmm},
                 _ = closed.done.wait_for(|x| *x) => {
+                    info!("read_thread {} got closed", self.remote_peer_network_id);
                     return;
                 },
-            }
+            };
+            match rrmm {
+                Some(rmm) => match rmm {
+                    Ok(msg) => match msg {
+                        MultiplexMessage::Message(nmsg) => {
+                            // info!("read_thread msg");
+                            self.handle_message(nmsg).await;
+                        }
+                        MultiplexMessage::Stream(fragment) => {
+                            info!("read_thread stream");
+                            self.handle_stream(fragment).await;
+                        }
+                    }
+                    Err(err) => {
+                        info!("read_thread {} err {}", self.remote_peer_network_id, err);
+                    }
+                }
+                None => {
+                    info!("read_thread {} None", self.remote_peer_network_id);
+                    break;
+                }
+            };
         }
+
         closed.close();
     }
 }
 
 async fn reader_task(
-    mut reader: Fuse<MultiplexMessageStream<impl AsyncRead + Unpin>>,
+    mut reader: Fuse<MultiplexMessageStream<impl AsyncRead + Unpin + Send>>,
     apps: Arc<ApplicationCollector>,
     remote_peer_network_id: PeerNetworkId,
     open_outbound_rpc: OutboundRpcMatcher,
@@ -445,7 +472,7 @@ async fn reader_task(
 ) {
     let rc = ReaderContext::new(reader, apps, remote_peer_network_id, open_outbound_rpc, handle);
     rc.run(closed).await;
-    info!("peer reader finished"); // TODO: cause the writer to close?
+    info!("peer {} reader finished", remote_peer_network_id);
 }
 
 async fn peer_cleanup_task(
@@ -456,6 +483,7 @@ async fn peer_cleanup_task(
     peer_senders: Arc<OutboundPeerConnections>,
 ) {
     closed.wait().await;
+    info!("peer {} closed, cleanup", remote_peer_network_id);
     peer_senders.remove(&remote_peer_network_id);
     peers_and_metadata.remove_peer_metadata(remote_peer_network_id, connection_metadata.connection_id);
 }

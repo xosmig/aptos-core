@@ -28,6 +28,7 @@ use futures::{
 };
 use pin_project::pin_project;
 use serde::{de::DeserializeOwned, Serialize};
+use std::any::TypeId;
 use std::{cmp::min, fmt::Debug, marker::PhantomData, pin::Pin, time::Duration};
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
@@ -35,6 +36,7 @@ use std::future::Future;
 use std::ops::{Add, DerefMut, Sub};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, LockResult, RwLock};
+use anyhow::Error;
 use futures::channel::oneshot::Canceled;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::error::{SendError, TryRecvError, TrySendError};
@@ -46,6 +48,7 @@ use aptos_config::network_id::{NetworkId, PeerNetworkId};
 // use aptos_infallible::RwLock;
 use crate::error::NetworkErrorKind;
 use crate::protocols::wire::messaging::v1::{DirectSendMsg, NetworkMessage, RequestId, RpcRequest, RpcResponse};
+use hex::ToHex;
 
 pub trait Message: DeserializeOwned + Serialize {}
 impl<T: DeserializeOwned + Serialize> Message for T {}
@@ -178,6 +181,7 @@ impl NetworkApplicationConfig {
 }
 
 // TODO network2: is this the final home of ReceivedMessage? better place to put it?
+#[derive(Debug)]
 pub struct ReceivedMessage {
     pub message: NetworkMessage,
     pub sender: PeerNetworkId,
@@ -199,6 +203,14 @@ impl ReceivedMessage {
             NetworkMessage::DirectSendMsg(msg) => {
                 Some(msg.protocol_id)
             }
+        }
+    }
+    pub fn protocol_id_as_str(&self) -> &'static str {
+        match &self.message {
+            NetworkMessage::Error(_) => {"error"}
+            NetworkMessage::RpcRequest(rr) => {rr.protocol_id.as_str()}
+            NetworkMessage::RpcResponse(_) => {"rpc response"}
+            NetworkMessage::DirectSendMsg(dm) => {dm.protocol_id.as_str()}
         }
     }
 }
@@ -281,6 +293,8 @@ pub struct NetworkEvents<TMessage> {
 
     // TMessage is the type we will deserialize to
     phantom: PhantomData<TMessage>,
+
+    label: String,
 }
 
 impl<TMessage: Message + Unpin> NetworkEvents<TMessage> {
@@ -288,6 +302,7 @@ impl<TMessage: Message + Unpin> NetworkEvents<TMessage> {
         network_source: NetworkSource,
         // open_outbound_rpc: OutboundRpcMatcher,
         peer_senders: Arc<OutboundPeerConnections>,
+        label: &str,
     ) -> Self {
         Self {
             network_source,
@@ -297,6 +312,7 @@ impl<TMessage: Message + Unpin> NetworkEvents<TMessage> {
             peers: HashMap::new(),
             peers_generation: 0,
             phantom: Default::default(),
+            label: label.to_string(),
         }
     }
 
@@ -316,6 +332,8 @@ async fn rpc_response_sender(
     // network_sender: NetworkSender<TMessage>,
     peer_sender: tokio::sync::mpsc::Sender<NetworkMessage>
 ) {
+    // TODO: reimplement timeout
+    info!("app_int rpc_respond {}", rpc_id);
     let bytes = match receiver.await {
         Ok(iresult) => match iresult{
             Ok(bytes) => {bytes}
@@ -349,6 +367,7 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if self.done {
+            info!("app_int poll still DONE");
             return Poll::Ready(None);
         }
         // throw away up to 10 messages while looking for one to return
@@ -357,9 +376,11 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
             let msg = match Pin::new(&mut mself.network_source).poll_next(cx) {
                 Poll::Ready(x) => match x {
                     Some(msg) => {
+                        info!("app_int msg {}", msg.protocol_id_as_str());
                         msg
                     }
                     None => {
+                        info!("app_int poll DONE");
                         mself.done = true;
                         return Poll::Ready(None);
                     }
@@ -372,14 +393,17 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
                     NetworkMessage::Error(err) => {
                         // We just drop error responses! TODO: never send them
                         // fall through, maybe get another
+                        info!("app_int err msg discarded");
                     }
                     NetworkMessage::RpcRequest(request) => {
                         // TODO: figure out a way to multi-core protocol_id.from_bytes()
+                        info!("app_int rpc_req {} id={}, {}b", request.protocol_id, request.request_id, request.raw_request.len());
                         let app_msg = match request.protocol_id.from_bytes(request.raw_request.as_slice()) {
                             Ok(x) => { x },
-                            Err(_) => {
+                            Err(err) => {
                                 mself.done = true;
                                 // TODO network2: log error, count error, close connection
+                                warn!("app_int rpc_req {} id={}; err {}, {} {} -> {}; from {:?}", request.protocol_id, request.request_id, err, mself.label, request.raw_request.encode_hex_upper::<String>(), std::any::type_name::<TMessage>(), &mself.network_source);
                                 return Poll::Ready(None);
                             }
                         };
@@ -389,6 +413,7 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
                         mself.update_peers();
                         let raw_sender = match mself.peers.get(&msg.sender) {
                             None => {
+                                warn!("app_int rpc_req no peer {} id={}", request.protocol_id, request.request_id);
                                 return Poll::Pending;
                             }
                             Some(peer_stub) => {
@@ -428,6 +453,7 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
                         return Poll::Pending
                     }
                     NetworkMessage::DirectSendMsg(message) => {
+                        info!("app_int dm");
                         // TODO: figure out a way to multi-core protocol_id.from_bytes()
                         let app_msg = match message.protocol_id.from_bytes(message.raw_msg.as_slice()) {
                             Ok(x) => { x },
@@ -916,11 +942,13 @@ pub trait SerializedRequest {
 
 // tokio::sync::mpsc::Receiver<ReceivedMessage>,
 
+#[derive(Debug)]
 enum NetworkSourceUnion {
     SingleSource(tokio_stream::wrappers::ReceiverStream<ReceivedMessage>),
     ManySource(futures::stream::SelectAll<ReceiverStream<ReceivedMessage>>),
 }
 
+#[derive(Debug)]
 pub struct NetworkSource {
     source: NetworkSourceUnion,
 }

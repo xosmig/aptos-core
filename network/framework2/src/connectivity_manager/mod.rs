@@ -36,7 +36,7 @@ use crate::{
 };
 use aptos_config::{
     config::{Peer, PeerRole, PeerSet},
-    network_id::NetworkContext,
+    network_id::{NetworkContext,PeerNetworkId},
 };
 use aptos_crypto::x25519;
 use aptos_infallible::RwLock;
@@ -64,9 +64,14 @@ use std::{
     time::{Duration, SystemTime},
 };
 use futures_util::stream::Fuse;
-use tokio_retry::strategy::jitter;
+use tokio::runtime::Handle;
+use tokio_retry::strategy::{ExponentialBackoff, jitter};
 use tokio_stream::wrappers::ReceiverStream;
+use aptos_config::config::NetworkConfig;
+use crate::application::ApplicationCollector;
 use crate::application::storage::ConnectionNotification;
+use crate::protocols::network::OutboundPeerConnections;
+use crate::transport::{AptosNetTransport,AptosNetTransportActual};
 
 // pub mod builder;
 
@@ -88,6 +93,7 @@ const TRY_DIAL_BACKOFF_TIME: Duration = Duration::from_secs(300);
 
 /// The ConnectivityManager actor.
 pub struct ConnectivityManager<TBackoff> {
+    config: NetworkConfig,
     network_context: NetworkContext,
     /// A handle to a time service for easily mocking time-related operations.
     time_service: TimeService,
@@ -125,6 +131,12 @@ pub struct ConnectivityManager<TBackoff> {
     rng: SmallRng,
     /// Whether we are using mutual authentication or not
     mutual_authentication: bool,
+    /// how to connect to new peers
+    transport: AptosNetTransportActual,
+    /// routing by ProtocolId to application code, for passing to created peers
+    apps: Arc<ApplicationCollector>,
+    /// for created peers
+    peer_senders: Arc<OutboundPeerConnections>,
 }
 
 /// Different sources for peer addresses, ordered by priority (Onchain=highest,
@@ -309,6 +321,7 @@ where
 {
     /// Creates a new instance of the [`ConnectivityManager`] actor.
     pub fn new(
+        config: NetworkConfig,
         network_context: NetworkContext,
         time_service: TimeService,
         peers_and_metadata: Arc<PeersAndMetadata>,
@@ -317,12 +330,21 @@ where
         // connection_notifs_rx: conn_notifs_channel::Receiver,
         // requests_rx: futures::Stream<Item=ConnectivityRequest>,
         requests_rx: tokio::sync::mpsc::Receiver<ConnectivityRequest>,
-        connectivity_check_interval: Duration,
+        // connectivity_check_interval: Duration,
         backoff_strategy: TBackoff,
-        max_delay: Duration,
-        outbound_connection_limit: Option<usize>,
-        mutual_authentication: bool,
+        // max_delay: Duration,
+        // outbound_connection_limit: Option<usize>,
+        // mutual_authentication: bool,
+        transport: AptosNetTransportActual,
+        apps: Arc<ApplicationCollector>,
+        peer_senders: Arc<OutboundPeerConnections>,
     ) -> Self {
+        let connectivity_check_interval = Duration::from_millis(config.connectivity_check_interval_ms);
+        // let backoff_strategy = ExponentialBackoff::from_millis(config.connection_backoff_base).factor(1000);
+        let max_delay = Duration::from_millis(config.max_connection_delay_ms);
+        let outbound_connection_limit = Some(config.max_outbound_connections);
+        let mutual_authentication = config.mutual_authentication;
+
         // Verify that the trusted peers set exists and that it is empty
         let trusted_peers = peers_and_metadata
             .get_trusted_peers(&network_context.network_id())
@@ -343,6 +365,7 @@ where
         let requests_rx = ReceiverStream::new(requests_rx).fuse();
 
         let mut connmgr = Self {
+            config,
             network_context,
             time_service,
             peers_and_metadata,
@@ -360,6 +383,9 @@ where
             outbound_connection_limit,
             rng: SmallRng::from_entropy(),
             mutual_authentication,
+            transport,
+            apps,
+            peer_senders,
         };
 
         // set the initial config addresses and pubkeys
@@ -368,7 +394,7 @@ where
     }
 
     /// Starts the [`ConnectivityManager`] actor.
-    pub async fn start(mut self) {
+    pub async fn start(mut self, handle: Handle) {
         // The ConnectivityManager actor is interested in 3 kinds of events:
         // 1. Ticks to trigger connecitvity check. These are implemented using a clock based
         //    trigger in production.
@@ -392,7 +418,7 @@ where
             self.event_id = self.event_id.wrapping_add(1);
             futures::select! {
                 _ = ticker.select_next_some() => {
-                    self.check_connectivity(&mut pending_dials).await;
+                    self.check_connectivity(&mut pending_dials, &handle).await;
                 },
                 req = self.requests_rx.select_next_some() => {
                     self.handle_request(req);
@@ -530,10 +556,11 @@ where
     fn dial_eligible_peers<'a>(
         &'a mut self,
         pending_dials: &'a mut FuturesUnordered<BoxFuture<'static, PeerId>>,
+        handle: &Handle,
     ) {
         let to_connect = self.choose_peers_to_dial();
         for (peer_id, peer) in to_connect {
-            self.queue_dial_peer(peer_id, peer, pending_dials);
+            self.queue_dial_peer(peer_id, peer, pending_dials, handle);
         }
     }
 
@@ -597,6 +624,7 @@ where
         peer_id: PeerId,
         peer: DiscoveredPeer,
         pending_dials: &'a mut FuturesUnordered<BoxFuture<'static, PeerId>>,
+        handle: &Handle,
     ) {
         // If we're attempting to dial a Peer we must not be connected to it. This ensures that
         // newly eligible, but not connected to peers, have their counter initialized properly.
@@ -624,32 +652,63 @@ where
         let (cancel_tx, cancel_rx) = oneshot::channel();
 
         let network_context = self.network_context;
+        let remote_peer_network_id = PeerNetworkId::new(self.network_context.network_id(), peer_id);
+        // transport is just config, no state, so clone away and make the async move references better below
+        let transport_clone = self.transport.clone();
+        let config_clone = self.config.clone();
+        let apps = self.apps.clone();
+        let peers_and_metadata = self.peers_and_metadata.clone();
+        let peer_senders = self.peer_senders.clone();
+        let handle = handle.clone();
         // Create future which completes by either dialing after calculated
         // delay or on cancellation.
         let f = async move {
             // We dial after a delay. The dial can be canceled by sending to or dropping
             // `cancel_rx`.
+            let config_clone = config_clone;
+            let mut transport_clone = transport_clone;
+            let addr = addr;
             let dial_result = futures::select! {
                 _ = f_delay.fuse() => {
                     info!(
                         NetworkSchema::new(&network_context)
                             .remote_peer(&peer_id)
                             .network_address(&addr),
-                        "{} Dialing peer {} at {}",
+                        "{} dialing peer {} at {}",
                         network_context,
                         peer_id.short_str(),
                         addr
                     );
-                    // TODO: rebuild API?
-                    // match connection_reqs_tx.dial_peer(peer_id, addr.clone()).await {
-                    //     Ok(_) => DialResult::Success,
-                    //     Err(e) => DialResult::Failed(e),
-                    // }
-                    DialResult::Cancelled
+                    let result = transport_clone.dial(
+                        remote_peer_network_id,
+                        addr.clone(),
+                        &config_clone,
+                        apps,
+                        handle,
+                        peers_and_metadata,
+                        peer_senders,
+                    ).await;
+                    match result {
+                        Ok(_) => {
+                            info!(
+                                NetworkSchema::new(&network_context)
+                                    .remote_peer(&peer_id)
+                                    .network_address(&addr),
+                                "{} dialing peer {} ok",
+                                network_context,
+                                peer_id.short_str()
+                            );
+                            DialResult::Success
+                        },
+                        Err(err) => {
+                            warn!("dial peer {} err {}", peer_id.short_str(), err);
+                            DialResult::Failed
+                        }
+                    }
                 },
                 _ = cancel_rx.fuse() => DialResult::Cancelled,
             };
-            // log_dial_result(network_context, peer_id, addr, dial_result);
+            log_dial_result(network_context, peer_id, addr, dial_result);
             // Send peer_id as future result so it can be removed from dial queue.
             peer_id
         };
@@ -668,6 +727,7 @@ where
     async fn check_connectivity<'a>(
         &'a mut self,
         pending_dials: &'a mut FuturesUnordered<BoxFuture<'static, PeerId>>,
+        handle: &Handle,
     ) {
         trace!(
             NetworkSchema::new(&self.network_context),
@@ -690,7 +750,7 @@ where
         self.close_stale_connections().await;
         // Dial peers which are eligible but are neither connected nor queued for dialing in the
         // future.
-        self.dial_eligible_peers(pending_dials);
+        self.dial_eligible_peers(pending_dials, handle);
     }
 
     fn reset_dial_state(&mut self, peer_id: &PeerId) {
