@@ -11,7 +11,7 @@ use aptos_consensus::network_interface::ConsensusMsg;
 use aptos_network2::protocols::wire::handshake::v1::ProtocolId;
 use aptos_network2_builder::NetworkBuilder;
 // use aptos_consensus::network_interface::{DIRECT_SEND, RPC};
-use aptos_logger::debug;
+use aptos_logger::{debug, info};
 use aptos_network2::application::interface::{NetworkClient, NetworkMessageTrait, OutboundRpcMatcher};
 use aptos_network2::protocols::network::{NetworkEvents, NetworkSender, NetworkSource, NewNetworkSender, ReceivedMessage, Message, OutboundPeerConnections};
 use aptos_network2::application::storage::PeersAndMetadata;
@@ -62,6 +62,9 @@ impl<T: MessageTrait> ApplicationNetworkInterfaces<T> {
 }
 
 fn has_validator_network(node_config: &NodeConfig) -> bool {
+    if node_config.validator_network.is_some() {
+        return true;
+    }
     for net_config in node_config.full_node_networks.iter() {
         if net_config.network_id.is_validator_network() {
             return true;
@@ -121,6 +124,7 @@ pub fn consensus_network_connections(
     peer_senders: Arc<OutboundPeerConnections>,
 ) -> Option<ApplicationNetworkInterfaces<ConsensusMsg>> {
     if !has_validator_network(node_config) {
+        info!("app_int not a validator, no consensus");
         return None;
     }
 
