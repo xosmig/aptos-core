@@ -10,9 +10,10 @@ use aptos_config::config::{NodeConfig, OverrideNodeConfig};
 use aptos_logger::info;
 use aptos_rest_client::Client as RestClient;
 use aptos_sdk::types::PeerId;
-use futures::future::{join_all, try_join_all};
+use futures::future::{join_all, ok, try_join_all};
 use prometheus_http_query::response::{PromqlResult, Sample};
 use std::time::{Duration, Instant};
+use itertools::Itertools;
 use tokio::runtime::Runtime;
 
 /// Trait used to represent a running network comprised of Validators and FullNodes
@@ -153,24 +154,49 @@ pub trait SwarmExt: Swarm {
     async fn wait_for_connectivity(&self, deadline: Instant) -> Result<()> {
         let validators = self.validators().collect::<Vec<_>>();
         let full_nodes = self.full_nodes().collect::<Vec<_>>();
+        let num_nodes = validators.len() + full_nodes.len();
 
-        while !try_join_all(
-            validators
-                .iter()
-                .map(|node| node.check_connectivity(validators.len() - 1))
-                .chain(full_nodes.iter().map(|node| node.check_connectivity())),
-        )
-        .await
-        .map(|v| v.iter().all(|r| *r))
-        .unwrap_or(false)
-        {
+        while true {
+            let results = try_join_all(
+                validators.iter().map(|node| node.check_connectivity(validators.len() - 1))
+                    .chain(full_nodes.iter().map(|node| node.check_connectivity()))).await;
+            let wat = match results {
+                Ok(okays) => {
+                    let okay_count = okays.iter().map(|b| match(b){true => 1, false => 0}).fold(0, |a,b| a+b);
+                    if okay_count as usize == num_nodes {
+                        info!("Swarm connectivity check passed");
+                        return Ok(());
+                    }
+                    info!("wait_for_connectivity {}/{}", okay_count, num_nodes);
+                    Ok(())
+                }
+                Err(err) => {
+                    Err(err)
+                }
+            };
             if Instant::now() > deadline {
-                return Err(anyhow!("waiting for swarm connectivity timed out"));
+                return Err(anyhow!("waiting for swarm connectivity timed out, {:?}", wat));
             }
 
             tokio::time::sleep(Duration::from_millis(500)).await;
-        }
-        info!("Swarm connectivity check passed");
+        };
+        // while !try_join_all(
+        //     validators
+        //         .iter()
+        //         .map(|node| node.check_connectivity(validators.len() - 1))
+        //         .chain(full_nodes.iter().map(|node| node.check_connectivity())),
+        // )
+        // .await
+        // .map(|v| v.iter().all(|r| *r))
+        // .unwrap_or(false)
+        // {
+        //     if Instant::now() > deadline {
+        //         return Err(anyhow!("waiting for swarm connectivity timed out"));
+        //     }
+        //
+        //     tokio::time::sleep(Duration::from_millis(500)).await;
+        // }
+        info!("Swarm connectivity check passed unreachable?");
         Ok(())
     }
 

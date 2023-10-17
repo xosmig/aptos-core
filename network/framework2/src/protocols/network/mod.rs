@@ -901,7 +901,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                         return Err(err);
                     }
                 }
-                Err(_cancelled) => {
+                Err(cancelled) => {
                     // TODO: counter
                     warn!("app_int rpc reply cancelled");
                     return Err(RpcError::UnexpectedResponseChannelCancel);

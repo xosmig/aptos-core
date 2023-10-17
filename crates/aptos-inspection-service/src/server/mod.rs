@@ -79,6 +79,7 @@ pub fn start_inspection_service(
             }
         });
 
+        debug!{"starting aptos-inspection-service on {:?}", address}
         // Start and block on the server
         runtime
             .block_on(async {
@@ -95,6 +96,7 @@ async fn serve_requests(
     node_config: NodeConfig,
     peers_and_metadata: Arc<PeersAndMetadata>,
 ) -> Result<Response<Body>, hyper::Error> {
+    debug!("{} {}", req.method(), req.uri());
     // Process the request and get the response components
     let (status_code, body, content_type) = match req.uri().path() {
         CONFIGURATION_PATH => {

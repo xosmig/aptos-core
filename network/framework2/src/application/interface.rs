@@ -316,7 +316,8 @@ impl OutboundRpcMatcher {
         let now = tokio::time::Instant::now();
         {
             for (k, v) in they.iter() {
-                if v.deadline >= now {
+                if now > v.deadline {
+                    info!("app_int outbound rpc id={} expired by {:?}", k, now.duration_since(v.deadline));
                     to_delete.push(k.clone());
                 }
             }
@@ -324,6 +325,7 @@ impl OutboundRpcMatcher {
         if !to_delete.is_empty() {
             // TODO: counter add to_delete.len() RPCs timed out and dropped
             for k in to_delete.into_iter() {
+                info!("app_int outbound rpc dropped timeout cleanup, id={}", k);
                 they.remove(&k);
             }
         }

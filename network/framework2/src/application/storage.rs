@@ -25,8 +25,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use aptos_config::config::{PeerRole, RoleType};
 use aptos_config::network_id::NetworkContext;
 use std::fmt;
+use once_cell::sync::Lazy;
 use tokio::sync::mpsc::error::TrySendError;
 use serde::Serialize;
+use aptos_metrics_core::{IntGauge,IntGaugeVec,register_int_gauge_vec};
+use aptos_netcore::transport::ConnectionOrigin;
+use aptos_short_hex_str::AsShortHexStr;
+use aptos_types::account_address::AccountAddress;
 
 /// A simple container that tracks all peers and peer metadata for the node.
 /// This container is updated by both the networking code (e.g., for new
@@ -272,7 +277,15 @@ impl PeersAndMetadata {
                 println!("");
                 peer_metadata.connection_metadata = connection_metadata.clone()
             })
-            .or_insert_with(|| PeerMetadata::new(connection_metadata.clone()));
+            .or_insert_with(|| {
+                // update counter
+                let role = peer_role_to_role_type(connection_metadata.role);
+                let network_id = peer_network_id.network_id();
+                let peer_id = peer_network_id.peer_id();
+                connections_rnpo(role, &network_id, &peer_id, connection_metadata.origin).inc();
+
+                PeerMetadata::new(connection_metadata.clone())
+            });
         let event = ConnectionNotification::NewPeer(connection_metadata, net_context);
         self.broadcast(event);
 
@@ -294,7 +307,7 @@ impl PeersAndMetadata {
             .get_mut(&peer_network_id.peer_id())
         {
             self.generation.fetch_add(1 , Ordering::SeqCst);
-            peer_metadata.connection_state = connection_state;
+            peer_metadata.connection_state = connection_state; // TODO: update counters?
             Ok(())
         } else {
             Err(missing_metadata_error(&peer_network_id))
@@ -344,6 +357,14 @@ impl PeersAndMetadata {
             let active_connection_id = entry.get().connection_metadata.connection_id;
             if active_connection_id == connection_id {
                 self.generation.fetch_add(1 , Ordering::SeqCst);
+
+                // update counter
+                let peer_metadata = entry.get();
+                let role = peer_role_to_role_type(peer_metadata.connection_metadata.role);
+                let network_id = peer_network_id.network_id();
+                let peer_id = peer_network_id.peer_id();
+                connections_rnpo(role, &network_id, &peer_id, peer_metadata.connection_metadata.origin).dec();
+
                 Ok(entry.remove())
             } else {
                 Err(Error::UnexpectedError(format!(
@@ -356,6 +377,17 @@ impl PeersAndMetadata {
         }
     }
 }
+
+// fn count_gauges<T: Iterator<Item=(&NetworkId,&HashMap<AccountAddress,PeerMetadata>)>>(outer_iter: T) {
+//     for (network_id, they) in outer_iter {
+//         for (peer_id, peer_metadata) in they.iter() {
+//             let role = peer_role_to_role_type(peer_metadata.connection_metadata.role);
+//             // let nc = NetworkContext::new(role, *network_id, *peer_id);
+//             connections_rnpo(role, network_id, peer_id, peer_metadata.connection_metadata.origin).inc();
+//             // connections(&nc, peer_metadata.connection_metadata.origin).inc();
+//         }
+//     }
+// }
 
 /// A simple helper for returning a missing metadata error
 /// for the specified peer.
@@ -442,4 +474,39 @@ pub fn peer_role_to_role_type(role: PeerRole) -> RoleType {
         PeerRole::Known => {RoleType::FullNode}
         PeerRole::Unknown => {RoleType::FullNode}
     }
+}
+
+// Direction labels
+pub const INBOUND_LABEL: &str = "inbound";
+pub const OUTBOUND_LABEL: &str = "outbound";
+
+// Serialization labels
+pub const SERIALIZATION_LABEL: &str = "serialization";
+pub const DESERIALIZATION_LABEL: &str = "deserialization";
+
+pub static APTOS_CONNECTIONS: Lazy<IntGaugeVec> = Lazy::new(|| {
+    register_int_gauge_vec!(
+        "aptos_connections",
+        "Number of current connections and their direction",
+        &["role_type", "network_id", "peer_id", "direction"]
+    )
+        .unwrap()
+});
+
+pub fn connections_rnpo(role: RoleType, network_id: &NetworkId, peer_id: &PeerId, origin: ConnectionOrigin) -> IntGauge {
+    APTOS_CONNECTIONS.with_label_values(&[
+        role.as_str(),
+        network_id.as_str(),
+        peer_id.short_str().as_str(),
+        origin.as_str(),
+    ])
+}
+
+pub fn connections(network_context: &NetworkContext, origin: ConnectionOrigin) -> IntGauge {
+    APTOS_CONNECTIONS.with_label_values(&[
+        network_context.role().as_str(),
+        network_context.network_id().as_str(),
+        network_context.peer_id().short_str().as_str(),
+        origin.as_str(),
+    ])
 }
