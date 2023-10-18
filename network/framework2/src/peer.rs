@@ -15,8 +15,9 @@ use futures::SinkExt;
 use futures::stream::Fuse;
 use tokio::sync::mpsc::error::{SendError, TryRecvError};
 use aptos_config::config::NetworkConfig;
-use aptos_config::network_id::PeerNetworkId;
+use aptos_config::network_id::{NetworkId, PeerNetworkId};
 use aptos_logger::{error, info, warn};
+use aptos_metrics_core::{IntCounter, IntCounterVec, register_int_counter_vec};
 use crate::application::ApplicationCollector;
 use crate::application::interface::{Closer, OpenRpcRequestState, OutboundRpcMatcher};
 use crate::application::storage::PeersAndMetadata;
@@ -24,6 +25,7 @@ use crate::ProtocolId;
 use crate::protocols::network::{OutboundPeerConnections, PeerStub, ReceivedMessage, RpcError};
 use crate::protocols::stream::{StreamFragment, StreamHeader, StreamMessage};
 use crate::transport::ConnectionMetadata;
+use once_cell::sync::Lazy;
 
 pub fn start_peer<TSocket>(
     config: &NetworkConfig,
@@ -46,8 +48,9 @@ where
         MultiplexMessageStream::new(read_socket, max_frame_size).fuse();
     let writer = MultiplexMessageSink::new(write_socket, max_frame_size);
     let closed = Closer::new();
+    let network_id = remote_peer_network_id.network_id();
     handle.spawn(open_outbound_rpc.clone().cleanup(Duration::from_millis(100), closed.clone()));
-    handle.spawn(writer_task(to_send, writer, max_frame_size, closed.clone()));
+    handle.spawn(writer_task(network_id, to_send, writer, max_frame_size, closed.clone()));
     handle.spawn(reader_task(reader, apps, remote_peer_network_id, open_outbound_rpc.clone(), handle.clone(), closed.clone()));
     let stub = PeerStub::new(sender, open_outbound_rpc);
     peers_and_metadata.insert_connection_metadata(remote_peer_network_id, connection_metadata.clone());
@@ -57,6 +60,7 @@ where
 
 /// state needed in writer_task()
 struct WriterContext<WriteThing: AsyncWrite + Unpin + Send> {
+    network_id: NetworkId,
     /// increment for each new fragment stream
     stream_request_id : u32,
     /// remaining payload bytes of curretnly fragmenting large message
@@ -78,11 +82,13 @@ struct WriterContext<WriteThing: AsyncWrite + Unpin + Send> {
 
 impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
     fn new(
+        network_id: NetworkId,
         to_send: Receiver<NetworkMessage>,
         writer: MultiplexMessageSink<WriteThing>,
         max_frame_size: usize,
     ) -> Self {
         Self {
+            network_id,
             stream_request_id: 0,
             large_message: None,
             large_fragment_id: 0,
@@ -187,7 +193,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                         break;
                     },
                     Some(msg) => {
-                            info!("writer_thread to_send {} bytes prot={}", msg.data_len(), msg.protocol_id_as_str());
+                            // info!("writer_thread to_send {} bytes prot={}", msg.data_len(), msg.protocol_id_as_str());
                         if msg.data_len() > self.max_frame_size {
                             // start stream
                             self.start_large(msg)
@@ -207,8 +213,9 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
             tokio::select! {
                 send_result = self.writer.send(&mm) => match send_result {
                     Ok(wat) => {
-                        // TODO: counter msg sent, msg size sent
-                        info!("writer_thread sent {}", data_len);
+                        peer_message_frames_written(&self.network_id).inc();
+                        peer_message_bytes_written(&self.network_id).inc_by(data_len as u64);
+                        // info!("writer_thread sent {}", data_len);
                     }
                     Err(err) => {
                         // TODO: counter net write err
@@ -244,13 +251,36 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
     }
 }
 
+pub static NETWORK_PEER_MESSAGE_FRAMES_WRITTEN: Lazy<IntCounterVec> = Lazy::new(||
+    register_int_counter_vec!(
+    "aptos_network_frames_written",
+    "Number of messages written to MultiplexMessageSink",
+    &["network_id"]
+).unwrap()
+);
+pub fn peer_message_frames_written(network_id: &NetworkId) -> IntCounter {
+    NETWORK_PEER_MESSAGE_FRAMES_WRITTEN.with_label_values(&[network_id.as_str()])
+}
+
+pub static NETWORK_PEER_MESSAGE_BYTES_WRITTEN: Lazy<IntCounterVec> = Lazy::new(||
+    register_int_counter_vec!(
+    "aptos_network_bytes_written",
+    "Number of bytes written to MultiplexMessageSink",
+    &["network_id"]
+).unwrap()
+);
+pub fn peer_message_bytes_written(network_id: &NetworkId) -> IntCounter {
+    NETWORK_PEER_MESSAGE_BYTES_WRITTEN.with_label_values(&[network_id.as_str()])
+}
+
 async fn writer_task(
+    network_id: NetworkId,
     mut to_send: Receiver<NetworkMessage>,
     mut writer: MultiplexMessageSink<impl AsyncWrite + Unpin + Send + 'static>,
     max_frame_size: usize,
     closed: Closer,
 ) {
-    let wt = WriterContext::new(to_send, writer, max_frame_size);
+    let wt = WriterContext::new(network_id, to_send, writer, max_frame_size);
     wt.run(closed).await;
     info!("peer writer exited")
 }
@@ -323,9 +353,11 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
                     }
                     unreachable!("read_thread apps[{}] => {} {:?}", protocol_id, app.protocol_id, &app.sender);
                 }
+                let data_len = nmsg.data_len() as u64;
                 match app.sender.send(ReceivedMessage{ message: nmsg, sender: self.remote_peer_network_id }).await {
                     Ok(_) => {
-                        // TODO: counter
+                        peer_read_messages(&self.remote_peer_network_id.network_id(), &protocol_id).inc();
+                        peer_read_bytes(&self.remote_peer_network_id.network_id(), &protocol_id).inc_by(data_len);
                         info!("read_thread forwarded to app {} {}", app.label, protocol_id.as_str());
                     }
                     Err(err) => {
@@ -487,4 +519,26 @@ async fn peer_cleanup_task(
     info!("peer {} closed, cleanup", remote_peer_network_id);
     peer_senders.remove(&remote_peer_network_id);
     peers_and_metadata.remove_peer_metadata(remote_peer_network_id, connection_metadata.connection_id);
+}
+
+pub static NETWORK_PEER_READ_MESSAGES: Lazy<IntCounterVec> = Lazy::new(||
+    register_int_counter_vec!(
+    "aptos_network_peer_read_messages",
+    "Number of messages read (after de-frag)",
+    &["network_id", "protocol_id"]
+).unwrap()
+);
+pub fn peer_read_messages(network_id: &NetworkId, protocol_id: &ProtocolId) -> IntCounter {
+    NETWORK_PEER_READ_MESSAGES.with_label_values(&[network_id.as_str(), protocol_id.as_str()])
+}
+
+pub static NETWORK_PEER_READ_BYTES: Lazy<IntCounterVec> = Lazy::new(||
+    register_int_counter_vec!(
+    "aptos_network_peer_read_bytes",
+    "Number of message bytes read (after de-frag)",
+    &["network_id", "protocol_id"]
+).unwrap()
+);
+pub fn peer_read_bytes(network_id: &NetworkId, protocol_id: &ProtocolId) -> IntCounter {
+    NETWORK_PEER_READ_BYTES.with_label_values(&[network_id.as_str(), protocol_id.as_str()])
 }
