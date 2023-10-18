@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 use std::sync::RwLock;
 use bytes::Bytes;
 use futures::channel::oneshot;
+use aptos_config::config::RoleType;
 use crate::protocols::network::RpcError;
 use crate::protocols::wire::messaging::v1::RequestId;
 
@@ -260,7 +261,10 @@ pub struct OpenRpcRequestState {
     // send on this to deliver a reply back to an open NetworkSender.send_rpc()
     pub sender: oneshot::Sender<Result<Bytes, RpcError>>,
     pub protocol_id: ProtocolId,
+    pub started: tokio::time::Instant, // for metrics
     pub deadline: tokio::time::Instant,
+    pub network_id: NetworkId, // for metrics
+    pub role_type: RoleType, // for metrics
 }
 
 /// OutboundRpcMatcher contains an Arc-RwLock of oneshot reply channels
@@ -287,13 +291,19 @@ impl OutboundRpcMatcher {
         request_id: RequestId,
         sender: oneshot::Sender<Result<Bytes, RpcError>>,
         protocol_id: ProtocolId,
+        started: tokio::time::Instant,
         deadline: tokio::time::Instant,
+        network_id: NetworkId,
+        role_type: RoleType,
     ) {
         let val = OpenRpcRequestState{
             id: request_id,
             sender,
             protocol_id,
+            started,
             deadline,
+            network_id,
+            role_type,
         };
         self.open_outbound_rpc.write().unwrap().insert(request_id, val);
     }

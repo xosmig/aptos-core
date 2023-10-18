@@ -5,16 +5,7 @@
 //! Convenience Network API for Aptos
 
 pub use crate::protocols::rpc::error::RpcError;
-use crate::{
-    application::interface::{OutboundRpcMatcher,OpenRpcRequestState},
-    error::NetworkError,
-    // peer_manager::{
-    //     ConnectionNotification, ConnectionRequestSender, PeerManagerNotification,
-    //     PeerManagerRequestSender,
-    // },
-    transport::ConnectionMetadata,
-    ProtocolId,
-};
+use crate::{application::interface::{OutboundRpcMatcher, OpenRpcRequestState}, error::NetworkError, transport::ConnectionMetadata, ProtocolId, counters};
 // use aptos_channels::aptos_channel;
 use aptos_logger::prelude::*;
 use aptos_short_hex_str::AsShortHexStr;
@@ -43,25 +34,24 @@ use tokio::sync::mpsc::error::{SendError, TryRecvError, TrySendError};
 use tokio::sync::mpsc::Receiver;
 use tokio::time::error::Elapsed;
 use tokio_stream::wrappers::ReceiverStream;
-use aptos_config::network_id::{NetworkId, PeerNetworkId};
+use aptos_config::network_id::{NetworkContext, NetworkId, PeerNetworkId};
 // use crate::application::error::Error::RpcError;
 // use aptos_infallible::RwLock;
 use crate::error::NetworkErrorKind;
 use crate::protocols::wire::messaging::v1::{DirectSendMsg, NetworkMessage, RequestId, RpcRequest, RpcResponse};
 use hex::ToHex;
+use aptos_config::config::RoleType;
 
 pub trait Message: DeserializeOwned + Serialize {}
 impl<T: DeserializeOwned + Serialize> Message for T {}
 
-/// Events received by network clients in a validator
+/// Event is a templated typed wrapper around a Direct Message or an RPC Request.
 ///
-/// An enumeration of the various types of messages that the network will be sending
-/// to its clients. This differs from [`PeerNotification`] since the contents are deserialized
-/// into the type `TMessage` over which `Event` is generic. Note that we assume here that for every
-/// consumer of this API there's a singleton message type, `TMessage`,  which encapsulates all the
-/// messages and RPCs that are received by that consumer.
+/// This is the application side of incoming messages where they are converted from
+/// network blobs to the local TMessage type (consensus, mempool, etc).
 ///
-/// [`PeerNotification`]: crate::peer::PeerNotification
+/// Historically there were also client connect/disconnect messages,
+/// but those have moved to a subscription on the PeersAndMetadata object.
 #[derive(Debug)]
 pub enum Event<TMessage> {
     /// New inbound direct-send message from peer.
@@ -75,11 +65,6 @@ pub enum Event<TMessage> {
         ProtocolId,
         oneshot::Sender<Result<Bytes, RpcError>>,
     ),
-    // Peer connect/disconnect events are now served out of a subscription on PeersAndMetadata object
-    // Peer which we have a newly established connection with. TODO network2: remove this from Event?
-    // NewPeer(ConnectionMetadata),
-    // Peer with which we've lost our connection. TODO network2: remove this from Event?
-    // LostPeer(ConnectionMetadata),
 }
 
 /// impl PartialEq for simpler testing
@@ -92,35 +77,10 @@ impl<TMessage: PartialEq> PartialEq for Event<TMessage> {
             (RpcRequest(pid1, msg1, proto1, _), RpcRequest(pid2, msg2, proto2, _)) => {
                 pid1 == pid2 && msg1 == msg2 && proto1 == proto2
             },
-            // (NewPeer(metadata1), NewPeer(metadata2)) => metadata1 == metadata2,
-            // (LostPeer(metadata1), LostPeer(metadata2)) => metadata1 == metadata2,
             _ => false,
         }
     }
 }
-
-
-// TODO: delete NetworkClientConfig as redundant, same as 'service' config
-// /// Configuration needed for the client side of AptosNet applications
-// #[derive(Clone)]
-// pub struct NetworkClientConfig {
-//     /// Direct send protocols for the application (sorted by preference, highest to lowest)
-//     pub direct_send_protocols_and_preferences: Vec<ProtocolId>,
-//     /// RPC protocols for the application (sorted by preference, highest to lowest)
-//     pub rpc_protocols_and_preferences: Vec<ProtocolId>,
-// }
-//
-// impl NetworkClientConfig {
-//     pub fn new(
-//         direct_send_protocols_and_preferences: Vec<ProtocolId>,
-//         rpc_protocols_and_preferences: Vec<ProtocolId>,
-//     ) -> Self {
-//         Self {
-//             direct_send_protocols_and_preferences,
-//             rpc_protocols_and_preferences,
-//         }
-//     }
-// }
 
 const DEFAULT_QUEUE_SIZE : usize = 1000;
 
@@ -215,77 +175,10 @@ impl ReceivedMessage {
     }
 }
 
-// /// Configuration needed for AptosNet applications to register with the network
-// /// builder. Supports client and service side.
-// #[derive(Clone)]
-// pub struct NetworkApplicationConfig { // TODO: delete? obsolete wrapper since client config is the same as service?
-//     // pub network_client_config: NetworkClientConfig,
-//     pub network_service_config: NetworkServiceConfig,
-// }
-//
-// impl NetworkApplicationConfig {
-//     pub fn new(
-//         // network_client_config: NetworkClientConfig,
-//         network_service_config: NetworkServiceConfig,
-//     ) -> Self {
-//         Self {
-//             // network_client_config,
-//             network_service_config,
-//         }
-//     }
-// }
-
-// struct OpenRpcRequestState {
-//     id: RequestId,
-//     // send on this to deliver a reply back to an open NetworkSender.send_rpc()
-//     sender: oneshot::Sender<Result<Bytes, RpcError>>,
-//     protocol_id: ProtocolId,
-//     // TODO? add a deadline timeout field?
-// }
-//
-// /// OutboundRpcMatcher contains an Arc-RwLock of oneshot reply channels
-// #[derive(Clone)]
-// struct OutboundRpcMatcher {
-//     open_outbound_rpc: Arc<RwLock<BTreeMap<RequestId, OpenRpcRequestState>>>,
-// }
-//
-// impl OutboundRpcMatcher {
-//     fn new() -> Self {
-//         Self {
-//             open_outbound_rpc: Arc::new(RwLock::new(BTreeMap::new()))
-//         }
-//     }
-//
-//     fn remove(&self, request_id: &RequestId) -> Option<OpenRpcRequestState> {
-//         self.open_outbound_rpc.write().unwrap().remove(request_id)
-//     }
-//
-//     fn insert(
-//         &self,
-//         request_id: RequestId,
-//         sender: oneshot::Sender<Result<Bytes, RpcError>>,
-//         protocol_id: ProtocolId,
-//     ) {
-//         let val = OpenRpcRequestState{
-//             id: request_id,
-//             sender,
-//             protocol_id,
-//         };
-//         self.open_outbound_rpc.write().unwrap().insert(request_id, val);
-//     }
-// }
-
-// type OutboundRpcMatcher = Arc<RwLock<BTreeMap<RequestId, OpenRpcRequestState>>>;
-//
-// fn NewOutboundRpcMatcher() -> OutboundRpcMatcher {
-//     Arc::new(RwLock::new(BTreeMap::new()))
-// }
 
 pub struct NetworkEvents<TMessage> {
     network_source: NetworkSource, //::sync::mpsc::Receiver<ReceivedMessage>,
     done: bool,
-    // this handle to outbound RPC catches replies and puts them on their oneshot channel
-    // open_outbound_rpc: OutboundRpcMatcher,//Arc<RwLock<BTreeMap<RequestId, OpenRpcRequestState>>>,
 
     peer_senders: Arc<OutboundPeerConnections>,
     peers: HashMap<PeerNetworkId, PeerStub>,
@@ -294,15 +187,17 @@ pub struct NetworkEvents<TMessage> {
     // TMessage is the type we will deserialize to
     phantom: PhantomData<TMessage>,
 
+    // for metrics
     label: String,
+    contexts: Arc<BTreeMap<NetworkId, NetworkContext>>,
 }
 
 impl<TMessage: Message + Unpin> NetworkEvents<TMessage> {
     pub fn new(
         network_source: NetworkSource,
-        // open_outbound_rpc: OutboundRpcMatcher,
         peer_senders: Arc<OutboundPeerConnections>,
         label: &str,
+        contexts: Arc<BTreeMap<NetworkId, NetworkContext>>,
     ) -> Self {
         Self {
             network_source,
@@ -313,6 +208,7 @@ impl<TMessage: Message + Unpin> NetworkEvents<TMessage> {
             peers_generation: 0,
             phantom: Default::default(),
             label: label.to_string(),
+            contexts,
         }
     }
 
@@ -330,7 +226,10 @@ async fn rpc_response_sender(
     rpc_id: RequestId,
     // peer_network_id: PeerId,
     // network_sender: NetworkSender<TMessage>,
-    peer_sender: tokio::sync::mpsc::Sender<NetworkMessage>
+    peer_sender: tokio::sync::mpsc::Sender<NetworkMessage>,
+    request_received_start: tokio::time::Instant, // TODO: use TimeService
+    network_context: NetworkContext, // for metrics
+    protocol_id: ProtocolId, // for metrics
 ) {
     // TODO: reimplement timeout
     // info!("app_int rpc_respond {}", rpc_id);
@@ -349,6 +248,8 @@ async fn rpc_response_sender(
             return;
         }
     };
+    let now = tokio::time::Instant::now();
+    let dt = now.duration_since(request_received_start);
     let blen = bytes.len();
     let msg = NetworkMessage::RpcResponse(RpcResponse{
         request_id: rpc_id,
@@ -357,6 +258,7 @@ async fn rpc_response_sender(
     });
     match peer_sender.send(msg).await {
         Ok(_) => {
+            counters::inbound_rpc_handler_latency(&network_context, protocol_id).observe(dt.as_secs_f64());
             info!("app_int rpc_respond {} bytes OK", blen);
             // TODO: counter
         }
@@ -381,7 +283,7 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
             let msg = match Pin::new(&mut mself.network_source).poll_next(cx) {
                 Poll::Ready(x) => match x {
                     Some(msg) => {
-                        info!("app_int msg {}", msg.protocol_id_as_str());
+                        // info!("app_int msg {}", msg.protocol_id_as_str());
                         msg
                     }
                     None => {
@@ -401,8 +303,9 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
                         info!("app_int err msg discarded");
                     }
                     NetworkMessage::RpcRequest(request) => {
+                        // info!("app_int rpc_req {} id={}, {}b", request.protocol_id, request.request_id, request.raw_request.len());
+                        let request_received_start = tokio::time::Instant::now();
                         // TODO: figure out a way to multi-core protocol_id.from_bytes()
-                        info!("app_int rpc_req {} id={}, {}b", request.protocol_id, request.request_id, request.raw_request.len());
                         let app_msg = match request.protocol_id.from_bytes(request.raw_request.as_slice()) {
                             Ok(x) => { x },
                             Err(err) => {
@@ -427,8 +330,8 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
                         };
                         // when this spawned task reads from the response oneshot channel it will send it to the network peer
                         // TODO network2: reimplement timeout/cleanup
-                        Handle::current().spawn(rpc_response_sender(response_reader, rpc_id, raw_sender));
-                        // TODO network2: add rpc-response matching at the application level here
+                        let network_context = mself.contexts.get(&msg.sender.network_id()).unwrap();
+                        Handle::current().spawn(rpc_response_sender(response_reader, rpc_id, raw_sender, request_received_start, *network_context, request.protocol_id));
                         return Poll::Ready(Some(Event::RpcRequest(
                             msg.sender, app_msg, request.protocol_id, responder)))
                     }
@@ -482,171 +385,11 @@ impl<TMessage: Message + Unpin> FusedStream for NetworkEvents<TMessage> {
     }
 }
 
-// /// A `Stream` of `Event<TMessage>` from the lower network layer to an upper
-// /// network application that deserializes inbound network direct-send and rpc
-// /// messages into `TMessage`. Inbound messages that fail to deserialize are logged
-// /// and dropped.
-// ///
-// /// `NetworkEvents` is really just a thin wrapper around a
-// /// `channel::Receiver<PeerNotification>` that deserializes inbound messages.
-// #[pin_project]
-// pub struct NetworkEvents<TMessage> {
-//     #[pin]
-//     event_stream: Select<
-//         FilterMap<
-//             aptos_channel::Receiver<(PeerId, ProtocolId), PeerManagerNotification>,
-//             future::Ready<Option<Event<TMessage>>>,
-//             fn(PeerManagerNotification) -> future::Ready<Option<Event<TMessage>>>,
-//         >,
-//         Map<
-//             aptos_channel::Receiver<PeerId, ConnectionNotification>,
-//             fn(ConnectionNotification) -> Event<TMessage>,
-//         >,
-//     >,
-//     _marker: PhantomData<TMessage>,
-// }
-//
-// /// Trait specifying the signature for `new()` `NetworkEvents`
-// pub trait NewNetworkEvents {
-//     fn new(
-//         peer_mgr_notifs_rx: aptos_channel::Receiver<(PeerId, ProtocolId), PeerManagerNotification>,
-//         connection_notifs_rx: aptos_channel::Receiver<PeerId, ConnectionNotification>,
-//     ) -> Self;
-// }
-//
-// impl<TMessage: Message> NewNetworkEvents for NetworkEvents<TMessage> {
-//     fn new(
-//         peer_mgr_notifs_rx: aptos_channel::Receiver<(PeerId, ProtocolId), PeerManagerNotification>,
-//         connection_notifs_rx: aptos_channel::Receiver<PeerId, ConnectionNotification>,
-//     ) -> Self {
-//         let data_event_stream = peer_mgr_notifs_rx.filter_map(
-//             peer_mgr_notif_to_event
-//                 as fn(PeerManagerNotification) -> future::Ready<Option<Event<TMessage>>>,
-//         );
-//         let control_event_stream = connection_notifs_rx
-//             .map(control_msg_to_event as fn(ConnectionNotification) -> Event<TMessage>);
-//         Self {
-//             event_stream: ::futures::stream::select(data_event_stream, control_event_stream),
-//             _marker: PhantomData,
-//         }
-//     }
-// }
-//
-// impl<TMessage> Stream for NetworkEvents<TMessage> {
-//     type Item = Event<TMessage>;
-//
-//     fn poll_next(self: Pin<&mut Self>, context: &mut Context) -> Poll<Option<Self::Item>> {
-//         self.project().event_stream.poll_next(context)
-//     }
-//
-//     fn size_hint(&self) -> (usize, Option<usize>) {
-//         self.event_stream.size_hint()
-//     }
-// }
-//
-// /// Deserialize inbound direct send and rpc messages into the application `TMessage`
-// /// type, logging and dropping messages that fail to deserialize.
-// fn peer_mgr_notif_to_event<TMessage: Message>(
-//     notif: PeerManagerNotification,
-// ) -> future::Ready<Option<Event<TMessage>>> {
-//     let maybe_event = match notif {
-//         PeerManagerNotification::RecvRpc(peer_id, rpc_req) => {
-//             request_to_network_event(peer_id, &rpc_req)
-//                 .map(|msg| Event::RpcRequest(peer_id, msg, rpc_req.protocol_id, rpc_req.res_tx))
-//         },
-//         PeerManagerNotification::RecvMessage(peer_id, request) => {
-//             request_to_network_event(peer_id, &request).map(|msg| Event::Message(peer_id, msg))
-//         },
-//     };
-//     future::ready(maybe_event)
-// }
-//
-// /// Converts a `SerializedRequest` into a network `Event` for sending to other nodes
-// fn request_to_network_event<TMessage: Message, Request: SerializedRequest>(
-//     peer_id: PeerId,
-//     request: &Request,
-// ) -> Option<TMessage> {
-//     match request.to_message() {
-//         Ok(msg) => Some(msg),
-//         Err(err) => {
-//             let data = &request.data();
-//             warn!(
-//                 SecurityEvent::InvalidNetworkEvent,
-//                 error = ?err,
-//                 remote_peer_id = peer_id.short_str(),
-//                 protocol_id = request.protocol_id(),
-//                 data_prefix = hex::encode(&data[..min(16, data.len())]),
-//             );
-//             None
-//         },
-//     }
-// }
-//
-// fn control_msg_to_event<TMessage>(notif: ConnectionNotification) -> Event<TMessage> {
-//     match notif {
-//         ConnectionNotification::NewPeer(metadata, _context) => Event::NewPeer(metadata),
-//         ConnectionNotification::LostPeer(metadata, _context, _reason) => Event::LostPeer(metadata),
-//     }
-// }
-//
-// impl<TMessage> FusedStream for NetworkEvents<TMessage> {
-//     fn is_terminated(&self) -> bool {
-//         self.event_stream.is_terminated()
-//     }
-// }
-
-//
-// pub struct CachedPeerConnections {
-//     peer_senders: Arc<OutboundPeerConnections>,
-//
-//     peers: RwLock<HashMap<PeerNetworkId, PeerStub>>,
-//     peers_generation: AtomicU32,
-// }
-//
-// impl CachedPeerConnections {
-//     fn new(peer_senders: Arc<OutboundPeerConnections>) -> Self {
-//         Self{
-//             peer_senders,
-//             peers: RwLock::new(HashMap::new()),
-//             peers_generation: AtomicU32::new(0),
-//         }
-//     }
-//
-//     fn update_peers(&self) {
-//         let cur_generation = self.peers_generation.load(Ordering::SeqCst);
-//         if let Some((new_peers, new_generation)) = self.peer_senders.get_generational(cur_generation) {
-//             let mut writer = self.peers.write().unwrap();
-//             self.peers_generation.store(new_generation, Ordering::SeqCst);
-//             writer.clear();
-//             writer.extend(new_peers);
-//             // writer.deref_mut().from_iter(new_peers);
-//         }
-//     }
-// }
-//
-// impl Clone for CachedPeerConnections {
-//     fn clone(&self) -> Self {
-//         Self {
-//             peer_senders: self.peer_senders.clone(),
-//             peers: RwLock::new(HashMap::new()),
-//             peers_generation: AtomicU32::new(0),
-//         }
-//     }
-// }
-
 /// `NetworkSender` is the generic interface from upper network applications to
 /// the lower network layer. It provides the full API for network applications,
 /// including sending direct-send messages, sending rpc requests, as well as
 /// dialing or disconnecting from peers and updating the list of accepted public
 /// keys.
-///
-/// `NetworkSender` is in fact a thin wrapper around a `PeerManagerRequestSender`, which in turn is
-/// a thin wrapper on `aptos_channel::Sender<(PeerId, ProtocolId), PeerManagerRequest>`,
-/// mostly focused on providing a more ergonomic API. However, network applications will usually
-/// provide their own thin wrapper around `NetworkSender` that narrows the API to the specific
-/// interface they need.
-///
-/// Provide Protobuf wrapper over `[peer_manager::PeerManagerRequestSender]`
 #[derive(Debug)]
 pub struct NetworkSender<TMessage> {
     // TODO: rebuild NetworkSender around single-level network::framework2
@@ -658,6 +401,7 @@ pub struct NetworkSender<TMessage> {
 
     peers: RwLock<HashMap<PeerNetworkId, PeerStub>>,
     peers_generation: AtomicU32,
+    role_type: RoleType, // for metrics
     _marker: PhantomData<TMessage>,
 }
 
@@ -666,6 +410,7 @@ pub trait NewNetworkSender {
     fn new(
         network_id: NetworkId,
         peer_senders: Arc<OutboundPeerConnections>,
+        role_type: RoleType,
     ) -> Self;
 }
 
@@ -673,12 +418,14 @@ impl<TMessage> NewNetworkSender for NetworkSender<TMessage> {
     fn new(
         network_id: NetworkId,
         peer_senders: Arc<OutboundPeerConnections>,
+        role_type: RoleType,
     ) -> Self {
         Self {
             network_id,
             peer_senders,
             peers: RwLock::new(HashMap::new()),
             peers_generation: AtomicU32::new(0),
+            role_type,
             _marker: PhantomData,
         }
     }
@@ -694,6 +441,7 @@ impl<TMessage> Clone for NetworkSender<TMessage> {
             peer_senders: self.peer_senders.clone(),
             peers: RwLock::new(peers),
             peers_generation: AtomicU32::new(peers_generation),
+            role_type: self.role_type,
             _marker: PhantomData,
         }
     }
@@ -828,7 +576,9 @@ impl<TMessage: Message> NetworkSender<TMessage> {
         req_msg: TMessage,
         timeout: Duration,
     ) -> Result<TMessage, RpcError> {
-        let deadline = tokio::time::Instant::now().add(timeout);
+        // TODO: plumb through a TimeService to here
+        let now = tokio::time::Instant::now();
+        let deadline = now.add(timeout);
         let peer_network_id = PeerNetworkId::new(self.network_id, recipient);
         self.update_peers();
         // This holds a read-lock on the application's local cache of the peer map for a little while.
@@ -852,7 +602,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                         });
 
                         let (sender, receiver) = oneshot::channel();
-                        peer.open_outbound_rpc.insert(request_id, sender, protocol, deadline);
+                        peer.open_outbound_rpc.insert(request_id, sender, protocol, now, deadline, self.network_id, self.role_type);
                         match peer.sender.try_send(msg) {
                             Ok(_) => {
                                 receiver
@@ -892,7 +642,8 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                 Ok(content_result) => match content_result {
                     Ok(bytes) => {
                         let wat = protocol.from_bytes(bytes.as_ref())?;
-                        info!("app_int rpc reply good {} bytes", bytes.len());
+                        // info!("app_int rpc reply good {} bytes", bytes.len());
+                        // TODO: counter? separate from aptos_network_rpc_{messages,bytes} and aptos_network_outbound_rpc_request_latency_seconds? do we need to prove application-visible time?
                         return Ok(wat);
                     }
                     Err(err) => {

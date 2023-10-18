@@ -5,8 +5,8 @@ use std::sync::Arc;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio::runtime::Runtime;
-use aptos_config::config::{NetworkConfig, NodeConfig};
-use aptos_config::network_id::NetworkId;
+use aptos_config::config::{NetworkConfig, NodeConfig, RoleType};
+use aptos_config::network_id::{NetworkContext, NetworkId};
 use aptos_consensus::network_interface::ConsensusMsg;
 use aptos_network2::protocols::wire::handshake::v1::ProtocolId;
 use aptos_network2_builder::NetworkBuilder;
@@ -43,10 +43,12 @@ impl<T: MessageTrait> ApplicationNetworkInterfaces<T> {
         network_ids: Vec<NetworkId>,
         peer_senders: Arc<OutboundPeerConnections>,
         label: &str,
+        contexts: Arc<BTreeMap<NetworkId, NetworkContext>>,
     ) -> Self {
         let mut network_senders = HashMap::new();
         for network_id in network_ids.into_iter() {
-            network_senders.insert(network_id, NetworkSender::new(network_id, peer_senders.clone()));
+            let role_type = contexts.get(&network_id).unwrap().role();
+            network_senders.insert(network_id, NetworkSender::new(network_id, peer_senders.clone(), role_type));
         }
         let network_client = NetworkClient::new(
             direct_send_protocols_and_preferences,
@@ -54,7 +56,7 @@ impl<T: MessageTrait> ApplicationNetworkInterfaces<T> {
             network_senders,
             peers_and_metadata,
         );
-        let network_events = NetworkEvents::new(network_source, peer_senders.clone(), label);
+        let network_events = NetworkEvents::new(network_source, peer_senders.clone(), label, contexts);
         Self {
             network_client,
             network_events,
@@ -74,18 +76,28 @@ fn has_validator_network(node_config: &NodeConfig) -> bool {
     return false;
 }
 
+/// The read-only-ish parts of setting up a new application code module
+/// (e.g. mempool, consensus, etc)
+#[derive(Clone)]
+pub struct AppSetupContext {
+    pub node_config: NodeConfig,
+    pub peers_and_metadata: Arc<PeersAndMetadata>,
+    pub peer_senders: Arc<OutboundPeerConnections>,
+    pub contexts: Arc<BTreeMap<NetworkId, NetworkContext>>,
+}
+
 fn build_network_connections<T: MessageTrait>(
+    setup: &AppSetupContext,
     direct_send_protocols : Vec<ProtocolId>,
     rpc_protocols : Vec<ProtocolId>,
     queue_size: usize,
     counter_label: &str,
-    peers_and_metadata: Arc<PeersAndMetadata>,
     apps: &mut ApplicationCollector,
-    network_ids: Vec<NetworkId>,
-    peer_senders: Arc<OutboundPeerConnections>,
 ) -> ApplicationNetworkInterfaces<T> {
     // TODO: pack a map {ProtocolId: Receiver, ...} and allow app code to unpack that out of NetworkSource
     let mut receivers = vec![];
+
+    let network_ids = extract_network_ids(&setup.node_config);
 
     for protocol_id in direct_send_protocols.iter() {
         let (app_con, receiver) = ApplicationConnections::build(*protocol_id, queue_size, counter_label);
@@ -108,92 +120,77 @@ fn build_network_connections<T: MessageTrait>(
     ApplicationNetworkInterfaces::new(
         direct_send_protocols,
         rpc_protocols,
-        peers_and_metadata,
+        setup.peers_and_metadata.clone(),
         network_source,
         network_ids,
-        peer_senders,
+        setup.peer_senders.clone(),
         counter_label,
+        setup.contexts.clone(),
     )
 }
 
-// TODO?: bundle up (node_config, peers_and_metadata, apps, peer_senders) into a network connection builder object?
-
 pub fn consensus_network_connections(
-    node_config: &NodeConfig,
-    peers_and_metadata: Arc<PeersAndMetadata>,
     apps: &mut ApplicationCollector,
-    peer_senders: Arc<OutboundPeerConnections>,
+    setup: &AppSetupContext,
 ) -> Option<ApplicationNetworkInterfaces<ConsensusMsg>> {
-    if !has_validator_network(node_config) {
+    if !has_validator_network(&setup.node_config) {
         info!("app_int not a validator, no consensus");
         return None;
     }
 
     let direct_send_protocols: Vec<ProtocolId> = aptos_consensus::network_interface::DIRECT_SEND.into();
     let rpc_protocols: Vec<ProtocolId> = aptos_consensus::network_interface::RPC.into();
-    let queue_size = node_config.consensus.max_network_channel_size;
+    let queue_size = setup.node_config.consensus.max_network_channel_size;
     let counter_label = "consensus";
-    let network_ids = extract_network_ids(node_config);
 
-    Some(build_network_connections(direct_send_protocols, rpc_protocols, queue_size, counter_label, peers_and_metadata, apps, network_ids, peer_senders))
+    Some(build_network_connections(setup, direct_send_protocols, rpc_protocols, queue_size, counter_label, apps))
 }
 
 pub fn peer_monitoring_network_connections(
-    node_config: &NodeConfig,
-    peers_and_metadata: Arc<PeersAndMetadata>,
     apps: &mut ApplicationCollector,
-    peer_senders: Arc<OutboundPeerConnections>,
+    setup: &AppSetupContext,
 ) -> ApplicationNetworkInterfaces<PeerMonitoringServiceMessage> {
     let direct_send_protocols = Vec::<ProtocolId>::new();
     let rpc_protocols = vec![ProtocolId::PeerMonitoringServiceRpc];
-    let queue_size = node_config.peer_monitoring_service.max_network_channel_size as usize;
+    let queue_size = setup.node_config.peer_monitoring_service.max_network_channel_size as usize;
     let counter_label = "peer_monitoring";
-    let network_ids = extract_network_ids(node_config);
 
-    build_network_connections(direct_send_protocols, rpc_protocols, queue_size, counter_label, peers_and_metadata, apps, network_ids, peer_senders)
+    build_network_connections(setup, direct_send_protocols, rpc_protocols, queue_size, counter_label, apps)
 }
 
 pub fn storage_service_network_connections(
-    node_config: &NodeConfig,
-    peers_and_metadata: Arc<PeersAndMetadata>,
     apps: &mut ApplicationCollector,
-    peer_senders: Arc<OutboundPeerConnections>,
+    setup: &AppSetupContext,
 ) -> ApplicationNetworkInterfaces<StorageServiceMessage> {
     let direct_send_protocols = Vec::<ProtocolId>::new();
     let rpc_protocols = vec![ProtocolId::StorageServiceRpc];
-    let queue_size = node_config.state_sync.storage_service.max_network_channel_size as usize;
+    let queue_size = setup.node_config.state_sync.storage_service.max_network_channel_size as usize;
     let counter_label = "storage_service";
-    let network_ids = extract_network_ids(node_config);
 
-    build_network_connections(direct_send_protocols, rpc_protocols, queue_size, counter_label, peers_and_metadata, apps, network_ids, peer_senders)
+    build_network_connections(setup, direct_send_protocols, rpc_protocols, queue_size, counter_label, apps)
 }
 
 pub fn mempool_network_connections(
-    node_config: &NodeConfig,
-    peers_and_metadata: Arc<PeersAndMetadata>,
     apps: &mut ApplicationCollector,
-    peer_senders: Arc<OutboundPeerConnections>,
+    setup: &AppSetupContext,
 ) -> ApplicationNetworkInterfaces<MempoolSyncMsg> {
     let direct_send_protocols = vec![ProtocolId::MempoolDirectSend];
     let rpc_protocols = vec![];
-    let queue_size = node_config.mempool.max_network_channel_size;
+    let queue_size = setup.node_config.mempool.max_network_channel_size;
     let counter_label = "mempool";
-    let network_ids = extract_network_ids(node_config);
 
-    build_network_connections(direct_send_protocols, rpc_protocols, queue_size, counter_label, peers_and_metadata, apps, network_ids, peer_senders)
+    build_network_connections(setup, direct_send_protocols, rpc_protocols, queue_size, counter_label, apps)
 }
 
 pub fn netbench_network_connections(
-    node_config: &NodeConfig,
-    peers_and_metadata: Arc<PeersAndMetadata>,
     apps: &mut ApplicationCollector,
-    peer_senders: Arc<OutboundPeerConnections>,
+    setup: &AppSetupContext,
 ) -> Option<ApplicationNetworkInterfaces<NetbenchMessage>> {
-    let cfg = match node_config.netbench {
+    let cfg = match setup.node_config.netbench {
         None => {return None;},
         Some(x) => {x},
     } ;
-    if node_config.netbench.is_none() {
+    if setup.node_config.netbench.is_none() {
         return None;
     }
 
@@ -201,9 +198,8 @@ pub fn netbench_network_connections(
     let rpc_protocols = vec![ProtocolId::NetbenchRpc];
     let queue_size = cfg.max_network_channel_size as usize;
     let counter_label = "netbench";
-    let network_ids = extract_network_ids(node_config);
 
-    Some(build_network_connections(direct_send_protocols, rpc_protocols, queue_size, counter_label, peers_and_metadata, apps, network_ids, peer_senders))
+    Some(build_network_connections(setup, direct_send_protocols, rpc_protocols, queue_size, counter_label, apps))
 }
 /// Creates a network runtime for the given network config
 pub fn create_network_runtime(network_config: &NetworkConfig) -> Runtime {
@@ -233,10 +229,6 @@ fn extract_network_configs(node_config: &NodeConfig) -> Vec<NetworkConfig> {
 
 /// Extracts all network ids from the given node config
 fn extract_network_ids(node_config: &NodeConfig) -> Vec<NetworkId> {
-    // extract_network_configs(node_config)
-    //     .into_iter()
-    //     .map(|network_config| network_config.network_id)
-    //     .collect()
     let mut out = vec![];
     for network_config in node_config.full_node_networks.iter() {
         out.push(network_config.network_id);

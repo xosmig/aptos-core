@@ -39,8 +39,10 @@ use std::{
     },
     thread,
 };
+use std::collections::BTreeMap;
 use tokio::runtime::Runtime;
 use aptos_network2::protocols::network::OutboundPeerConnections;
+use crate::network2::AppSetupContext;
 
 const EPOCH_LENGTH_SECS: u64 = 60;
 
@@ -577,11 +579,26 @@ pub fn setup_environment_and_start_node(
 
     let mut apps = ApplicationCollector::new();
 
-    let peer_monitoring_service_network_interfaces = network2::peer_monitoring_network_connections(&node_config, peers_and_metadata.clone(), &mut apps, peer_senders.clone());
-    let storage_service_network_interfaces = network2::storage_service_network_connections(&node_config, peers_and_metadata.clone(), &mut apps, peer_senders.clone());
-    let mempool_network_interfaces = network2::mempool_network_connections(&node_config, peers_and_metadata.clone(), &mut apps, peer_senders.clone());
-    let consensus_network_interfaces = network2::consensus_network_connections(&node_config, peers_and_metadata.clone(), &mut apps, peer_senders.clone());
-    let netbench_network_interfaces = network2::netbench_network_connections(&node_config, peers_and_metadata.clone(), &mut apps, peer_senders.clone());
+    // create map to lookup NetworkContext by NetworkId
+    let mut contexts = BTreeMap::new();
+    for network in networks.iter() {
+        let network_context = network.network_context();
+        contexts.insert(network_context.network_id(), network_context);
+    }
+    let contexts = Arc::new(contexts);
+
+    let app_setup = AppSetupContext{
+        node_config: node_config.clone(),
+        peers_and_metadata: peers_and_metadata.clone(),
+        peer_senders,
+        contexts,
+    };
+
+    let peer_monitoring_service_network_interfaces = network2::peer_monitoring_network_connections(&mut apps, &app_setup);
+    let storage_service_network_interfaces = network2::storage_service_network_connections(&mut apps, &app_setup);
+    let mempool_network_interfaces = network2::mempool_network_connections(&mut apps, &app_setup);
+    let consensus_network_interfaces = network2::consensus_network_connections(&mut apps, &app_setup);
+    let netbench_network_interfaces = network2::netbench_network_connections(&mut apps, &app_setup);
 
     for (protocol_id, ac) in apps.iter() {
         info!("app_int setup {} -> {} {:?}", protocol_id.as_str(), ac.label, &ac.sender);

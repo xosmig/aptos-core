@@ -3,6 +3,7 @@
 pub mod application;
 // pub mod builder;
 pub mod connectivity_manager;
+pub mod counters;
 pub mod error;
 pub mod logging;
 pub mod noise;

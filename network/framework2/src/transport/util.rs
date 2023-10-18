@@ -6,7 +6,7 @@ use std::io::{Error, ErrorKind};
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use aptos_config::config::NetworkConfig;
-use aptos_config::network_id::PeerNetworkId;
+use aptos_config::network_id::{NetworkContext, PeerNetworkId};
 use aptos_logger::{info, warn};
 #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
 use aptos_netcore::transport::memory::MemoryTransport;
@@ -37,14 +37,15 @@ impl AptosNetTransportActual {
         handle: Handle,
         peers_and_metadata: Arc<PeersAndMetadata>,
         peer_senders: Arc<OutboundPeerConnections>,
+        network_context: NetworkContext,
     ) -> io::Result<()> {
         match self {
             AptosNetTransportActual::Tcp(tt) => {
-                connect_outbound(tt, remote_peer_network_id, network_address, config, apps, handle.clone(), peers_and_metadata, peer_senders).await
+                connect_outbound(tt, remote_peer_network_id, network_address, config, apps, handle.clone(), peers_and_metadata, peer_senders, network_context).await
             }
             #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
             AptosNetTransportActual::Memory(tt) => {
-                connect_outbound(tt, remote_peer_network_id, network_address, config, apps, handle.clone(), peers_and_metadata, peer_senders).await
+                connect_outbound(tt, remote_peer_network_id, network_address, config, apps, handle.clone(), peers_and_metadata, peer_senders, network_context).await
             }
         }
     }
@@ -60,6 +61,7 @@ async fn connect_outbound<TTransport, TSocket>(
     handle: Handle,
     peers_and_metadata: Arc<PeersAndMetadata>,
     peer_senders: Arc<OutboundPeerConnections>,
+    network_context: NetworkContext,
 ) -> io::Result<()>
     where
         TSocket: crate::transport::TSocket,
@@ -104,6 +106,7 @@ async fn connect_outbound<TTransport, TSocket>(
         remote_peer_network_id,
         peers_and_metadata,
         peer_senders,
+        network_context,
     );
     Ok(())
 }

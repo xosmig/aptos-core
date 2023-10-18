@@ -687,6 +687,7 @@ where
                         handle,
                         peers_and_metadata,
                         peer_senders,
+                        network_context,
                     ).await;
                     match result {
                         Ok(_) => {

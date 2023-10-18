@@ -502,7 +502,6 @@ impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
                         continue;
                     }
                     let remote_peer_network_id = PeerNetworkId::new(self.network_context.network_id(), connection.metadata.remote_peer_id);
-                    // TODO: how do we shut down a peer on disconnect?
                     peer::start_peer(
                         &self.config,
                         connection.socket,
@@ -512,9 +511,8 @@ impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
                         remote_peer_network_id,
                         self.peers_and_metadata.clone(),
                         self.peer_senders.clone(),
+                        self.network_context,
                     );
-                    // TODO: peer connection counter
-                    // TODO: peer connection event
                 }
                 Err(err) => {
                     error!("listener_thread {:?} connection post-processing failed (continuing): {:?}", self.config.network_id, err);

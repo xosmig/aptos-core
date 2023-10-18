@@ -14,10 +14,10 @@ use futures::StreamExt;
 use futures::SinkExt;
 use futures::stream::Fuse;
 use tokio::sync::mpsc::error::{SendError, TryRecvError};
-use aptos_config::config::NetworkConfig;
-use aptos_config::network_id::{NetworkId, PeerNetworkId};
+use aptos_config::config::{NetworkConfig, RoleType};
+use aptos_config::network_id::{NetworkContext, NetworkId, PeerNetworkId};
 use aptos_logger::{error, info, warn};
-use aptos_metrics_core::{IntCounter, IntCounterVec, register_int_counter_vec};
+use aptos_metrics_core::{Histogram, HistogramVec, IntCounter, IntCounterVec, register_histogram_vec, register_int_counter_vec};
 use crate::application::ApplicationCollector;
 use crate::application::interface::{Closer, OpenRpcRequestState, OutboundRpcMatcher};
 use crate::application::storage::PeersAndMetadata;
@@ -26,6 +26,7 @@ use crate::protocols::network::{OutboundPeerConnections, PeerStub, ReceivedMessa
 use crate::protocols::stream::{StreamFragment, StreamHeader, StreamMessage};
 use crate::transport::ConnectionMetadata;
 use once_cell::sync::Lazy;
+use crate::counters;
 
 pub fn start_peer<TSocket>(
     config: &NetworkConfig,
@@ -36,10 +37,12 @@ pub fn start_peer<TSocket>(
     remote_peer_network_id: PeerNetworkId,
     peers_and_metadata: Arc<PeersAndMetadata>,
     peer_senders: Arc<OutboundPeerConnections>,
+    network_context: NetworkContext,
 )
 where
     TSocket: crate::transport::TSocket
 {
+    let role_type = network_context.role();
     let (sender, to_send) = tokio::sync::mpsc::channel::<NetworkMessage>(config.network_channel_size);
     let open_outbound_rpc = OutboundRpcMatcher::new();
     let max_frame_size = config.max_frame_size;
@@ -51,8 +54,9 @@ where
     let network_id = remote_peer_network_id.network_id();
     handle.spawn(open_outbound_rpc.clone().cleanup(Duration::from_millis(100), closed.clone()));
     handle.spawn(writer_task(network_id, to_send, writer, max_frame_size, closed.clone()));
-    handle.spawn(reader_task(reader, apps, remote_peer_network_id, open_outbound_rpc.clone(), handle.clone(), closed.clone()));
+    handle.spawn(reader_task(reader, apps, remote_peer_network_id, open_outbound_rpc.clone(), handle.clone(), closed.clone(), role_type));
     let stub = PeerStub::new(sender, open_outbound_rpc);
+    // TODO: peer connection counter, unless PeersAndMetadata is doing it
     peers_and_metadata.insert_connection_metadata(remote_peer_network_id, connection_metadata.clone());
     peer_senders.insert(remote_peer_network_id, stub);
     handle.spawn(peer_cleanup_task(remote_peer_network_id, connection_metadata, closed, peers_and_metadata, peer_senders));
@@ -285,17 +289,21 @@ async fn writer_task(
     info!("peer writer exited")
 }
 
-async fn complete_rpc(sender: oneshot::Sender<Result<Bytes,RpcError>>, nmsg: NetworkMessage) {
+async fn complete_rpc(rpc_state: OpenRpcRequestState, nmsg: NetworkMessage) {
     if let NetworkMessage::RpcResponse(response) = nmsg {
         let blob = response.raw_response;
-        match sender.send(Ok(blob.into())) {
+        let now = tokio::time::Instant::now(); // TODO: use a TimeService
+        let dt = now.duration_since(rpc_state.started);
+        let data_len = blob.len() as u64;
+        match rpc_state.sender.send(Ok(blob.into())) {
             Ok(_) => {
-                // TODO: counter rpc completion to app
-                info!("read_thread rpc completion delivered")
+                counters::rpc_messages(rpc_state.network_id, rpc_state.protocol_id.as_str(), rpc_state.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "delivered").inc();
+                counters::rpc_bytes(rpc_state.network_id, rpc_state.protocol_id.as_str(), rpc_state.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "delivered").inc_by(data_len);
+                counters::outbound_rpc_request_latency(rpc_state.role_type, rpc_state.network_id, rpc_state.protocol_id).observe(dt.as_secs_f64());
             }
             Err(err) => {
-                // TODO: counter rpc completion dropped at app
-                warn!("read_thread rpc completion dropped at app")
+                counters::rpc_messages(rpc_state.network_id, rpc_state.protocol_id.as_str(), rpc_state.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "declined").inc();
+                counters::rpc_bytes(rpc_state.network_id, rpc_state.protocol_id.as_str(), rpc_state.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "declined").inc_by(data_len);
             }
         }
     } else {
@@ -309,6 +317,7 @@ struct ReaderContext<ReadThing: AsyncRead + Unpin + Send> {
     remote_peer_network_id: PeerNetworkId,
     open_outbound_rpc: OutboundRpcMatcher,
     handle: Handle,
+    role_type: RoleType, // for metrics
 
     // defragment context
     current_stream_id : u32,
@@ -324,6 +333,7 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
         remote_peer_network_id: PeerNetworkId,
         open_outbound_rpc: OutboundRpcMatcher,
         handle: Handle,
+        role_type: RoleType,
     ) -> Self {
         Self {
             reader,
@@ -331,6 +341,7 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
             remote_peer_network_id,
             open_outbound_rpc,
             handle,
+            role_type,
 
             current_stream_id: 0,
             large_message: None,
@@ -358,7 +369,7 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
                     Ok(_) => {
                         peer_read_messages(&self.remote_peer_network_id.network_id(), &protocol_id).inc();
                         peer_read_bytes(&self.remote_peer_network_id.network_id(), &protocol_id).inc_by(data_len);
-                        info!("read_thread forwarded to app {} {}", app.label, protocol_id.as_str());
+                        // info!("read_thread forwarded to app {} {}", app.label, protocol_id.as_str());
                     }
                     Err(err) => {
                         // TODO: counter
@@ -378,24 +389,24 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
             }
             NetworkMessage::RpcRequest(request) => {
                 let protocol_id = request.protocol_id;
-                info!("read_thread rpc_req {} bytes, prot={} id={}", request.raw_request.len(), protocol_id, request.request_id);
                 self.forward(protocol_id, nmsg).await;
             }
             NetworkMessage::RpcResponse(response) => {
                 match self.open_outbound_rpc.remove(&response.request_id) {
                     None => {
-                        // TODO: counter rpc response dropped, no receiver
-                        warn!("read_thread rpc response no local match {}", response.request_id);
+                        let data_len = response.raw_response.len() as u64;
+                        // rpc_messages(&self.remote_peer_network_id.network_id(), "unk", RESPONSE_LABEL, INBOUND_LABEL, "miss").inc();
+                        // rpc_bytes(&self.remote_peer_network_id.network_id(), "unk", RESPONSE_LABEL, INBOUND_LABEL, "miss").inc_by(data_len);
+                        counters::rpc_messages(self.remote_peer_network_id.network_id(), "unk", self.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "miss").inc();
+                        counters::rpc_bytes(self.remote_peer_network_id.network_id(), "unk", self.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "miss").inc_by(data_len);
                     }
                     Some(rpc_state) => {
-                        info!("read_thread rpc response id={}", response.request_id);
-                        self.handle.spawn(complete_rpc(rpc_state.sender, nmsg));//response.raw_response));
+                        self.handle.spawn(complete_rpc(rpc_state, nmsg));//response.raw_response));
                     }
                 }
             }
             NetworkMessage::DirectSendMsg(message) => {
                 let protocol_id = message.protocol_id;
-                info!("read_thread dm {} bytes, prot={}", message.raw_msg.len(), protocol_id);
                 self.forward(protocol_id, nmsg).await;
             }
         }
@@ -502,8 +513,9 @@ async fn reader_task(
     open_outbound_rpc: OutboundRpcMatcher,
     handle: Handle,
     closed: Closer,
+    role_type: RoleType,
 ) {
-    let rc = ReaderContext::new(reader, apps, remote_peer_network_id, open_outbound_rpc, handle);
+    let rc = ReaderContext::new(reader, apps, remote_peer_network_id, open_outbound_rpc, handle, role_type);
     rc.run(closed).await;
     info!("peer {} reader finished", remote_peer_network_id);
 }
