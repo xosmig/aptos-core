@@ -65,13 +65,6 @@ pub(crate) async fn coordinator<NetworkClient, TransactionValidator, ConfigProvi
         LogEvent::Start
     ));
 
-    // Transform events to also include the network id
-    // let network_events: Vec<_> = network_service_events
-    //     .into_network_and_events()
-    //     .into_iter()
-    //     .map(|(network_id, events)| events.map(move |event| (network_id, event)))
-    //     .collect();
-    // let mut events = select_all(network_events).fuse();
     let mut scheduled_broadcasts = FuturesUnordered::new();
     let mut update_peers_interval =
         tokio::time::interval(Duration::from_millis(peer_update_interval_ms));
@@ -261,19 +254,12 @@ async fn handle_mempool_reconfig_event<NetworkClient, TransactionValidator, Conf
 async fn handle_network_event<NetworkClient, TransactionValidator>(
     bounded_executor: &BoundedExecutor,
     smp: &mut SharedMempool<NetworkClient, TransactionValidator>,
-    // network_id: NetworkId,
     event: Event<MempoolSyncMsg>,
 ) where
     NetworkClient: NetworkClientInterface<MempoolSyncMsg> + 'static,
     TransactionValidator: TransactionValidation + 'static,
 {
     match event {
-        // Event::NewPeer(_) => {
-        //     // TODO: remove Event
-        // },
-        // Event::LostPeer(_) => {
-        //     // TODO: remove Event
-        // },
         Event::Message(peer_network_id, msg) => {
             counters::shared_mempool_event_inc("message");
             match msg {
