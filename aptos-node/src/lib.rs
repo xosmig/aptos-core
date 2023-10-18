@@ -176,6 +176,7 @@ pub struct AptosHandle {
     _peer_monitoring_service_runtime: Runtime,
     _state_sync_runtimes: StateSyncRuntimes,
     _telemetry_runtime: Option<Runtime>,
+    _netbench_runtime: Option<Runtime>,
 }
 
 /// Start an Aptos node
@@ -580,6 +581,7 @@ pub fn setup_environment_and_start_node(
     let storage_service_network_interfaces = network2::storage_service_network_connections(&node_config, peers_and_metadata.clone(), &mut apps, peer_senders.clone());
     let mempool_network_interfaces = network2::mempool_network_connections(&node_config, peers_and_metadata.clone(), &mut apps, peer_senders.clone());
     let consensus_network_interfaces = network2::consensus_network_connections(&node_config, peers_and_metadata.clone(), &mut apps, peer_senders.clone());
+    let netbench_network_interfaces = network2::netbench_network_connections(&node_config, peers_and_metadata.clone(), &mut apps, peer_senders.clone());
 
     for (protocol_id, ac) in apps.iter() {
         info!("app_int setup {} -> {} {:?}", protocol_id.as_str(), ac.label, &ac.sender);
@@ -648,6 +650,18 @@ pub fn setup_environment_and_start_node(
         )
     });
 
+    let netbench_runtime = if let Some(netbench_interfaces) = netbench_network_interfaces {
+        let netbench_service_threads = node_config.netbench.unwrap().netbench_service_threads;
+        let netbench_runtime =
+            aptos_runtimes::spawn_named_runtime("benchmark".into(), netbench_service_threads);
+        services::start_netbench_service(&node_config, netbench_interfaces, netbench_runtime.handle());
+        info!("netbench initialized");
+        Some(netbench_runtime)
+    } else {
+        info!("netbench disabled");
+        None
+    };
+
     Ok(AptosHandle {
         _api_runtime: api_runtime,
         _backup_runtime: backup_service,
@@ -659,6 +673,7 @@ pub fn setup_environment_and_start_node(
         _peer_monitoring_service_runtime: peer_monitoring_service_runtime,
         _state_sync_runtimes: state_sync_runtimes,
         _telemetry_runtime: telemetry_runtime,
+        _netbench_runtime: netbench_runtime,
     })
 }
 

@@ -202,6 +202,7 @@ pub fn start_netbench_service(
         network_client,
         network_interfaces.network_events,
         TimeService::real(),
+        runtime.clone(),
     ));
 }
 

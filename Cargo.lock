@@ -934,6 +934,7 @@ dependencies = [
  "aptos-logger",
  "aptos-metrics-core",
  "aptos-netcore",
+ "aptos-network",
  "aptos-network2",
  "aptos-peer-monitoring-service-types",
  "aptos-storage-interface",

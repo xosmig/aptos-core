@@ -22,6 +22,7 @@ use aptos_peer_monitoring_service_types::PeerMonitoringServiceMessage;
 use aptos_storage_service_types::StorageServiceMessage;
 use aptos_mempool::MempoolSyncMsg;
 use aptos_network2::application::{ApplicationCollector, ApplicationConnections};
+use aptos_network_benchmark::NetbenchMessage;
 
 pub trait MessageTrait : Clone + DeserializeOwned + Serialize + Send + Sync + Unpin + 'static {}
 impl<T: Clone + DeserializeOwned + Serialize + Send + Sync + Unpin + 'static> MessageTrait for T {}
@@ -182,6 +183,28 @@ pub fn mempool_network_connections(
     build_network_connections(direct_send_protocols, rpc_protocols, queue_size, counter_label, peers_and_metadata, apps, network_ids, peer_senders)
 }
 
+pub fn netbench_network_connections(
+    node_config: &NodeConfig,
+    peers_and_metadata: Arc<PeersAndMetadata>,
+    apps: &mut ApplicationCollector,
+    peer_senders: Arc<OutboundPeerConnections>,
+) -> Option<ApplicationNetworkInterfaces<NetbenchMessage>> {
+    let cfg = match node_config.netbench {
+        None => {return None;},
+        Some(x) => {x},
+    } ;
+    if node_config.netbench.is_none() {
+        return None;
+    }
+
+    let direct_send_protocols = vec![ProtocolId::NetbenchDirectSend];
+    let rpc_protocols = vec![ProtocolId::NetbenchRpc];
+    let queue_size = cfg.max_network_channel_size as usize;
+    let counter_label = "netbench";
+    let network_ids = extract_network_ids(node_config);
+
+    Some(build_network_connections(direct_send_protocols, rpc_protocols, queue_size, counter_label, peers_and_metadata, apps, network_ids, peer_senders))
+}
 /// Creates a network runtime for the given network config
 pub fn create_network_runtime(network_config: &NetworkConfig) -> Runtime {
     let network_id = network_config.network_id;

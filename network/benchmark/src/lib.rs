@@ -26,7 +26,11 @@ use once_cell::sync::Lazy;
 use rand::{rngs::OsRng, Rng};
 use serde::{Deserialize, Serialize};
 use std::{ops::DerefMut, sync::Arc, time::Duration};
+use std::collections::HashMap;
 use tokio::{runtime::Handle, select, sync::RwLock};
+use aptos_network2::application::error::Error;
+use aptos_network2::application::metadata::PeerMetadata;
+use aptos_network2::application::storage::ConnectionNotification;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[allow(clippy::large_enum_variant)]
@@ -180,19 +184,17 @@ async fn handle_rpc(
 
 /// handle work split out by source_loop()
 async fn handler_task(
-    node_config: NodeConfig,
     network_client: NetworkClient<NetbenchMessage>,
     work_rx: async_channel::Receiver<Event<NetbenchMessage>>,
     time_service: TimeService,
     shared: Arc<RwLock<NetbenchSharedState>>,
 ) {
-    let config = node_config.netbench.unwrap();
-    let peer_events = network_client.peers_and_metadata.subscribe();
     loop {
         let event = match work_rx.recv().await {
             Ok(v) => v,
-            Err(_) => {
+            Err(err) => {
                 // RecvError means source was closed, we're done here.
+                info!("netbench handler_task exit {}", err);
                 return;
             },
         };
@@ -219,30 +221,6 @@ async fn handler_task(
                 )
                 .await;
             },
-            // TODO: rebuild around subscription to PeersAndMetadata
-            // Event::NewPeer(wat) => {
-            //     if config.enable_direct_send_testing {
-            //         Handle::current().spawn(direct_sender(
-            //             node_config.clone(),
-            //             network_client.clone(),
-            //             time_service.clone(),
-            //             wat.network_id,
-            //             wat.remote_peer_id,
-            //             shared.clone(),
-            //         ));
-            //     }
-            //     if config.enable_rpc_testing {
-            //         Handle::current().spawn(rpc_sender(
-            //             node_config.clone(),
-            //             network_client.clone(),
-            //             time_service.clone(),
-            //             wat.network_id,
-            //             wat.remote_peer_id,
-            //             shared.clone(),
-            //         ));
-            //     }
-            // },
-            // Event::LostPeer(_) => {}, // don't care
         }
     }
 }
@@ -253,6 +231,7 @@ pub async fn run_netbench_service(
     network_client: NetworkClient<NetbenchMessage>,
     network_requests: NetworkEvents<NetbenchMessage>,
     time_service: TimeService,
+    runtime_handle: Handle,
 ) {
     let shared = Arc::new(RwLock::new(NetbenchSharedState::new()));
     let config = node_config.netbench.unwrap();
@@ -275,24 +254,106 @@ pub async fn run_netbench_service(
         },
     };
     let (work_sender, work_receiver) = async_channel::bounded(num_threads * 2);
-    let runtime_handle = Handle::current();
+    // let runtime_handle = Handle::current();
+    let listener_task = runtime_handle.spawn(connection_listener(
+        node_config.clone(),
+        network_client.clone(),
+        time_service.clone(),
+        shared.clone(),
+    ));
     let source_task = runtime_handle.spawn(source_loop(network_requests, work_sender));
     let mut handlers = vec![];
+    info!("netbench starting {} threads", num_threads);
     for _ in 0..num_threads {
         handlers.push(runtime_handle.spawn(handler_task(
-            node_config.clone(),
             network_client.clone(),
             work_receiver.clone(),
             time_service.clone(),
             shared.clone(),
         )));
     }
-    if let Err(err) = source_task.await {
-        warn!("benchmark source_thread join: {}", err);
-    }
+    let listener_task_result = listener_task.await;
+    info!("netbench listener_task exited {:?}",listener_task_result);
+    let source_task_result = source_task.await;
+    info!("netbench source_task exited {:?}", source_task_result);
     for hai in handlers {
         if let Err(err) = hai.await {
-            warn!("benchmark handler_thread join: {}", err);
+            warn!("netbench handler_thread[] join: {}", err);
+        }
+    }
+}
+
+async fn connection_listener(
+    node_config: NodeConfig,
+    network_client: NetworkClient<NetbenchMessage>,
+    time_service: TimeService,
+    shared: Arc<RwLock<NetbenchSharedState>>,
+) {
+    let config = node_config.netbench.unwrap();
+    match network_client.peers_and_metadata.get_connected_peers_and_metadata() {
+        Ok(peers) => {
+            info!("netbench connection_listener got {} initial peers", peers.len());
+            for (peer_network_id, peer_metadata) in peers {
+                info!("netbench connection_listener new for initial {:?}", peer_network_id);
+                if config.enable_direct_send_testing {
+                    Handle::current().spawn(direct_sender(
+                        node_config.clone(),
+                        network_client.clone(),
+                        time_service.clone(),
+                        peer_network_id.network_id(),
+                        peer_network_id.peer_id(),
+                        shared.clone(),
+                    ));
+                }
+                if config.enable_rpc_testing {
+                    Handle::current().spawn(rpc_sender(
+                        node_config.clone(),
+                        network_client.clone(),
+                        time_service.clone(),
+                        peer_network_id.network_id(),
+                        peer_network_id.peer_id(),
+                        shared.clone(),
+                    ));
+                }
+            }
+        }
+        Err(_) => {}
+    }
+    let mut connection_notifications = network_client.peers_and_metadata.subscribe();
+    loop {
+        match connection_notifications.recv().await {
+            None => {
+                info!("netbench connection_listener exit");
+                return;
+            }
+            Some(note) => match note {
+                ConnectionNotification::NewPeer(meta, netcontext) => {
+                    info!("netbench connection_listener new {:?} {:?}", meta, netcontext);
+                    if config.enable_direct_send_testing {
+                        Handle::current().spawn(direct_sender(
+                            node_config.clone(),
+                            network_client.clone(),
+                            time_service.clone(),
+                            netcontext.network_id(),
+                            netcontext.peer_id(),
+                            shared.clone(),
+                        ));
+                    }
+                    if config.enable_rpc_testing {
+                        Handle::current().spawn(rpc_sender(
+                            node_config.clone(),
+                            network_client.clone(),
+                            time_service.clone(),
+                            netcontext.network_id(),
+                            netcontext.peer_id(),
+                            shared.clone(),
+                        ));
+                    }
+                }
+                ConnectionNotification::LostPeer(_, _, _) => {
+                    // don't care, things will disconnect elsewhere
+                }
+            }
         }
     }
 }
