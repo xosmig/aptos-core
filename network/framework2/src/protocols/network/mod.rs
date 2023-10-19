@@ -257,12 +257,10 @@ async fn rpc_response_sender(
     match peer_sender.send(msg).await {
         Ok(_) => {
             counters::inbound_rpc_handler_latency(&network_context, protocol_id).observe(dt.as_secs_f64());
-            info!("app_int rpc_respond {} bytes OK", blen);
-            // TODO: counter
+            counters::rpc_messages(network_context.network_id(),protocol_id.as_str(),network_context.role(),counters::RESPONSE_LABEL,counters::OUTBOUND_LABEL,counters::SENT_LABEL);
         }
         Err(_) => {
-            info!("app_int rpc_respond {} bytes ERR", blen);
-            // TODO: counter
+            counters::rpc_messages(network_context.network_id(),protocol_id.as_str(),network_context.role(),counters::RESPONSE_LABEL,counters::OUTBOUND_LABEL,"peererr");
         }
     }
 }
@@ -359,7 +357,7 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
                         return Poll::Pending
                     }
                     NetworkMessage::DirectSendMsg(message) => {
-                        info!("app_int dm");
+                        // info!("app_int dm");
                         // TODO: figure out a way to multi-core protocol_id.from_bytes()
                         let app_msg = match message.protocol_id.from_bytes(message.raw_msg.as_slice()) {
                             Ok(x) => { x },
@@ -480,19 +478,26 @@ impl<TMessage: Message> NetworkSender<TMessage> {
             Ok(peers) => {
                 match peers.get(peer_network_id) {
                     None => {
+                        // TODO? we _could_ know the protocol_id here
+                        counters::count_app_send_message_bytes(self.network_id, self.role_type, "unk", "peergone", 0);
                         Err(NetworkErrorKind::NotConnected.into())
                     }
                     Some(peer) => {
                         let msg = msg_src()?;
+                        let protocol_id_str = msg.protocol_id_as_str();
+                        let data_len = msg.data_len() as u64;
                         match peer.sender.try_send(msg) {
-                            Ok(_) => {Ok(())}
+                            Ok(_) => {
+                                counters::count_app_send_message_bytes(self.network_id, self.role_type, protocol_id_str, counters::SENT_LABEL, data_len);
+                                Ok(())
+                            }
                             Err(tse) => match &tse {
                                 TrySendError::Full(_) => {
-                                    // TODO: counter for send drop due to full
+                                    counters::count_app_send_message_bytes(self.network_id, self.role_type, protocol_id_str, "peerfull", data_len);
                                     Err(NetworkError::from(anyhow::Error::new(tse)))
                                 }
                                 TrySendError::Closed(_) => {
-                                    // TODO: counter for send drop due to closed (other code should remove peer from collection)
+                                    counters::count_app_send_message_bytes(self.network_id, self.role_type, protocol_id_str, "peergone", data_len);
                                     Err(NetworkError::from(anyhow::Error::new(tse)))
                                 }
                             }
@@ -590,7 +595,8 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                     }
                     Some(peer) => {
                         // TODO: figure out a way to multi-core protocol_id.to_bytes()
-                        let mdata = protocol.to_bytes(&req_msg)?.into();
+                        let mdata: Vec<u8> = protocol.to_bytes(&req_msg)?.into();
+                        let data_len = mdata.len() as u64;
                         let request_id = peer.rpc_counter.fetch_add(1, Ordering::SeqCst);
                         let msg = NetworkMessage::RpcRequest(RpcRequest {
                             protocol_id: protocol,
@@ -603,19 +609,17 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                         peer.open_outbound_rpc.insert(request_id, sender, protocol, now, deadline, self.network_id, self.role_type);
                         match peer.sender.try_send(msg) {
                             Ok(_) => {
+                                counters::rpc_message_bytes(self.network_id, protocol.as_str(), self.role_type, counters::REQUEST_LABEL, counters::OUTBOUND_LABEL, counters::SENT_LABEL, data_len);
                                 receiver
-                                // TODO: now we wait for rpc reply, connect to NetworkSource for this app
-                                // Ok(())
-                                // return Err(RpcError::TimedOut);
+                                // now we wait for rpc reply
                             }
                             Err(tse) => match &tse {
                                 TrySendError::Full(_) => {
-                                    // TODO: counter for send drop due to full
-                                    // TODO: we could wait, but we're holding a read lock on self.peers, and that would suck?
+                                    counters::rpc_message_bytes(self.network_id, protocol.as_str(), self.role_type, counters::REQUEST_LABEL, counters::OUTBOUND_LABEL, "peerfull", data_len);
                                     return Err(RpcError::TooManyPending(1)); // TODO: look up the channel size and return that many pending?
                                 }
                                 TrySendError::Closed(_) => {
-                                    // TODO: counter for send drop due to closed (other code should remove peer from collection)
+                                    counters::rpc_message_bytes(self.network_id, protocol.as_str(), self.role_type, counters::REQUEST_LABEL, counters::OUTBOUND_LABEL, "peergone", data_len);
                                     return Err(RpcError::NotConnected(recipient));
                                 }
                             }
@@ -645,20 +649,20 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                         return Ok(wat);
                     }
                     Err(err) => {
-                        // TODO: counter
-                        warn!("app_int rpc reply err: {}", err);
+                        // TODO: counter?
+                        // warn!("app_int rpc reply err: {}", err);
                         return Err(err);
                     }
                 }
                 Err(cancelled) => {
-                    // TODO: counter
-                    warn!("app_int rpc reply cancelled");
+                    // TODO: counter?
+                    // warn!("app_int rpc reply cancelled");
                     return Err(RpcError::UnexpectedResponseChannelCancel);
                 }
             }
             Err(_timeout) => {
-                // TODO: counter
-                warn!("app_int rpc reply timeout");
+                // TODO: counter?
+                // warn!("app_int rpc reply timeout");
                 return Err(RpcError::TimedOut)
             }
         }

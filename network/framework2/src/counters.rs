@@ -618,3 +618,27 @@ pub fn start_serialization_timer(protocol_id: ProtocolId, operation: &str) -> Hi
         .with_label_values(&[protocol_id.as_str(), operation])
         .start_timer()
 }
+
+pub static APTOS_APP_SEND_MESSAGES: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "aptos_network_app_send_messages",
+        "Number of messages sent per protocol_id",
+        &["role_type", "network_id", "protocol_id", "state"]
+    )
+        .unwrap()
+});
+
+pub static APTOS_APP_SEND_BYTES: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "aptos_network_app_send_bytes",
+        "Number of bytes sent per protocol_id",
+        &["role_type", "network_id", "protocol_id", "state"]
+    )
+        .unwrap()
+});
+
+pub fn count_app_send_message_bytes(network_id: NetworkId, role_type: RoleType, protocol_id: &'static str, state: &'static str, data_len: u64) {
+    let values = [role_type.as_str(), network_id.as_str(), protocol_id, state];
+    APTOS_APP_SEND_MESSAGES.with_label_values(&values).inc();
+    APTOS_APP_SEND_BYTES.with_label_values(&values).inc_by(data_len);
+}
