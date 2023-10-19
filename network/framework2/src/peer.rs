@@ -13,7 +13,7 @@ use futures::io::{AsyncRead,AsyncReadExt,AsyncWrite};
 use futures::StreamExt;
 use futures::SinkExt;
 use futures::stream::Fuse;
-use tokio::sync::mpsc::error::{SendError, TryRecvError};
+use tokio::sync::mpsc::error::{SendError, TryRecvError, TrySendError};
 use aptos_config::config::{NetworkConfig, RoleType};
 use aptos_config::network_id::{NetworkContext, NetworkId, PeerNetworkId};
 use aptos_logger::{error, info, warn};
@@ -297,13 +297,11 @@ async fn complete_rpc(rpc_state: OpenRpcRequestState, nmsg: NetworkMessage) {
         let data_len = blob.len() as u64;
         match rpc_state.sender.send(Ok(blob.into())) {
             Ok(_) => {
-                counters::rpc_messages(rpc_state.network_id, rpc_state.protocol_id.as_str(), rpc_state.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "delivered").inc();
-                counters::rpc_bytes(rpc_state.network_id, rpc_state.protocol_id.as_str(), rpc_state.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "delivered").inc_by(data_len);
+                counters::rpc_message_bytes(rpc_state.network_id, rpc_state.protocol_id.as_str(), rpc_state.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "delivered", data_len);
                 counters::outbound_rpc_request_latency(rpc_state.role_type, rpc_state.network_id, rpc_state.protocol_id).observe(dt.as_secs_f64());
             }
             Err(err) => {
-                counters::rpc_messages(rpc_state.network_id, rpc_state.protocol_id.as_str(), rpc_state.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "declined").inc();
-                counters::rpc_bytes(rpc_state.network_id, rpc_state.protocol_id.as_str(), rpc_state.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "declined").inc_by(data_len);
+                counters::rpc_message_bytes(rpc_state.network_id, rpc_state.protocol_id.as_str(), rpc_state.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "declined", data_len);
             }
         }
     } else {
@@ -354,7 +352,7 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
         match self.apps.get(&protocol_id) {
             None => {
                 // TODO: counter
-                warn!("read_thread got rpc req for protocol {:?} we don't handle", protocol_id);
+                error!("read_thread got rpc req for protocol {:?} we don't handle", protocol_id);
                 // TODO: drop connection
             }
             Some(app) => {
@@ -365,15 +363,12 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
                     unreachable!("read_thread apps[{}] => {} {:?}", protocol_id, app.protocol_id, &app.sender);
                 }
                 let data_len = nmsg.data_len() as u64;
-                match app.sender.send(ReceivedMessage{ message: nmsg, sender: self.remote_peer_network_id }).await {
+                match app.sender.try_send(ReceivedMessage{ message: nmsg, sender: self.remote_peer_network_id }) {
                     Ok(_) => {
-                        peer_read_messages(&self.remote_peer_network_id.network_id(), &protocol_id).inc();
-                        peer_read_bytes(&self.remote_peer_network_id.network_id(), &protocol_id).inc_by(data_len);
-                        // info!("read_thread forwarded to app {} {}", app.label, protocol_id.as_str());
+                        peer_read_message_bytes(&self.remote_peer_network_id.network_id(), &protocol_id, data_len);
                     }
-                    Err(err) => {
-                        // TODO: counter
-                        error!("read_thread app channel protocol_id={:?} err={:?}", protocol_id, err);
+                    Err(_) => {
+                        app_inbound_drop(&self.remote_peer_network_id.network_id(), &protocol_id, data_len);
                     }
                 }
             }
@@ -381,7 +376,6 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
     }
 
     async fn handle_message(&self, nmsg: NetworkMessage) {
-        // info!("read_thread h msg");
         match &nmsg {
             NetworkMessage::Error(errm) => {
                 // TODO: counter
@@ -389,16 +383,15 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
             }
             NetworkMessage::RpcRequest(request) => {
                 let protocol_id = request.protocol_id;
+                let data_len = request.raw_request.len() as u64;
+                counters::rpc_message_bytes(self.remote_peer_network_id.network_id(), protocol_id.as_str(), self.role_type, counters::REQUEST_LABEL, counters::INBOUND_LABEL, counters::RECEIVED_LABEL, data_len);
                 self.forward(protocol_id, nmsg).await;
             }
             NetworkMessage::RpcResponse(response) => {
                 match self.open_outbound_rpc.remove(&response.request_id) {
                     None => {
                         let data_len = response.raw_response.len() as u64;
-                        // rpc_messages(&self.remote_peer_network_id.network_id(), "unk", RESPONSE_LABEL, INBOUND_LABEL, "miss").inc();
-                        // rpc_bytes(&self.remote_peer_network_id.network_id(), "unk", RESPONSE_LABEL, INBOUND_LABEL, "miss").inc_by(data_len);
-                        counters::rpc_messages(self.remote_peer_network_id.network_id(), "unk", self.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "miss").inc();
-                        counters::rpc_bytes(self.remote_peer_network_id.network_id(), "unk", self.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "miss").inc_by(data_len);
+                        counters::rpc_message_bytes(self.remote_peer_network_id.network_id(), "unk", self.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "miss", data_len);
                     }
                     Some(rpc_state) => {
                         self.handle.spawn(complete_rpc(rpc_state, nmsg));//response.raw_response));
@@ -407,6 +400,8 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
             }
             NetworkMessage::DirectSendMsg(message) => {
                 let protocol_id = message.protocol_id;
+                let data_len = message.raw_msg.len() as u64;
+                counters::direct_send_message_bytes(self.remote_peer_network_id.network_id(), protocol_id.as_str(), self.role_type, counters::RECEIVED_LABEL, data_len);
                 self.forward(protocol_id, nmsg).await;
             }
         }
@@ -480,14 +475,13 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
                 },
             };
             match rrmm {
+                // TODO: counter for inbound frames/fragments?
                 Some(rmm) => match rmm {
                     Ok(msg) => match msg {
                         MultiplexMessage::Message(nmsg) => {
-                            // info!("read_thread msg");
                             self.handle_message(nmsg).await;
                         }
                         MultiplexMessage::Stream(fragment) => {
-                            info!("read_thread stream");
                             self.handle_stream(fragment).await;
                         }
                     }
@@ -540,9 +534,6 @@ pub static NETWORK_PEER_READ_MESSAGES: Lazy<IntCounterVec> = Lazy::new(||
     &["network_id", "protocol_id"]
 ).unwrap()
 );
-pub fn peer_read_messages(network_id: &NetworkId, protocol_id: &ProtocolId) -> IntCounter {
-    NETWORK_PEER_READ_MESSAGES.with_label_values(&[network_id.as_str(), protocol_id.as_str()])
-}
 
 pub static NETWORK_PEER_READ_BYTES: Lazy<IntCounterVec> = Lazy::new(||
     register_int_counter_vec!(
@@ -551,6 +542,28 @@ pub static NETWORK_PEER_READ_BYTES: Lazy<IntCounterVec> = Lazy::new(||
     &["network_id", "protocol_id"]
 ).unwrap()
 );
-pub fn peer_read_bytes(network_id: &NetworkId, protocol_id: &ProtocolId) -> IntCounter {
-    NETWORK_PEER_READ_BYTES.with_label_values(&[network_id.as_str(), protocol_id.as_str()])
+pub fn peer_read_message_bytes(network_id: &NetworkId, protocol_id: &ProtocolId, data_len: u64) {
+    let values = [network_id.as_str(), protocol_id.as_str()];
+    NETWORK_PEER_READ_MESSAGES.with_label_values(&values).inc();
+    NETWORK_PEER_READ_BYTES.with_label_values(&values).inc_by(data_len);
+}
+
+pub static NETWORK_APP_INBOUND_DROP_MESSAGES: Lazy<IntCounterVec> = Lazy::new(||
+    register_int_counter_vec!(
+    "aptos_network_app_inbound_drop_messages",
+    "Number of messages received but dropped before app",
+    &["network_id", "protocol_id"]
+).unwrap()
+);
+pub static NETWORK_APP_INBOUND_DROP_BYTES: Lazy<IntCounterVec> = Lazy::new(||
+    register_int_counter_vec!(
+    "aptos_network_app_inbound_drop_bytes",
+    "Number of bytes received but dropped before app",
+    &["network_id", "protocol_id"]
+).unwrap()
+);
+pub fn app_inbound_drop(network_id: &NetworkId, protocol_id: &ProtocolId, data_len: u64) {
+    let values = [network_id.as_str(), protocol_id.as_str()];
+    NETWORK_APP_INBOUND_DROP_MESSAGES.with_label_values(&values).inc();
+    NETWORK_APP_INBOUND_DROP_BYTES.with_label_values(&values).inc_by(data_len);
 }

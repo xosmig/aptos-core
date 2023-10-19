@@ -2,6 +2,7 @@
 // Parts of the project are originally copyright © Meta Platforms, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::os::macos::raw::stat;
 use crate::protocols::wire::handshake::v1::ProtocolId;
 use aptos_config::network_id::{NetworkContext, NetworkId};
 use aptos_metrics_core::{
@@ -215,6 +216,7 @@ pub static APTOS_NETWORK_RPC_BYTES: Lazy<IntCounterVec> = Lazy::new(|| {
     .unwrap()
 });
 
+/// probably use rpc_message_bytes() to do both bytes and message increment
 pub fn rpc_bytes(
     // network_context: &NetworkContext,
     network_id: NetworkId,
@@ -233,6 +235,20 @@ pub fn rpc_bytes(
         message_direction_label,
         state_label,
     ])
+}
+
+/// count bytes and increment message count
+pub fn rpc_message_bytes(
+    network_id: NetworkId,
+    protocol_id: &'static str, // ProtocolId.as_str() or "unk"
+    role_type: RoleType,
+    message_type_label: &'static str,
+    message_direction_label: &'static str,
+    state_label: &'static str,
+    data_len: u64,
+) {
+    rpc_messages(network_id, protocol_id, role_type, message_type_label, message_direction_label, state_label).inc();
+    rpc_bytes(network_id, protocol_id, role_type, message_type_label, message_direction_label, state_label).inc_by(data_len);
 }
 
 pub static INVALID_NETWORK_MESSAGES: Lazy<IntCounterVec> = Lazy::new(|| {
@@ -307,42 +323,31 @@ pub static APTOS_NETWORK_DIRECT_SEND_MESSAGES: Lazy<IntCounterVec> = Lazy::new(|
     register_int_counter_vec!(
         "aptos_network_direct_send_messages",
         "Number of direct send messages",
-        &["role_type", "network_id", "peer_id", "state"]
+        &["role_type", "network_id", "protocol_id", "state"]
     )
     .unwrap()
 });
-
-pub fn direct_send_messages(
-    network_context: &NetworkContext,
-    state_label: &'static str,
-) -> IntCounter {
-    APTOS_NETWORK_DIRECT_SEND_MESSAGES.with_label_values(&[
-        network_context.role().as_str(),
-        network_context.network_id().as_str(),
-        network_context.peer_id().short_str().as_str(),
-        state_label,
-    ])
-}
 
 pub static APTOS_NETWORK_DIRECT_SEND_BYTES: Lazy<IntCounterVec> = Lazy::new(|| {
     register_int_counter_vec!(
         "aptos_network_direct_send_bytes",
         "Number of direct send bytes transferred",
-        &["role_type", "network_id", "peer_id", "state"]
+        &["role_type", "network_id", "protocol_id", "state"]
     )
     .unwrap()
 });
 
-pub fn direct_send_bytes(
-    network_context: &NetworkContext,
+/// count a direct send message
+pub fn direct_send_message_bytes(
+    network_id: NetworkId,
+    protocol_id: &'static str,
+    role_type: RoleType,
     state_label: &'static str,
-) -> IntCounter {
-    APTOS_NETWORK_DIRECT_SEND_BYTES.with_label_values(&[
-        network_context.role().as_str(),
-        network_context.network_id().as_str(),
-        network_context.peer_id().short_str().as_str(),
-        state_label,
-    ])
+    data_len: u64,
+) {
+    let values = [role_type.as_str(), network_id.as_str(), protocol_id, state_label];
+    APTOS_NETWORK_DIRECT_SEND_MESSAGES.with_label_values(&values).inc();
+    APTOS_NETWORK_DIRECT_SEND_BYTES.with_label_values(&values).inc_by(data_len);
 }
 
 /// Counters(queued,dequeued,dropped) related to inbound network notifications for RPCs and

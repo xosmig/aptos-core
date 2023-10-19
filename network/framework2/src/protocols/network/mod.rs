@@ -237,14 +237,12 @@ async fn rpc_response_sender(
         Ok(iresult) => match iresult{
             Ok(bytes) => {bytes}
             Err(err2) => {
-                // TODO: counter
-                info!("app_int rpc_respond rpc_err: {}", err2);
+                counters::rpc_messages(network_context.network_id(),protocol_id.as_str(),network_context.role(),counters::RESPONSE_LABEL,counters::OUTBOUND_LABEL,"err");
                 return;
             }
         }
         Err(err) => {
-            // TODO: counter
-            info!("app_int rpc_respond cancelled: {}", err);
+            counters::rpc_messages(network_context.network_id(),protocol_id.as_str(),network_context.role(),counters::RESPONSE_LABEL,counters::OUTBOUND_LABEL,counters::CANCELED_LABEL);
             return;
         }
     };
