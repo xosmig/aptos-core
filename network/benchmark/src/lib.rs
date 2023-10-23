@@ -31,6 +31,7 @@ use tokio::{runtime::Handle, select, sync::RwLock};
 use aptos_network2::application::error::Error;
 use aptos_network2::application::metadata::PeerMetadata;
 use aptos_network2::application::storage::ConnectionNotification;
+use aptos_network2::error::NetworkError;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[allow(clippy::large_enum_variant)]
@@ -107,10 +108,10 @@ async fn handle_direct(
                 send_micros: time_service.now_unix_time().as_micros() as u64,
                 request_send_micros: send.send_micros,
             };
-            let result = network_client.send_to_peer(
+            let result = network_client.send_to_peer_blocking(
                 NetbenchMessage::DataReply(reply),
                 PeerNetworkId::new(network_id, peer_id),
-            );
+            ).await;
             if let Err(err) = result {
                 direct_messages("reply_err");
                 info!(
@@ -411,6 +412,20 @@ pub async fn direct_sender(
         let wrapper = NetbenchMessage::DataSend(msg);
         let result = network_client.send_to_peer(wrapper, PeerNetworkId::new(network_id, peer_id));
         if let Err(err) = result {
+            match &err {
+                Error::NetworkError(ne) => match ne {
+                    NetworkError::PeerFullCondition => {
+                        // okay, wait, try again
+                        continue;
+                    }
+                    NetworkError::NotConnected => {
+                        info!("netbench [{} {}] disconnected", network_id, peer_id);
+                        return;
+                    }
+                    _ => {}
+                }
+                _ => {}
+            }
             direct_messages("serr");
             info!(
                 "netbench [{},{}] direct send err: {}",

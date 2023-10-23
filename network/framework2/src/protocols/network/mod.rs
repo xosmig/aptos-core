@@ -23,11 +23,12 @@ use std::any::TypeId;
 use std::{cmp::min, fmt::Debug, marker::PhantomData, pin::Pin, time::Duration};
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
+// use std::error::Error;
 use std::future::Future;
 use std::ops::{Add, DerefMut, Sub};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, LockResult, RwLock};
-use anyhow::Error;
+// use anyhow::Error;
 use futures::channel::oneshot::Canceled;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::error::{SendError, TryRecvError, TrySendError};
@@ -37,7 +38,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use aptos_config::network_id::{NetworkContext, NetworkId, PeerNetworkId};
 // use crate::application::error::Error::RpcError;
 // use aptos_infallible::RwLock;
-use crate::error::NetworkErrorKind;
+// use crate::error::NetworkErrorKind;
 use crate::protocols::wire::messaging::v1::{DirectSendMsg, NetworkMessage, RequestId, RpcRequest, RpcResponse};
 use hex::ToHex;
 use aptos_config::config::RoleType;
@@ -480,7 +481,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                     None => {
                         // TODO? we _could_ know the protocol_id here
                         counters::count_app_send_message_bytes(self.network_id, self.role_type, "unk", "peergone", 0);
-                        Err(NetworkErrorKind::NotConnected.into())
+                        Err(NetworkError::NotConnected)
                     }
                     Some(peer) => {
                         let msg = msg_src()?;
@@ -494,20 +495,62 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                             Err(tse) => match &tse {
                                 TrySendError::Full(_) => {
                                     counters::count_app_send_message_bytes(self.network_id, self.role_type, protocol_id_str, "peerfull", data_len);
-                                    Err(NetworkError::from(anyhow::Error::new(tse)))
+                                    // TODO: reply with specific error that can be filtered on
+                                    // Err(NetworkError::from(anyhow::Error::new(tse)))
+                                    // Err(NetworkError::from(NetworkErrorKind::PeerFullCondition))
+                                    Err(NetworkError::PeerFullCondition)
                                 }
                                 TrySendError::Closed(_) => {
                                     counters::count_app_send_message_bytes(self.network_id, self.role_type, protocol_id_str, "peergone", data_len);
-                                    Err(NetworkError::from(anyhow::Error::new(tse)))
+                                    Err(NetworkError::NotConnected)
                                 }
                             }
                         }
                     }
                 }
             }
-            Err(_) => {
+            Err(lf_err) => {
                 // lock fail, wtf
-                Err(NetworkError::from(NetworkErrorKind::IoError))
+                Err(NetworkError::Error(lf_err.to_string()))
+            }
+        }
+    }
+
+    /// blocking async version of peer_try_send
+    async fn peer_send<F>(&self, peer_network_id: &PeerNetworkId, msg_src: F) -> Result<(), NetworkError>
+        where F: Fn() -> Result<NetworkMessage,NetworkError>
+    {
+        let sender = match self.peers.read() {
+            Ok(peers) => {
+                match peers.get(peer_network_id) {
+                    None => {
+                        // TODO? we _could_ know the protocol_id here
+                        counters::count_app_send_message_bytes(self.network_id, self.role_type, "unk", "peergone", 0);
+                        // Err(NetworkErrorKind::NotConnected.into())
+                        return Err(NetworkError::NotConnected);
+                    }
+                    Some(peer) => {
+                        peer.sender.clone() // TODO: is this inefficient? It's _nice_ in minimizing the lock window
+                    }
+                }
+            }
+            Err(lf_err) => {
+                // lock fail, wtf
+                return Err(NetworkError::Error(lf_err.to_string()));
+            }
+        };
+        let msg = msg_src()?;
+        let protocol_id_str = msg.protocol_id_as_str();
+        let data_len = msg.data_len() as u64;
+        // let handle = Handle::current();
+        match sender.send(msg).await {
+            Ok(_) => {
+                counters::count_app_send_message_bytes(self.network_id, self.role_type, protocol_id_str, counters::SENT_LABEL, data_len);
+                Ok(())
+            }
+            Err(_send_err) => {
+                // at this time the only SendError is a not-connected error (the other end of the queue is closed)
+                Err(NetworkError::NotConnected)
             }
         }
     }
@@ -531,6 +574,29 @@ impl<TMessage: Message> NetworkSender<TMessage> {
         };
         self.update_peers();
         self.peer_try_send(&peer_network_id, msg_src)
+    }
+
+
+    /// Send a message to a single recipient.
+    /// Use async framework, block local thread until sent or err.
+    pub async fn send_async(
+        &self,
+        recipient: PeerId,
+        protocol: ProtocolId,
+        message: TMessage,
+    ) -> Result<(), NetworkError> {
+        let peer_network_id = PeerNetworkId::new(self.network_id, recipient);
+        let msg_src = || -> Result<NetworkMessage,NetworkError> {
+            // TODO: figure out a way to multi-core protocol_id.to_bytes()
+            let mdata = protocol.to_bytes(&message)?.into();
+            Ok(NetworkMessage::DirectSendMsg(DirectSendMsg {
+                protocol_id: protocol,
+                priority: 0,
+                raw_msg: mdata,
+            }))
+        };
+        self.update_peers();
+        self.peer_send(&peer_network_id, msg_src).await
     }
 
     /// Send a message to a many recipients.
@@ -686,6 +752,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
             }))
         };
         self.update_peers();
+        // TODO: since we've gone to the trouble to have an RPC reply ready to go, maybe send it blocking?
         self.peer_try_send(&peer_network_id, msg_src)
     }
 }

@@ -17,6 +17,7 @@ use itertools::Itertools;
 use std::{collections::HashMap, fmt::Debug, sync::Arc, time::Duration};
 use std::collections::BTreeMap;
 use std::sync::RwLock;
+use anyhow::anyhow;
 use bytes::Bytes;
 use futures::channel::oneshot;
 use aptos_config::config::RoleType;
@@ -57,7 +58,13 @@ pub trait NetworkClientInterface<Message: NetworkMessageTrait>: Clone + Send + S
 
     /// Sends the given message to the specified peer. Note: this
     /// method does not guarantee message delivery or handle responses.
+    /// May return immediately if local outbound queue is full.
     fn send_to_peer(&self, _message: Message, _peer: PeerNetworkId) -> Result<(), Error>;
+
+    /// Sends the given message to the specified peer. Note: this
+    /// method does not guarantee message delivery or handle responses.
+    /// Wait until message in enqueued or an error occurs.
+    async fn send_to_peer_blocking(&self, _message: Message, _peer: PeerNetworkId) -> Result<(), Error>;
 
     /// Sends the given message to each peer in the specified peer list.
     /// Note: this method does not guarantee message delivery or handle responses.
@@ -136,11 +143,11 @@ impl<Message: NetworkMessageTrait + Clone> NetworkClient<Message> {
                 return Ok(*protocol);
             }
         }
-        Err(Error::NetworkError(format!(
+        Err(Error::NetworkError(anyhow!(
             "None of the preferred protocols are supported by this peer! \
             Peer: {:?}, supported protocols: {:?}",
             peer, protocols_supported_by_peer
-        )))
+        ).into()))
     }
 }
 
@@ -178,6 +185,13 @@ impl<Message: NetworkMessageTrait> NetworkClientInterface<Message> for NetworkCl
         let direct_send_protocol_id = self
             .get_preferred_protocol_for_peer(&peer, &self.direct_send_protocols_and_preferences)?;
         Ok(network_sender.send_to(peer.peer_id(), direct_send_protocol_id, message)?)
+    }
+
+    async fn send_to_peer_blocking(&self, message: Message, peer: PeerNetworkId) -> Result<(), Error> {
+        let network_sender = self.get_sender_for_network_id(&peer.network_id())?;
+        let direct_send_protocol_id = self
+            .get_preferred_protocol_for_peer(&peer, &self.direct_send_protocols_and_preferences)?;
+        Ok(network_sender.send_async(peer.peer_id(), direct_send_protocol_id, message).await?)
     }
 
     fn send_to_peers(&self, message: Message, peers: &[PeerNetworkId]) -> Result<(), Error> {
