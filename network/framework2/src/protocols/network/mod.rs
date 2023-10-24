@@ -5,7 +5,7 @@
 //! Convenience Network API for Aptos
 
 pub use crate::protocols::rpc::error::RpcError;
-use crate::{application::interface::{OutboundRpcMatcher, OpenRpcRequestState}, error::NetworkError, transport::ConnectionMetadata, ProtocolId, counters};
+use crate::{application::interface::{OutboundRpcMatcher, OpenRpcRequestState, protocol_is_high_priority}, error::NetworkError, transport::ConnectionMetadata, ProtocolId, counters};
 // use aptos_channels::aptos_channel;
 use aptos_logger::prelude::*;
 use aptos_short_hex_str::AsShortHexStr;
@@ -28,6 +28,7 @@ use std::future::Future;
 use std::ops::{Add, DerefMut, Sub};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, LockResult, RwLock};
+use std::time::Instant;
 // use anyhow::Error;
 use futures::channel::oneshot::Canceled;
 use tokio::runtime::Handle;
@@ -472,7 +473,7 @@ impl<TMessage> NetworkSender<TMessage> {
 }
 
 impl<TMessage: Message> NetworkSender<TMessage> {
-    fn peer_try_send<F>(&self, peer_network_id: &PeerNetworkId, msg_src: F) -> Result<(), NetworkError>
+    fn peer_try_send<F>(&self, peer_network_id: &PeerNetworkId, msg_src: F, high_prio: bool) -> Result<(), NetworkError>
     where F: Fn() -> Result<NetworkMessage,NetworkError>
     {
         match self.peers.read() {
@@ -487,7 +488,12 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                         let msg = msg_src()?;
                         let protocol_id_str = msg.protocol_id_as_str();
                         let data_len = msg.data_len() as u64;
-                        match peer.sender.try_send(msg) {
+                        let send_result = if high_prio {
+                            peer.sender_high_prio.try_send(msg)
+                        } else {
+                            peer.sender.try_send(msg)
+                        };
+                        match send_result {
                             Ok(_) => {
                                 counters::count_app_send_message_bytes(self.network_id, self.role_type, protocol_id_str, counters::SENT_LABEL, data_len);
                                 Ok(())
@@ -495,9 +501,50 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                             Err(tse) => match &tse {
                                 TrySendError::Full(_) => {
                                     counters::count_app_send_message_bytes(self.network_id, self.role_type, protocol_id_str, "peerfull", data_len);
-                                    // TODO: reply with specific error that can be filtered on
-                                    // Err(NetworkError::from(anyhow::Error::new(tse)))
-                                    // Err(NetworkError::from(NetworkErrorKind::PeerFullCondition))
+                                    Err(NetworkError::PeerFullCondition)
+                                }
+                                TrySendError::Closed(_) => {
+                                    counters::count_app_send_message_bytes(self.network_id, self.role_type, protocol_id_str, "peergone", data_len);
+                                    Err(NetworkError::NotConnected)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Err(lf_err) => {
+                // lock fail, wtf
+                Err(NetworkError::Error(lf_err.to_string()))
+            }
+        }
+    }
+
+    /// low lock shadow, msg already serialized and ready to send
+    fn peer_try_send_inner(&self, peer_network_id: &PeerNetworkId, msg: NetworkMessage, high_prio: bool) -> Result<(), NetworkError> {
+        match self.peers.read() {
+            Ok(peers) => {
+                match peers.get(peer_network_id) {
+                    None => {
+                        // TODO? we _could_ know the protocol_id here
+                        counters::count_app_send_message_bytes(self.network_id, self.role_type, "unk", "peergone", 0);
+                        Err(NetworkError::NotConnected)
+                    }
+                    Some(peer) => {
+                        let protocol_id_str = msg.protocol_id_as_str();
+                        let data_len = msg.data_len() as u64;
+                        let send_result = if high_prio {
+                            peer.sender_high_prio.try_send(msg)
+                        } else {
+                            peer.sender.try_send(msg)
+                        };
+                        match send_result {
+                            Ok(_) => {
+                                counters::count_app_send_message_bytes(self.network_id, self.role_type, protocol_id_str, counters::SENT_LABEL, data_len);
+                                Ok(())
+                            }
+                            Err(tse) => match &tse {
+                                TrySendError::Full(_) => {
+                                    counters::count_app_send_message_bytes(self.network_id, self.role_type, protocol_id_str, "peerfull", data_len);
                                     Err(NetworkError::PeerFullCondition)
                                 }
                                 TrySendError::Closed(_) => {
@@ -517,7 +564,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
     }
 
     /// blocking async version of peer_try_send
-    async fn peer_send<F>(&self, peer_network_id: &PeerNetworkId, msg_src: F) -> Result<(), NetworkError>
+    async fn peer_send<F>(&self, peer_network_id: &PeerNetworkId, msg_src: F, high_prio: bool) -> Result<(), NetworkError>
         where F: Fn() -> Result<NetworkMessage,NetworkError>
     {
         let sender = match self.peers.read() {
@@ -530,7 +577,11 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                         return Err(NetworkError::NotConnected);
                     }
                     Some(peer) => {
-                        peer.sender.clone() // TODO: is this inefficient? It's _nice_ in minimizing the lock window
+                        if high_prio {
+                            peer.sender_high_prio.clone()
+                        } else {
+                            peer.sender.clone() // TODO: is this inefficient? It's _nice_ in minimizing the lock window
+                        }
                     }
                 }
             }
@@ -565,7 +616,10 @@ impl<TMessage: Message> NetworkSender<TMessage> {
         let peer_network_id = PeerNetworkId::new(self.network_id, recipient);
         let msg_src = || -> Result<NetworkMessage,NetworkError> {
             // TODO: figure out a way to multi-core protocol_id.to_bytes()
-            let mdata = protocol.to_bytes(&message)?.into();
+            let start = Instant::now();
+            let mdata : Vec<u8> = protocol.to_bytes(&message)?.into();
+            let dt = Instant::now().duration_since(start);
+            counters::bcs_encode_count(mdata.len(), dt);
             Ok(NetworkMessage::DirectSendMsg(DirectSendMsg {
                 protocol_id: protocol,
                 priority: 0,
@@ -573,7 +627,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
             }))
         };
         self.update_peers();
-        self.peer_try_send(&peer_network_id, msg_src)
+        self.peer_try_send(&peer_network_id, msg_src, protocol_is_high_priority(protocol))
     }
 
 
@@ -596,7 +650,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
             }))
         };
         self.update_peers();
-        self.peer_send(&peer_network_id, msg_src).await
+        self.peer_send(&peer_network_id, msg_src, protocol_is_high_priority(protocol)).await
     }
 
     /// Send a message to a many recipients.
@@ -619,7 +673,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
         let mut errs = vec![];
         for recipient in recipients {
             let peer_network_id = PeerNetworkId::new(self.network_id, recipient);
-            match self.peer_try_send(&peer_network_id, msg_src) {
+            match self.peer_try_send(&peer_network_id, msg_src, protocol_is_high_priority(protocol)) {
                 Ok(_) => {}
                 Err(xe) => {errs.push(xe)}
             }
@@ -644,6 +698,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
         protocol: ProtocolId,
         req_msg: TMessage,
         timeout: Duration,
+        high_prio: bool,
     ) -> Result<TMessage, RpcError> {
         // TODO: plumb through a TimeService to here
         let now = tokio::time::Instant::now();
@@ -673,7 +728,12 @@ impl<TMessage: Message> NetworkSender<TMessage> {
 
                         let (sender, receiver) = oneshot::channel();
                         peer.open_outbound_rpc.insert(request_id, sender, protocol, now, deadline, self.network_id, self.role_type);
-                        match peer.sender.try_send(msg) {
+                        let send_result = if high_prio {
+                            peer.sender_high_prio.try_send(msg)
+                        } else {
+                            peer.sender.try_send(msg)
+                        };
+                        match send_result {
                             Ok(_) => {
                                 counters::rpc_message_bytes(self.network_id, protocol.as_str(), self.role_type, counters::REQUEST_LABEL, counters::OUTBOUND_LABEL, counters::SENT_LABEL, data_len);
                                 receiver
@@ -753,7 +813,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
         };
         self.update_peers();
         // TODO: since we've gone to the trouble to have an RPC reply ready to go, maybe send it blocking?
-        self.peer_try_send(&peer_network_id, msg_src)
+        self.peer_try_send(&peer_network_id, msg_src, protocol_is_high_priority(protocol))
     }
 }
 
@@ -822,16 +882,21 @@ impl Stream for NetworkSource {
 #[derive(Clone, Debug)]
 pub struct PeerStub {
     /// channel to Peer's write thread
-    /// TODO: also add high-priority channel
     pub sender: tokio::sync::mpsc::Sender<NetworkMessage>,
+    pub sender_high_prio: tokio::sync::mpsc::Sender<NetworkMessage>,
     pub rpc_counter: Arc<AtomicU32>,
     open_outbound_rpc: OutboundRpcMatcher,
 }
 
 impl PeerStub {
-    pub fn new(sender: tokio::sync::mpsc::Sender<NetworkMessage>, open_outbound_rpc: OutboundRpcMatcher) -> Self {
+    pub fn new(
+        sender: tokio::sync::mpsc::Sender<NetworkMessage>,
+        sender_high_prio: tokio::sync::mpsc::Sender<NetworkMessage>,
+        open_outbound_rpc: OutboundRpcMatcher,
+    ) -> Self {
         Self {
             sender,
+            sender_high_prio,
             rpc_counter: Arc::new(AtomicU32::new(0)),
             open_outbound_rpc,
         }

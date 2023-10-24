@@ -1,7 +1,8 @@
 // Copyright © Aptos Foundation
 
+use std::future::Future;
 use std::io::{Error, ErrorKind};
-use std::ops::DerefMut;
+use std::ops::{DerefMut, Mul};
 use std::sync::Arc;
 use std::time::Duration;
 use futures::channel::oneshot;
@@ -44,6 +45,7 @@ where
 {
     let role_type = network_context.role();
     let (sender, to_send) = tokio::sync::mpsc::channel::<NetworkMessage>(config.network_channel_size);
+    let (sender_high_prio, to_send_high_prio) = tokio::sync::mpsc::channel::<NetworkMessage>(config.network_channel_size);
     let open_outbound_rpc = OutboundRpcMatcher::new();
     let max_frame_size = config.max_frame_size;
     let (read_socket, write_socket) = socket.split();
@@ -53,9 +55,9 @@ where
     let closed = Closer::new();
     let network_id = remote_peer_network_id.network_id();
     handle.spawn(open_outbound_rpc.clone().cleanup(Duration::from_millis(100), closed.clone()));
-    handle.spawn(writer_task(network_id, to_send, writer, max_frame_size, closed.clone()));
+    handle.spawn(writer_task(network_id, to_send, to_send_high_prio, writer, max_frame_size, closed.clone()));
     handle.spawn(reader_task(reader, apps, remote_peer_network_id, open_outbound_rpc.clone(), handle.clone(), closed.clone(), role_type));
-    let stub = PeerStub::new(sender, open_outbound_rpc);
+    let stub = PeerStub::new(sender, sender_high_prio, open_outbound_rpc);
     // TODO: peer connection counter, unless PeersAndMetadata is doing it
     peers_and_metadata.insert_connection_metadata(remote_peer_network_id, connection_metadata.clone());
     peer_senders.insert(remote_peer_network_id, stub);
@@ -80,6 +82,7 @@ struct WriterContext<WriteThing: AsyncWrite + Unpin + Send> {
 
     /// messages from apps to send to the peer
     to_send: Receiver<NetworkMessage>,
+    to_send_high_prio: Receiver<NetworkMessage>,
     /// encoder wrapper around socket write half
     writer: MultiplexMessageSink<WriteThing>,
 }
@@ -88,6 +91,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
     fn new(
         network_id: NetworkId,
         to_send: Receiver<NetworkMessage>,
+        to_send_high_prio: Receiver<NetworkMessage>,
         writer: MultiplexMessageSink<WriteThing>,
         max_frame_size: usize,
     ) -> Self {
@@ -100,6 +104,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
             next_large_msg: None,
             max_frame_size,
             to_send,
+            to_send_high_prio,
             writer,
         }
     }
@@ -155,62 +160,110 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
         }))
     }
 
+    fn try_high_prio_next_msg(&mut self) -> Option<MultiplexMessage> {
+        match self.to_send_high_prio.try_recv() {
+            Ok(msg) => {
+                info!("writer_thread to_send_high_prio {} bytes prot={}", msg.data_len(), msg.protocol_id_as_str());
+                if msg.data_len() > self.max_frame_size {
+                    // finish prior large message before starting a new large message
+                    self.next_large_msg = Some(msg);
+                    Some(self.next_large())
+                } else {
+                    // send small message now, large chunk next
+                    self.send_large = true;
+                    Some(MultiplexMessage::Message(msg))
+                }
+            }
+            Err(_) => {
+                None
+            }
+        }
+    }
+
+    async fn try_next_msg(&mut self) -> Option<MultiplexMessage> {
+        if let Some(mm) = self.try_high_prio_next_msg() {
+            return Some(mm);
+        }
+        match self.to_send.try_recv() {
+            Ok(msg) => {
+                info!("writer_thread to_send {} bytes prot={}", msg.data_len(), msg.protocol_id_as_str());
+                if msg.data_len() > self.max_frame_size {
+                    // finish prior large message before starting a new large message
+                    self.next_large_msg = Some(msg);
+                    Some(self.next_large())
+                } else {
+                    // send small message now, large chunk next
+                    self.send_large = true;
+                    Some(MultiplexMessage::Message(msg))
+                }
+            }
+            Err(err) => match err {
+                TryRecvError::Empty => {
+                    // ok, no next small msg, continue with chunks of large message
+                    Some(self.next_large())
+                }
+                TryRecvError::Disconnected => {
+                    info!("writer_thread source closed");
+                    None
+                }
+            }
+        }
+    }
+
     async fn run(mut self, mut closed: Closer) {
         loop {
             let mm = if self.large_message.is_some() {
                 if self.send_large || self.next_large_msg.is_some() {
                     self.next_large()
                 } else {
-                    match self.to_send.try_recv() {
-                        Ok(msg) => {
-                            info!("writer_thread to_send {} bytes prot={}", msg.data_len(), msg.protocol_id_as_str());
-                            if msg.data_len() > self.max_frame_size {
-                                // finish prior large message before starting a new large message
-                                self.next_large_msg = Some(msg);
-                                self.next_large()
-                            } else {
-                                // send small message now, large chunk next
-                                self.send_large = true;
-                                MultiplexMessage::Message(msg)
-                            }
-                        }
-                        Err(err) => match err {
-                            TryRecvError::Empty => {
-                                // ok, no next small msg, continue with chunks of large message
-                                self.next_large()
-                            }
-                            TryRecvError::Disconnected => {
-                                info!("writer_thread source closed");
-                                break
-                            }
-                        }
+                    match self.try_next_msg().await {
+                        None => {break}
+                        Some(mm) => {mm}
                     }
                 }
             } else if self.next_large_msg.is_some() {
                 let msg = self.next_large_msg.take().unwrap();
                 self.start_large(msg)
             } else {
-                tokio::select! {
-                    send_result = self.to_send.recv() => match send_result {
-                    None => {
-                        info!("writer_thread source closed");
-                        break;
-                    },
-                    Some(msg) => {
-                            // info!("writer_thread to_send {} bytes prot={}", msg.data_len(), msg.protocol_id_as_str());
-                        if msg.data_len() > self.max_frame_size {
-                            // start stream
-                            self.start_large(msg)
-                        } else {
-                            MultiplexMessage::Message(msg)
-                        }
-                    },
-                    },
-                    // TODO: why does select on close.wait() work below but I did this workaround here?
-                    wait_result = closed.done.wait_for(|x| *x) => {
-                        info!("writer_thread wait result {:?}", wait_result);
-                        break;
-                    },
+                // try high-prio, otherwise wait on whatever is available next
+                if let Some(mm) = self.try_high_prio_next_msg() {
+                    mm
+                } else {
+                    tokio::select! {
+                        high_prio = self.to_send_high_prio.recv() => match high_prio {
+                            None => {
+                                info!("writer_thread high prio closed");
+                                break;
+                            },
+                            Some(msg) => {
+                                if msg.data_len() > self.max_frame_size {
+                                    // start stream
+                                    self.start_large(msg)
+                                } else {
+                                    MultiplexMessage::Message(msg)
+                                }
+                            }
+                        },
+                        send_result = self.to_send.recv() => match send_result {
+                            None => {
+                                info!("writer_thread source closed");
+                                break;
+                            },
+                            Some(msg) => {
+                                if msg.data_len() > self.max_frame_size {
+                                    // start stream
+                                    self.start_large(msg)
+                                } else {
+                                    MultiplexMessage::Message(msg)
+                                }
+                            },
+                        },
+                        // TODO: why does select on close.wait() work below but I did this workaround here?
+                        wait_result = closed.done.wait_for(|x| *x) => {
+                            info!("writer_thread wait result {:?}", wait_result);
+                            break;
+                        },
+                    }
                 }
             };
             let data_len = mm.data_len();
@@ -219,7 +272,6 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                     Ok(wat) => {
                         peer_message_frames_written(&self.network_id).inc();
                         peer_message_bytes_written(&self.network_id).inc_by(data_len as u64);
-                        // info!("writer_thread sent {}", data_len);
                     }
                     Err(err) => {
                         // TODO: counter net write err
@@ -280,11 +332,12 @@ pub fn peer_message_bytes_written(network_id: &NetworkId) -> IntCounter {
 async fn writer_task(
     network_id: NetworkId,
     mut to_send: Receiver<NetworkMessage>,
+    mut to_send_high_prio: Receiver<NetworkMessage>,
     mut writer: MultiplexMessageSink<impl AsyncWrite + Unpin + Send + 'static>,
     max_frame_size: usize,
     closed: Closer,
 ) {
-    let wt = WriterContext::new(network_id, to_send, writer, max_frame_size);
+    let wt = WriterContext::new(network_id, to_send, to_send_high_prio, writer, max_frame_size);
     wt.run(closed).await;
     info!("peer writer exited")
 }

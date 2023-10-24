@@ -3,12 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::os::macos::raw::stat;
+use std::time::Duration;
 use crate::protocols::wire::handshake::v1::ProtocolId;
 use aptos_config::network_id::{NetworkContext, NetworkId};
-use aptos_metrics_core::{
-    register_histogram_vec, register_int_counter_vec, register_int_gauge, register_int_gauge_vec,
-    Histogram, HistogramTimer, HistogramVec, IntCounter, IntCounterVec, IntGauge, IntGaugeVec,
-};
+use aptos_metrics_core::{register_histogram_vec, register_int_counter_vec, register_int_gauge, register_int_gauge_vec, Histogram, HistogramTimer, HistogramVec, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, register_int_counter};
 use aptos_netcore::transport::ConnectionOrigin;
 use aptos_short_hex_str::AsShortHexStr;
 use aptos_types::PeerId;
@@ -617,6 +615,21 @@ pub fn start_serialization_timer(protocol_id: ProtocolId, operation: &str) -> Hi
     NETWORK_APPLICATION_SERIALIZATION_METRIC
         .with_label_values(&[protocol_id.as_str(), operation])
         .start_timer()
+}
+
+pub static NETWORK_BCS_ENCODE_NANOS: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!("aptos_network_bcs_encode_nanos", "Nanoseconds spent encoding outbound messages").unwrap()
+});
+pub static NETWORK_BCS_ENCODE_BYTES: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!("aptos_network_bcs_encode_bytes", "Bytes of outbound messages as encoded").unwrap()
+});
+pub static NETWORK_BCS_ENCODES: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!("aptos_network_bcs_encodes", "Number of outbound messages encoded").unwrap()
+});
+pub fn bcs_encode_count(length: usize, dt: Duration) {
+    NETWORK_BCS_ENCODE_NANOS.inc_by(dt.as_nanos() as u64);
+    NETWORK_BCS_ENCODE_BYTES.inc_by(length as u64);
+    NETWORK_BCS_ENCODES.inc();
 }
 
 pub static APTOS_APP_SEND_MESSAGES: Lazy<IntCounterVec> = Lazy::new(|| {

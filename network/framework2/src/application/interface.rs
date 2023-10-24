@@ -245,7 +245,7 @@ impl<Message: NetworkMessageTrait> NetworkClientInterface<Message> for NetworkCl
         let rpc_protocol_id =
             self.get_preferred_protocol_for_peer(&peer, &self.rpc_protocols_and_preferences)?;
         Ok(network_sender
-            .send_rpc(peer.peer_id(), rpc_protocol_id, message, rpc_timeout)
+            .send_rpc(peer.peer_id(), rpc_protocol_id, message, rpc_timeout, protocol_is_high_priority(rpc_protocol_id))
             .await?)
     }
 }
@@ -382,5 +382,26 @@ impl Closer {
 
     pub fn is_closed(&self) -> bool {
         self.done.borrow().clone()
+    }
+}
+
+pub fn protocol_is_high_priority(protocol_id: ProtocolId) -> bool {
+    match protocol_id {
+        ProtocolId::ConsensusRpcBcs => {true}
+        ProtocolId::ConsensusDirectSendBcs => {true}
+        // ProtocolId::MempoolDirectSend => {}
+        ProtocolId::StateSyncDirectSend => {true}
+        // ProtocolId::DiscoveryDirectSend => {}
+        // ProtocolId::HealthCheckerRpc => {}
+        ProtocolId::ConsensusDirectSendJson => {true}
+        ProtocolId::ConsensusRpcJson => {true}
+        ProtocolId::StorageServiceRpc => {true}
+        // ProtocolId::MempoolRpc => {}
+        // ProtocolId::PeerMonitoringServiceRpc => {}
+        ProtocolId::ConsensusRpcCompressed => {true}
+        ProtocolId::ConsensusDirectSendCompressed => {true}
+        // ProtocolId::NetbenchDirectSend => {}
+        // ProtocolId::NetbenchRpc => {}
+        _ => {false}
     }
 }
