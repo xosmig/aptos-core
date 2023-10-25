@@ -525,7 +525,7 @@ pub struct NetworkTask {
 impl NetworkTask {
     /// Establishes the initial connections with the peers and returns the receivers.
     pub fn new(
-        network_events: NetworkEvents<ConsensusMsg>,// TODO network 2 NetworkServiceEvents<ConsensusMsg>, TODO network2 Box this?
+        network_events: NetworkEvents<ConsensusMsg>,
         self_receiver: aptos_channels::Receiver<Event<ConsensusMsg>>,
     ) -> (NetworkTask, NetworkReceivers) {
         let (consensus_messages_tx, consensus_messages) = aptos_channel::new(
@@ -542,17 +542,6 @@ impl NetworkTask {
         let (rpc_tx, rpc_rx) =
             aptos_channel::new(QueueStyle::FIFO, 10, Some(&counters::RPC_CHANNEL_MSGS));
 
-        // // Verify the network events have been constructed correctly
-        // let network_and_events = network_service_events.into_network_and_events();
-        // if (network_and_events.values().len() != 1)
-        //     || !network_and_events.contains_key(&NetworkId::Validator)
-        // {
-        //     panic!("The network has not been setup correctly for consensus!");
-        // }
-        //
-        // // Collect all the network events into a single stream
-        // let network_events: Vec<_> = network_and_events.into_values().collect();
-        // let network_events = select_all(network_events).fuse();
         let all_events = Box::new(select(network_events, self_receiver));
 
         (

@@ -29,7 +29,7 @@ use aptos_network2::application::storage::PeersAndMetadata;
 use aptos_network2::connectivity_manager::{ConnectivityManager, ConnectivityRequest};
 use aptos_network2::logging::NetworkSchema;
 use aptos_network2::noise::stream::NoiseStream;
-use aptos_network2::peer;
+use aptos_network2::{counters, peer};
 use aptos_network2::protocols::wire::handshake::v1::{ProtocolId, ProtocolIdSet};
 use aptos_network2::protocols::wire::messaging::v1::NetworkMessage;
 use aptos_network2::protocols::network::{OutboundPeerConnections, PeerStub, ReceivedMessage};
@@ -78,14 +78,10 @@ pub struct NetworkBuilder {
     chain_id: ChainId,
     config: NetworkConfig,
     discovery_listeners: Vec<DiscoveryChangeListener<DbBackedOnChainConfig>>,
-    // connectivity_manager_builder: Option<ConnectivityManagerBuilder>, // TODO network2: re-enable connectivity manager
-    // health_checker_builder: Option<HealthCheckerBuilder>,
-    // peer_manager_builder: PeerManagerBuilder,
     peers_and_metadata: Arc<PeersAndMetadata>,
     apps: Arc<ApplicationCollector>,
     peer_senders: Arc<OutboundPeerConnections>,
     handle: Option<Handle>,
-    // cm: ConnectivityManager<ExponentialBackoff>,
     // temporarily hold a value from create() until start()
     connectivity_req_rx: Option<tokio::sync::mpsc::Receiver<ConnectivityRequest>>,
 }
@@ -104,21 +100,6 @@ impl NetworkBuilder {
     ) -> NetworkBuilder {
         let network_context = NetworkContext::new(role, config.network_id, config.peer_id());
         let (connectivity_req_sender, connectivity_req_rx) = tokio::sync::mpsc::channel::<ConnectivityRequest>(10);
-        // let seeds = config.merge_seeds();
-        // let cm = ConnectivityManager::new(
-        //     network_context,
-        //     time_service.clone(),
-        //     peers_and_metadata.clone(),
-        //     seeds,
-        //     // connection_reqs_tx,
-        //     // connection_notifs_rx,
-        //     connectivity_req_rx,
-        //     Duration::from_millis(config.connectivity_check_interval_ms),
-        //     ExponentialBackoff::from_millis(config.connection_backoff_base).factor(1000),
-        //     Duration::from_millis(config.max_connection_delay_ms),
-        //     Some(config.max_outbound_connections),
-        //     config.mutual_authentication,
-        // );
         let mut nb = NetworkBuilder{
             state: State::CREATED,
             executor: None,
@@ -127,12 +108,10 @@ impl NetworkBuilder {
             chain_id,
             config: config.clone(),
             discovery_listeners: vec![],
-            // connectivity_manager_builder: None,
             peers_and_metadata,
             peer_senders,
             apps: Arc::new(ApplicationCollector::new()), // temporary empty app set
             handle,
-            // cm,
             connectivity_req_rx: Some(connectivity_req_rx),
         };
         nb.setup_discovery(reconfig_subscription_service, connectivity_req_sender);
@@ -149,29 +128,6 @@ impl NetworkBuilder {
             out.insert(*protocol_id);
         }
         out
-    }
-
-    // TODO network2: use this or move it where we need it
-    pub fn deliver_message(&self, protocol_id: &ProtocolId, msg: ReceivedMessage) {
-        match self.apps.get(protocol_id) {
-            None => {
-                // TODO network2: peer sent to a ProtocolId we don't process. log error. disconnect. inc a counter
-            }
-            Some(connections) => {
-                match connections.sender.try_send(msg) {
-                    Ok(_) => {
-                        // TODO network2: inc per-protocolid counter
-                        // TODO network2: measure time-in-queue for some messages?
-                    }
-                    Err(err) => match err {
-                        TrySendError::Full(_) => {} // TODO network2: inc per-protocolid drop counter
-                        TrySendError::Closed(_) => {
-                            error!("channel to app for ProtocolId {:?} is closed", protocol_id);
-                        }
-                    }
-                }
-            }
-        }
     }
 
     pub fn build(&mut self, handle: Handle) {
@@ -238,14 +194,12 @@ impl NetworkBuilder {
     fn build_transport(&mut self) -> (TransportPeerManager, AptosNetTransportActual) {
         let listen_parts = self.config.listen_address.as_slice();
         let key = self.config.identity_key();
-        // let trusted_peers = self.peers_and_metadata.get_trusted_peers(&self.config.network_id).unwrap();
         let mutual_auth = self.config.mutual_authentication;
         let protos = self.active_protocol_ids();
         let enable_proxy_protocol = self.config.enable_proxy_protocol;
         match listen_parts[0] {
             Protocol::Ip4(_) | Protocol::Ip6(_) => {
                 // match listen_parts[1]
-                // Protocol::Tcp(_) => {
                 let mut aptos_tcp_transport = APTOS_TCP_TRANSPORT.clone();
                 let tcp_cfg = self.get_tcp_buffers_cfg();
                 aptos_tcp_transport.set_tcp_buffers(&tcp_cfg);
@@ -254,7 +208,6 @@ impl NetworkBuilder {
                     self.network_context,
                     self.time_service.clone(),
                     key,
-                    // auth_mode,
                     self.peers_and_metadata.clone(),
                     mutual_auth,
                     HANDSHAKE_VERSION,
@@ -272,7 +225,6 @@ impl NetworkBuilder {
                     self.network_context,
                     self.time_service.clone(),
                     key,
-                    // auth_mode,
                     self.peers_and_metadata.clone(),
                     mutual_auth,
                     HANDSHAKE_VERSION,
@@ -290,13 +242,11 @@ impl NetworkBuilder {
     }
 
     pub fn start(&mut self) {
-        // TODO network2 start the built network
         if self.state != State::BUILT {
             panic!("NetworkBuilder.build but not in state BUILT");
         }
         let handle = self.handle.clone().unwrap();
         handle.enter();
-        // let config = self.config.clone();
         let seeds = self.config.merge_seeds();
         let connectivity_req_rx = self.connectivity_req_rx.take().unwrap();
         let (tpm, ant) = self.build_transport();
@@ -306,14 +256,8 @@ impl NetworkBuilder {
             self.time_service.clone(),
             self.peers_and_metadata.clone(),
             seeds,
-            // connection_reqs_tx,
-            // connection_notifs_rx,
             connectivity_req_rx,
-            // Duration::from_millis(config.connectivity_check_interval_ms),
             ExponentialBackoff::from_millis(self.config.connection_backoff_base).factor(1000),
-            // Duration::from_millis(config.max_connection_delay_ms),
-            // Some(config.max_outbound_connections),
-            // config.mutual_authentication,
             ant,
             self.apps.clone(),
             self.peer_senders.clone(),
@@ -331,15 +275,6 @@ impl NetworkBuilder {
         );
         info!("network {:?} listening on {:?}", self.network_context.network_id(), listen_addr);
         self.state = State::STARTED;
-        // self.config.listen_address.clone()
-        // // authentication_mode,
-        // self.config.mutual_authentication
-        // self.config.max_frame_size
-        // self.config.max_message_size,
-        // self.config.enable_proxy_protocol,
-        // self.config.network_channel_size,
-        // self.config.max_concurrent_network_reqs,
-        // self.config.max_inbound_connections,
     }
 
     pub fn network_context(&self) -> NetworkContext {
@@ -354,9 +289,6 @@ fn transport_peer_manager_start(
     executor: Handle,
     network_id: NetworkId,
     apps: Arc<ApplicationCollector>,
-    // config: &NetworkConfig,
-    // time_service: TimeService,
-    // connectivity_req_rx: tokio::sync::mpsc::Receiver<ConnectivityRequest>,
 ) -> NetworkAddress {
     let result = match tpm {
         TransportPeerManager::Tcp(mut pm) => { pm.listen( listen_address,  executor ) }
@@ -423,41 +355,6 @@ impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
             self.peer_cache = update;
             self.peer_cache_generation = update_generation;
         }
-    }
-
-    async fn connect_outbound(
-        &self,
-        peer_id: PeerId,
-        addr: NetworkAddress,
-    ) {
-        // TODO: rebuild connection init time counter
-        let outbound = match self.transport.dial(peer_id, addr.clone()) {
-            Ok(outbound) => {
-                outbound
-            }
-            Err(err) => {
-                warn!("dial err: {:?}", err);
-                // TODO: counter
-                return;
-            }
-        };
-        let mut connection = match outbound.await {
-            Ok(connection) => { // Connection<TSocket>
-                connection
-            }
-            Err(err) => {
-                warn!("dial err 2: {:?}", err);
-                // TODO: counter
-                return
-            }
-        };
-        let dialed_peer_id = connection.metadata.remote_peer_id;
-        if dialed_peer_id != peer_id {
-            warn!("dial {:?} did not reach peer {:?} but peer {:?}", addr, peer_id, dialed_peer_id);
-            connection.socket.close();
-            return;
-        }
-        // TODO: store connection, start stuff
     }
 
     fn listen(
@@ -570,9 +467,7 @@ impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
                 self.network_context,
                 conn.metadata
             );
-            // TODO network2: rebuild counters
-            // counters::connections_rejected(&self.network_context, conn.metadata.origin)
-            //     .inc();
+            counters::connections_rejected(&self.network_context, conn.metadata.origin).inc();
             return false;
         }
 
@@ -603,93 +498,3 @@ enum TransportPeerManager {
     #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
     Memory(MemoryPeerManager),
 }
-//
-// pub enum AptosNetTransportActual {
-//     Tcp(AptosNetTransport<TcpTransport>),
-//     #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
-//     Memory(AptosNetTransport<MemoryTransport>),
-// }
-//
-// impl AptosNetTransportActual {
-//     pub fn dial(
-//         &mut self,
-//         remote_peer_network_id: PeerNetworkId,
-//         network_address: NetworkAddress,
-//         config: &NetworkConfig,
-//         apps: Arc<ApplicationCollector>,
-//         handle: Handle,
-//         peers_and_metadata: Arc<PeersAndMetadata>,
-//         peer_senders: Arc<OutboundPeerConnections>,
-//     ) {
-//         match self {
-//             AptosNetTransportActual::Tcp(tt) => {
-//                 connect_outbound(tt, remote_peer_network_id, network_address, config, apps, handle, peers_and_metadata, peer_senders);
-//             }
-//             #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
-//             AptosNetTransportActual::Memory(tt) => {
-//                 connect_outbound(tt, remote_peer_network_id, network_address, config, apps, handle, peers_and_metadata, peer_senders);
-//             }
-//         }
-//     }
-// }
-
-// TTransport: Transport<Error = io::Error>,
-// TTransport::Output: TSocket,
-// TTransport::Outbound: Send + 'static,
-// TTransport::Inbound: Send + 'static,
-// TTransport::Listener: Send + 'static,
-//
-// async fn connect_outbound<TTransport, TSocket>(
-//     transport: &AptosNetTransport<TTransport>,
-//     remote_peer_network_id: PeerNetworkId,
-//     addr: NetworkAddress,
-//     config: &NetworkConfig,
-//     apps: Arc<ApplicationCollector>,
-//     handle: Handle,
-//     peers_and_metadata: Arc<PeersAndMetadata>,
-//     peer_senders: Arc<OutboundPeerConnections>,
-// ) -> io::Result<()>
-//     where
-//         TSocket: aptos_network2::transport::TSocket,
-//         TTransport: Transport<Output = TSocket, Error = io::Error> + Send + 'static,
-// {
-//     let peer_id = remote_peer_network_id.peer_id();
-//     // TODO: rebuild connection init time counter
-//     let outbound = match transport.dial(peer_id, addr.clone()) {
-//         Ok(outbound) => {
-//             outbound
-//         }
-//         Err(err) => {
-//             warn!("dial err: {:?}", err);
-//             // TODO: counter
-//             return Err(err);
-//         }
-//     };
-//     let mut connection = match outbound.await {
-//         Ok(connection) => { // Connection<TSocket>
-//             connection
-//         }
-//         Err(err) => {
-//             warn!("dial err 2: {:?}", err);
-//             // TODO: counter
-//             return Err(err);
-//         }
-//     };
-//     let dialed_peer_id = connection.metadata.remote_peer_id;
-//     if dialed_peer_id != peer_id {
-//         warn!("dial {:?} did not reach peer {:?} but peer {:?}", addr, peer_id, dialed_peer_id);
-//         connection.socket.close();
-//         return Err(Error::new(ErrorKind::InvalidData, "peer_id mismatch"));
-//     }
-//     peer::start_peer(
-//         config,
-//         connection.socket,
-//         connection.metadata,
-//         apps,
-//         handle,
-//         remote_peer_network_id,
-//         peers_and_metadata,
-//         peer_senders,
-//     );
-//     Ok(())
-// }
