@@ -56,11 +56,10 @@ use crate::{
 use anyhow::{bail, ensure, Context};
 use aptos_bounded_executor::BoundedExecutor;
 use aptos_channels::{aptos_channel, message_queues::QueueStyle};
-use aptos_config::config::{ConsensusConfig, NodeConfig, SecureBackend};
+use aptos_config::config::{ConsensusConfig, DagConsensusConfig, NodeConfig, SecureBackend};
 use aptos_consensus_types::{
     common::{Author, Round},
     epoch_retrieval::EpochRetrievalRequest,
-    proposal_msg::ProposalMsg,
 };
 use aptos_event_notifications::ReconfigNotificationListener;
 use aptos_global_constants::CONSENSUS_KEY;
@@ -135,7 +134,7 @@ pub struct EpochManager<P: OnChainConfigProvider> {
     round_manager_tx: Option<
         aptos_channel::Sender<(Author, Discriminant<VerifiedEvent>), (Author, VerifiedEvent)>,
     >,
-    proposal_precheck_tx: Option<aptos_channel::Sender<Author, Box<ProposalMsg>>>,
+    buffered_proposal_tx: Option<aptos_channel::Sender<Author, VerifiedEvent>>,
     round_manager_close_tx: Option<oneshot::Sender<oneshot::Sender<()>>>,
     epoch_state: Option<Arc<EpochState>>,
     block_retrieval_tx:
@@ -152,6 +151,7 @@ pub struct EpochManager<P: OnChainConfigProvider> {
     aptos_time_service: aptos_time_service::TimeService,
     dag_rpc_tx: Option<aptos_channel::Sender<AccountAddress, IncomingDAGRequest>>,
     dag_shutdown_tx: Option<oneshot::Sender<oneshot::Sender<()>>>,
+    dag_config: DagConsensusConfig,
 }
 
 impl<P: OnChainConfigProvider> EpochManager<P> {
@@ -171,6 +171,7 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
     ) -> Self {
         let author = node_config.validator_network.as_ref().unwrap().peer_id();
         let config = node_config.consensus.clone();
+        let dag_config = node_config.dag_consensus.clone();
         let sr_config = &node_config.consensus.safety_rules;
         let safety_rules_manager = SafetyRulesManager::new(sr_config);
         Self {
@@ -191,7 +192,7 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
             buffer_manager_reset_tx: None,
             round_manager_tx: None,
             round_manager_close_tx: None,
-            proposal_precheck_tx: None,
+            buffered_proposal_tx: None,
             epoch_state: None,
             block_retrieval_tx: None,
             quorum_store_msg_tx: None,
@@ -203,6 +204,7 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
             dag_rpc_tx: None,
             dag_shutdown_tx: None,
             aptos_time_service,
+            dag_config,
         }
     }
 
@@ -285,7 +287,7 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
                     + onchain_config.max_failed_authors_to_store()
                     + PROPOSER_ROUND_BEHIND_STORAGE_BUFFER;
 
-                let backend = Box::new(AptosDBBackend::new(
+                let backend = Arc::new(AptosDBBackend::new(
                     window_size,
                     seek_len,
                     self.storage.aptos_db(),
@@ -848,42 +850,13 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
             Some(&counters::ROUND_MANAGER_CHANNEL_MSGS),
         );
 
-        let (proposal_precheck_tx, mut proposal_precheck_rx) = aptos_channel::new(
-            QueueStyle::FIFO,
-            1,
+        let (buffered_proposal_tx, buffered_proposal_rx) = aptos_channel::new(
+            QueueStyle::KLAST,
+            5,
             Some(&counters::ROUND_MANAGER_CHANNEL_MSGS),
         );
         self.round_manager_tx = Some(round_manager_tx.clone());
-        self.proposal_precheck_tx = Some(proposal_precheck_tx);
-
-        let (checked_proposal_tx, checked_proposal_rx) = aptos_channel::new(
-            QueueStyle::KLAST,
-            onchain_consensus_config.leader_reputation_exclude_round() as usize,
-            None,
-        );
-        let proposer_election_clone = proposer_election.clone();
-        let checked_proposal_tx_clone = checked_proposal_tx.clone();
-
-        // Spawn task to buffer valid proposals
-        tokio::spawn(async move {
-            while let Some(proposal_msg) = proposal_precheck_rx.next().await {
-                if proposer_election_clone
-                    .is_valid_proposer(proposal_msg.proposer(), proposal_msg.proposal().round())
-                {
-                    if let Err(e) =
-                        checked_proposal_tx_clone.push((), VerifiedEvent::ProposalMsg(proposal_msg))
-                    {
-                        warn!("Failed to send to proposal channel {:?}", e);
-                    }
-                } else {
-                    warn!(
-                        "Invalid proposal {} from {}",
-                        proposal_msg.proposal(),
-                        proposal_msg.proposer(),
-                    );
-                }
-            }
-        });
+        self.buffered_proposal_tx = Some(buffered_proposal_tx.clone());
 
         let mut round_manager = RoundManager::new(
             epoch_state,
@@ -895,7 +868,7 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
             network_sender,
             self.storage.clone(),
             onchain_consensus_config,
-            checked_proposal_tx,
+            buffered_proposal_tx,
             self.config.clone(),
         );
 
@@ -903,7 +876,7 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
 
         let (close_tx, close_rx) = oneshot::channel();
         self.round_manager_close_tx = Some(close_tx);
-        tokio::spawn(round_manager.start(round_manager_rx, checked_proposal_rx, close_rx));
+        tokio::spawn(round_manager.start(round_manager_rx, buffered_proposal_rx, close_rx));
 
         self.spawn_block_retrieval_task(epoch, block_store);
     }
@@ -1065,6 +1038,8 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
 
         let bootstrapper = DagBootstrapper::new(
             self.author,
+            self.dag_config.clone(),
+            onchain_dag_consensus_config.clone(),
             signer,
             Arc::new(epoch_state),
             dag_storage,
@@ -1119,7 +1094,7 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
             let epoch_state = self.epoch_state.clone().unwrap();
             let quorum_store_enabled = self.quorum_store_enabled;
             let quorum_store_msg_tx = self.quorum_store_msg_tx.clone();
-            let proposal_precheck_tx = self.proposal_precheck_tx.clone();
+            let buffered_proposal_tx = self.buffered_proposal_tx.clone();
             let round_manager_tx = self.round_manager_tx.clone();
             let my_peer_id = self.author;
             let max_num_batches = self.config.quorum_store.receiver_max_num_batches;
@@ -1139,7 +1114,7 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
                             Self::forward_event(
                                 quorum_store_msg_tx,
                                 round_manager_tx,
-                                proposal_precheck_tx,
+                                buffered_proposal_tx,
                                 peer_id,
                                 verified_event,
                             );
@@ -1260,7 +1235,7 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
         round_manager_tx: Option<
             aptos_channel::Sender<(Author, Discriminant<VerifiedEvent>), (Author, VerifiedEvent)>,
         >,
-        proposal_precheck_tx: Option<aptos_channel::Sender<Author, Box<ProposalMsg>>>,
+        buffered_proposal_tx: Option<aptos_channel::Sender<Author, VerifiedEvent>>,
         peer_id: AccountAddress,
         event: VerifiedEvent,
     ) {
@@ -1277,8 +1252,8 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
                 Self::forward_event_to(quorum_store_msg_tx, peer_id, quorum_store_event)
                     .context("quorum store sender")
             },
-            VerifiedEvent::ProposalMsg(proposal_msg) => {
-                Self::forward_event_to(proposal_precheck_tx, peer_id, proposal_msg)
+            proposal_event @ VerifiedEvent::ProposalMsg(_) => {
+                Self::forward_event_to(buffered_proposal_tx, peer_id, proposal_event)
                     .context("proposal precheck sender")
             },
             round_manager_event => Self::forward_event_to(

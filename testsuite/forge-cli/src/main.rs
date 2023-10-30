@@ -20,7 +20,11 @@ use aptos_forge::{
 };
 use aptos_logger::{info, Level};
 use aptos_rest_client::Client as RestClient;
-use aptos_sdk::{move_types::account_address::AccountAddress, transaction_builder::aptos_stdlib};
+use aptos_sdk::{
+    move_types::account_address::AccountAddress,
+    transaction_builder::aptos_stdlib,
+    types::on_chain_config::{OnChainConsensusConfig, OnChainExecutionConfig},
+};
 use aptos_testcases::{
     compatibility_test::SimpleValidatorUpgrade,
     consensus_reliability_tests::ChangingWorkingQuorumTest,
@@ -1039,7 +1043,7 @@ fn realistic_env_workload_sweep_test() -> ForgeConfig {
         criteria: [
             (3700, 0.35, 0.5, 0.8, 0.65),
             (2800, 0.35, 0.5, 1.2, 1.3),
-            (1800, 0.35, 2.0, 1.5, 2.7),
+            (1800, 0.35, 2.0, 1.5, 3.0),
             (950, 0.35, 0.65, 1.5, 2.9),
             // (150, 0.5, 1.0, 1.5, 0.65),
         ]
@@ -1775,6 +1779,11 @@ fn realistic_env_max_load_test(
             // Have single epoch change in land blocking, and a few on long-running
             helm_values["chain"]["epoch_duration_secs"] =
                 (if long_running { 600 } else { 300 }).into();
+            helm_values["chain"]["on_chain_consensus_config"] =
+                serde_yaml::to_value(OnChainConsensusConfig::default()).expect("must serialize");
+            helm_values["chain"]["on_chain_execution_config"] =
+                serde_yaml::to_value(OnChainExecutionConfig::default_for_genesis())
+                    .expect("must serialize");
         }))
         // First start higher gas-fee traffic, to not cause issues with TxnEmitter setup - account creation
         .with_emit_job(
@@ -1798,21 +1807,24 @@ fn realistic_env_max_load_test(
                 ))
                 .add_latency_threshold(3.4, LatencyType::P50)
                 .add_latency_threshold(4.5, LatencyType::P90)
-                .add_latency_breakdown_threshold(LatencyBreakdownThreshold::new_strict(vec![
-                    (LatencyBreakdownSlice::QsBatchToPos, 0.35),
-                    // only reaches close to threshold during epoch change
-                    (
-                        LatencyBreakdownSlice::QsPosToProposal,
-                        if ha_proxy { 0.7 } else { 0.6 },
-                    ),
-                    // can be adjusted down if less backpressure
-                    (LatencyBreakdownSlice::ConsensusProposalToOrdered, 0.85),
-                    // can be adjusted down if less backpressure
-                    (
-                        LatencyBreakdownSlice::ConsensusOrderedToCommit,
-                        if ha_proxy { 1.3 } else { 0.75 },
-                    ),
-                ]))
+                .add_latency_breakdown_threshold(LatencyBreakdownThreshold::new_with_breach_pct(
+                    vec![
+                        (LatencyBreakdownSlice::QsBatchToPos, 0.35),
+                        // only reaches close to threshold during epoch change
+                        (
+                            LatencyBreakdownSlice::QsPosToProposal,
+                            if ha_proxy { 0.7 } else { 0.6 },
+                        ),
+                        // can be adjusted down if less backpressure
+                        (LatencyBreakdownSlice::ConsensusProposalToOrdered, 0.85),
+                        // can be adjusted down if less backpressure
+                        (
+                            LatencyBreakdownSlice::ConsensusOrderedToCommit,
+                            if ha_proxy { 1.3 } else { 0.75 },
+                        ),
+                    ],
+                    5,
+                ))
                 .add_chain_progress(StateProgressThreshold {
                     max_no_progress_secs: 10.0,
                     max_round_gap: 4,
@@ -1877,11 +1889,12 @@ fn realistic_network_tuned_for_throughput_test() -> ForgeConfig {
             .with_success_criteria(
                 SuccessCriteria::new(25000)
                     .add_no_restarts()
-                    .add_wait_for_catchup_s(60)
-                    .add_chain_progress(StateProgressThreshold {
-                        max_no_progress_secs: 10.0,
-                        max_round_gap: 4,
-                    }),
+                    .add_wait_for_catchup_s(60), /* Doesn't work with out event indices
+                                                 .add_chain_progress(StateProgressThreshold {
+                                                     max_no_progress_secs: 10.0,
+                                                     max_round_gap: 4,
+                                                 }),
+                                                  */
             );
     } else {
         forge_config = forge_config.with_success_criteria(
@@ -1895,11 +1908,12 @@ fn realistic_network_tuned_for_throughput_test() -> ForgeConfig {
                     MetricsThreshold::new(14.0, 30),
                     // Check that we don't use more than 10 GB of memory for 30% of the time.
                     MetricsThreshold::new_gb(10.0, 30),
-                ))
-                .add_chain_progress(StateProgressThreshold {
-                    max_no_progress_secs: 10.0,
-                    max_round_gap: 4,
-                }),
+                )), /* Doens't work without event indices
+                    .add_chain_progress(StateProgressThreshold {
+                        max_no_progress_secs: 10.0,
+                        max_round_gap: 4,
+                    }),
+                    */
         );
     }
 

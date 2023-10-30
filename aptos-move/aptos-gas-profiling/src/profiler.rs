@@ -570,6 +570,7 @@ where
                 key: key.clone(),
                 op_type: write_op_type(op),
                 cost: fee,
+                refund: slot_refund,
             });
             // TODO(gas): track storage refund in the profiler
             write_fee += fee;
@@ -592,6 +593,7 @@ where
                 key: key.clone(),
                 op_type: write_op_type(group_write.metadata_op()),
                 cost: fee,
+                refund,
             });
 
             write_fee += fee;
@@ -600,7 +602,7 @@ where
         // Events
         let mut event_fee = Fee::new(0);
         let mut event_fees = vec![];
-        for event in change_set.events().iter() {
+        for (event, _) in change_set.events().iter() {
             let fee = self.storage_fee_per_event(event);
             event_fees.push(EventStorage {
                 ty: event.type_tag().clone(),
@@ -618,6 +620,8 @@ where
 
         self.storage_fees = Some(StorageFees {
             total: write_fee + event_fee + txn_fee,
+            total_refund,
+
             write_set_storage,
             events: event_fees,
             event_discount,
@@ -655,21 +659,25 @@ where
             last.events.push(ExecutionGasEvent::Call(cur));
         }
 
-        TransactionGasLog {
-            exec_io: ExecutionAndIOCosts {
-                gas_scaling_factor: self.base.gas_unit_scaling_factor(),
-                total: self.total_exec_io,
-                intrinsic_cost: self.intrinsic_cost.unwrap_or_else(|| 0.into()),
-                call_graph: self.frames.pop().expect("frame must exist"),
-                write_set_transient: self.write_set_transient,
-            },
-            storage: self.storage_fees.unwrap_or_else(|| StorageFees {
-                total: 0.into(),
-                write_set_storage: vec![],
-                events: vec![],
-                event_discount: 0.into(),
-                txn_storage: 0.into(),
-            }),
-        }
+        let exec_io = ExecutionAndIOCosts {
+            gas_scaling_factor: self.base.gas_unit_scaling_factor(),
+            total: self.total_exec_io,
+            intrinsic_cost: self.intrinsic_cost.unwrap_or_else(|| 0.into()),
+            call_graph: self.frames.pop().expect("frame must exist"),
+            write_set_transient: self.write_set_transient,
+        };
+        exec_io.assert_consistency();
+
+        let storage = self.storage_fees.unwrap_or_else(|| StorageFees {
+            total: 0.into(),
+            total_refund: 0.into(),
+            write_set_storage: vec![],
+            events: vec![],
+            event_discount: 0.into(),
+            txn_storage: 0.into(),
+        });
+        storage.assert_consistency();
+
+        TransactionGasLog { exec_io, storage }
     }
 }

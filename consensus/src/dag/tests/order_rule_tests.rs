@@ -1,18 +1,17 @@
 // Copyright © Aptos Foundation
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{
-    dag::{
-        adapter::OrderedNotifier,
-        anchor_election::RoundRobinAnchorElection,
-        dag_state_sync::DAG_WINDOW,
-        dag_store::Dag,
-        order_rule::OrderRule,
-        tests::{dag_test::MockStorage, helpers::generate_dag_nodes},
-        types::NodeMetadata,
-        CertifiedNode,
+use crate::dag::{
+    adapter::OrderedNotifier,
+    anchor_election::RoundRobinAnchorElection,
+    dag_store::Dag,
+    order_rule::OrderRule,
+    tests::{
+        dag_test::MockStorage,
+        helpers::{generate_dag_nodes, TEST_DAG_WINDOW},
     },
-    test_utils::placeholder_ledger_info,
+    types::NodeMetadata,
+    CertifiedNode,
 };
 use aptos_consensus_types::common::{Author, Round};
 use aptos_infallible::{Mutex, RwLock};
@@ -87,8 +86,8 @@ impl OrderedNotifier for TestNotifier {
         &self,
         ordered_nodes: Vec<Arc<CertifiedNode>>,
         _failed_authors: Vec<(Round, Author)>,
-    ) -> anyhow::Result<()> {
-        Ok(self.tx.unbounded_send(ordered_nodes)?)
+    ) {
+        self.tx.unbounded_send(ordered_nodes).unwrap()
     }
 }
 
@@ -96,7 +95,6 @@ fn create_order_rule(
     epoch_state: Arc<EpochState>,
     dag: Arc<RwLock<Dag>>,
 ) -> (OrderRule, UnboundedReceiver<Vec<Arc<CertifiedNode>>>) {
-    let ledger_info = placeholder_ledger_info();
     let anchor_election = Box::new(RoundRobinAnchorElection::new(
         epoch_state.verifier.get_ordered_account_addresses(),
     ));
@@ -104,11 +102,12 @@ fn create_order_rule(
     (
         OrderRule::new(
             epoch_state,
-            ledger_info,
+            1,
             dag,
             anchor_election,
             Arc::new(TestNotifier { tx }),
             Arc::new(MockStorage::new()),
+            TEST_DAG_WINDOW as Round,
         ),
         rx,
     )
@@ -135,7 +134,7 @@ proptest! {
             epoch: 1,
             verifier: validator_verifier,
         });
-        let mut dag = Dag::new(epoch_state.clone(), Arc::new(MockStorage::new()), 0, DAG_WINDOW);
+        let mut dag = Dag::new(epoch_state.clone(), Arc::new(MockStorage::new()), 0, TEST_DAG_WINDOW);
         for round_nodes in &nodes {
             for node in round_nodes.iter().flatten() {
                 dag.add_node(node.clone()).unwrap();
@@ -226,7 +225,7 @@ fn test_order_rule_basic() {
         epoch_state.clone(),
         Arc::new(MockStorage::new()),
         0,
-        DAG_WINDOW,
+        TEST_DAG_WINDOW,
     );
     for round_nodes in &nodes {
         for node in round_nodes.iter().flatten() {
@@ -245,7 +244,7 @@ fn test_order_rule_basic() {
         // anchor (2, 1) has 3 votes
         vec![(1, 2), (1, 1), (2, 1)],
         // anchor (3, 1) has 2 votes
-        vec![(2, 2), (2, 0), (3, 1)],
+        vec![(1, 3), (2, 2), (2, 0), (3, 1)],
         // anchor (4, 2) has 3 votes
         vec![(3, 3), (3, 2), (3, 0), (4, 2)],
         // anchor (5, 2) has 3 votes

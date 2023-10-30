@@ -47,12 +47,15 @@ members = [
     "consensus/consensus-types",
     "consensus/safety-rules",
     "crates/aptos",
+    "crates/aptos-admin-service",
     "crates/aptos-api-tester",
     "crates/aptos-bitvec",
     "crates/aptos-build-info",
     "crates/aptos-compression",
     "crates/aptos-crypto",
     "crates/aptos-crypto-derive",
+    "crates/aptos-debugger",
+    "crates/aptos-drop-helper",
     "crates/aptos-enum-conversion-derive",
     "crates/aptos-faucet/cli",
     "crates/aptos-faucet/core",
@@ -73,7 +76,6 @@ members = [
     "crates/aptos-openapi",
     "crates/aptos-profiler",
     "crates/aptos-proptest-helpers",
-    "crates/aptos-protos",
     "crates/aptos-push-metrics",
     "crates/aptos-rate-limiter",
     "crates/aptos-rest-client",
@@ -102,6 +104,7 @@ members = [
     "crates/transaction-emitter-lib",
     "crates/transaction-generator-lib",
     "ecosystem/indexer-grpc/indexer-grpc-cache-worker",
+    "ecosystem/indexer-grpc/indexer-grpc-data-access",
     "ecosystem/indexer-grpc/indexer-grpc-data-service",
     "ecosystem/indexer-grpc/indexer-grpc-file-store",
     "ecosystem/indexer-grpc/indexer-grpc-fullnode",
@@ -113,7 +116,6 @@ members = [
     "ecosystem/node-checker",
     "ecosystem/node-checker/fn-check-client",
     "execution/block-partitioner",
-    "execution/db-bootstrapper",
     "execution/executor",
     "execution/executor-benchmark",
     "execution/executor-service",
@@ -132,6 +134,7 @@ members = [
     "peer-monitoring-service/client",
     "peer-monitoring-service/server",
     "peer-monitoring-service/types",
+    "protos/rust",
     "sdk",
     "secure/net",
     "secure/storage",
@@ -240,13 +243,13 @@ default-members = [
     "aptos-node",
     "consensus/safety-rules",
     "crates/aptos",
+    "crates/aptos-debugger",
     "crates/aptos-faucet/service",
     "crates/aptos-keygen",
     "crates/aptos-rate-limiter",
     "crates/aptos-rosetta",
     "crates/transaction-emitter",
     "aptos-move/framework",
-    "execution/db-bootstrapper",
     "storage/backup/backup-cli",
     "ecosystem/node-checker",
 ]
@@ -267,6 +270,7 @@ rust-version = "1.72.1"
 # Please do not add any test features here: they should be declared by the individual crate.
 aptos = { path = "crates/aptos" }
 aptos-accumulator = { path = "storage/accumulator" }
+aptos-admin-service = { path = "crates/aptos-admin-service" }
 aptos-aggregator = { path = "aptos-move/aptos-aggregator" }
 aptos-api = { path = "api" }
 aptos-api-test-context = { path = "api/test-context" }
@@ -293,7 +297,8 @@ aptos-data-streaming-service = { path = "state-sync/data-streaming-service" }
 aptos-db = { path = "storage/aptosdb" }
 aptos-db-indexer = { path = "storage/indexer" }
 aptos-db-tool = { path = "storage/db-tool" }
-aptos-debugger = { path = "aptos-move/aptos-debugger" }
+aptos-debugger = { path = "crates/aptos-debugger" }
+aptos-drop-helper = { path = "crates/aptos-drop-helper" }
 aptos-event-notifications = { path = "state-sync/inter-component/event-notifications" }
 aptos-executable-store = { path = "storage/executable-store" }
 aptos-executor = { path = "execution/executor" }
@@ -327,6 +332,7 @@ aptos-id-generator = { path = "crates/aptos-id-generator" }
 aptos-indexer = { path = "crates/indexer" }
 aptos-indexer-grpc-cache-worker = { path = "ecosystem/indexer-grpc/indexer-grpc-cache-worker" }
 aptos-indexer-grpc-data-service = { path = "ecosystem/indexer-grpc/indexer-grpc-data-service" }
+aptos-indexer-grpc-data-access = { path = "ecosystem/indexer-grpc/indexer-grpc-data-access" }
 aptos-indexer-grpc-file-store = { path = "ecosystem/indexer-grpc/indexer-grpc-file-store" }
 aptos-indexer-grpc-post-processor = { path = "ecosystem/indexer-grpc/indexer-grpc-post-processor" }
 aptos-indexer-grpc-fullnode = { path = "ecosystem/indexer-grpc/indexer-grpc-fullnode" }
@@ -345,6 +351,7 @@ aptos-mempool = { path = "mempool" }
 aptos-mempool-notifications = { path = "state-sync/inter-component/mempool-notifications" }
 aptos-memsocket = { path = "network/memsocket" }
 aptos-metrics-core = { path = "crates/aptos-metrics-core" }
+aptos-move-debugger = { path = "aptos-move/aptos-debugger" }
 aptos-move-examples = { path = "aptos-move/move-examples" }
 aptos-moving-average = { path = "crates/moving-average" }
 aptos-mvhashmap = { path = "aptos-move/mvhashmap" }
@@ -369,7 +376,7 @@ aptos-peer-monitoring-service-server = { path = "peer-monitoring-service/server"
 aptos-peer-monitoring-service-types = { path = "peer-monitoring-service/types" }
 aptos-profiler = { path = "crates/aptos-profiler" }
 aptos-proptest-helpers = { path = "crates/aptos-proptest-helpers" }
-aptos-protos = { path = "crates/aptos-protos" }
+aptos-protos = { path = "protos/rust" }
 aptos-proxy = { path = "crates/proxy" }
 aptos-push-metrics = { path = "crates/aptos-push-metrics" }
 aptos-rate-limiter = { path = "crates/aptos-rate-limiter" }
@@ -435,6 +442,7 @@ ark-std = { version = "0.4.0", features = ["getrandom"] }
 assert_approx_eq = "1.1.0"
 assert_unordered = "0.3.5"
 async-channel = "1.7.1"
+async-mutex = "1.4.0"
 async-stream = "0.3"
 async-trait = "0.1.53"
 axum = "0.5.16"
@@ -444,14 +452,12 @@ backtrace = "0.3.58"
 bcs = { git = "https://github.com/aptos-labs/bcs.git", rev = "d31fab9d81748e2594be5cd5cdf845786a30562d" }
 better_any = "0.1.1"
 bigdecimal = { version = "0.3.0", features = ["serde"] }
+version-compare = "0.1.1"
 bitvec = "1.0.1"
 blake2 = "0.10.4"
 blake2-rfc = "0.2.18"
 blst = "0.3.7"
-# We use a version of bollard where it relies on a lower version of serde_with.
-# Otherwise it imposes that we use serde 1.0.157, which we can't due to this issue:
-# https://github.com/aptos-labs/aptos-core/issues/10424
-bollard = { git = "https://github.com/banool/bollard.git", rev = "0bf0b43f736040bb3d4aacb20125fd2b4021733d" }
+bollard = "0.15"
 bulletproofs = { version = "4.0.0" }
 byteorder = "1.4.3"
 bytes = { version = "1.4.0", features = ["serde"] }
@@ -511,6 +517,7 @@ heck = "0.3.2"
 hex = "0.4.3"
 hkdf = "0.10.0"
 hostname = "0.3.1"
+http = "0.2.9"
 httpmock = "0.6.8"
 hyper = { version = "0.14.18", features = ["full"] }
 hyper-tls = "0.5.0"
@@ -528,6 +535,7 @@ jemallocator = { version = "0.5.0", features = [
 jemalloc-sys = "0.5.4"
 json-patch = "0.2.6"
 jsonwebtoken = "8.1"
+lazy_static = "1.4.0"
 libc = "0.2.147"
 libfuzzer-sys = "0.4.6"
 libsecp256k1 = "0.7.0"
@@ -537,19 +545,25 @@ lz4 = "1.24.0"
 maplit = "1.0.2"
 merlin = "3"
 mime = "0.3.16"
+mini-moka = { version = "0.10.2", features = ["sync"] }
 mirai-annotations = "1.12.0"
 mockall = "0.11.4"
 more-asserts = "0.3.0"
 native-tls = "0.2.10"
 ntest = "0.9.0"
+num-bigint = { version = "0.3.2", features = ["rand"] }
 num_cpus = "1.13.1"
 num-derive = "0.3.3"
+num-integer = "0.1.42"
 num-traits = "0.2.15"
 number_range = "0.3.2"
 once_cell = "1.10.0"
 ordered-float = "3.9.1"
 ouroboros = "0.15.6"
 owo-colors = "3.5.0"
+p256 = { version = "0.13.2" }
+signature = "2.1.0"
+sec1 = "0.7.0"
 parking_lot = "0.12.0"
 paste = "1.0.7"
 pbjson = "0.5.1"
@@ -558,7 +572,7 @@ pin-project = "1.0.10"
 poem = { version = "=1.3.55", features = ["anyhow", "rustls"] }
 poem-openapi = { version = "=2.0.11", features = ["swagger-ui", "url"] }
 poem-openapi-derive = "=2.0.11"
-pprof = { version = "0.11", features = ["flamegraph"] }
+pprof = { version = "0.11", features = ["flamegraph", "protobuf-codec"] }
 pretty_assertions = "1.2.1"
 procfs = "0.14.1"
 proc-macro2 = "1.0.38"
@@ -598,9 +612,9 @@ sha2 = "0.9.3"
 sha2_0_10_6 = { package = "sha2", version = "0.10.6" }
 sha3 = "0.9.1"
 siphasher = "0.3.10"
-# For more information about why we are pinned to 1.0.149, see this issue:
+# For more information about why we are pinned to 1.0.152, see this issue:
 # https://github.com/aptos-labs/aptos-core/issues/10424
-serde = { version = "=1.0.149", features = ["derive", "rc"] }
+serde = { version = "=1.0.152", features = ["derive", "rc"] }
 serde_bytes = "0.11.6"
 serde_json = { version = "1.0.81", features = ["preserve_order", "arbitrary_precision"] } # Note: arbitrary_precision is required to parse u256 in JSON
 serde_repr = "0.1"
@@ -635,18 +649,19 @@ tokio = { version = "1.21.0", features = ["full"] }
 tokio-io-timeout = "1.2.0"
 tokio-metrics = "0.1.0"
 tokio-retry = "0.3.0"
+tokio-scoped = { version = "0.2.0" }
 tokio-stream = { version = "0.1.14", features = ["fs"] }
 tokio-test = "0.4.1"
 tokio-util = { version = "0.7.2", features = ["compat", "codec"] }
 toml = "0.7.4"
-tonic = { version = "0.10.0", features = [
+tonic = { version = "0.10.2", features = [
     "tls-roots",
     "transport",
     "prost",
     "gzip",
     "codegen",
 ] }
-tonic-reflection = "0.10.0"
+tonic-reflection = "0.10.2"
 ureq = { version = "1.5.4", features = [
     "json",
     "native-tls",
@@ -729,10 +744,6 @@ debug-assertions = true
 [profile.bench]
 debug = true
 
-# This is a temporary workaround to avoid multiple library
-# definitions for LZ4 (caused by rust-rocksdb).
-# This will be removed once our pull requests land.
-# https://github.com/rust-rocksdb/rust-rocksdb/issues/666
 [patch.crates-io]
 serde-reflection = { git = "https://github.com/aptos-labs/serde-reflection", rev = "839aed62a20ddccf043c08961cfe74875741ccba" }
 merlin = { git = "https://github.com/aptos-labs/merlin" }
