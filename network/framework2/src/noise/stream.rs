@@ -523,7 +523,7 @@ where
 mod test {
     use super::*;
     use crate::{
-        noise::{AntiReplayTimestamps, HandshakeAuthMode, NoiseUpgrader},
+        noise::{AntiReplayTimestamps, NoiseUpgrader},
         testutils::fake_socket::{ReadOnlyTestSocket, ReadWriteTestSocket},
     };
     use aptos_config::network_id::NetworkContext;

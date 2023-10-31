@@ -282,7 +282,7 @@ fn display_trusted_peers(
     for network in registered_networks {
         peer_information_output.push(format!("\t- Network: {}", network));
         if let Ok(trusted_peers) = peers_and_metadata.get_trusted_peers(&network) {
-            let mut trusted_peers = trusted_peers.read().clone();
+            let trusted_peers = trusted_peers.read().clone();
             // Sort the peers before displaying them
             let mut sorted_trusted_peers = BTreeMap::new();
             for (peer_id, peer_info) in trusted_peers {

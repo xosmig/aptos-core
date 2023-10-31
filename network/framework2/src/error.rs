@@ -4,13 +4,7 @@
 
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use crate::{application};  // peer_manager::PeerManagerError
 use std::io;
-use thiserror::Error;
-
-// #[derive(Copy, Clone, Eq, PartialEq, Debug, Error)]
-// #[error(transparent)]
-
 
 /// Errors propagated from the network module.
 #[derive(Debug)]
@@ -30,11 +24,6 @@ pub enum NetworkError {
     NotConnected,
 }
 
-// impl From<NetworkErrorKind> for NetworkError {
-//     fn from(kind: NetworkErrorKind) -> NetworkError {
-//         NetworkError(anyhow::Error::new(kind))
-//     }
-// }
 
 impl From<anyhow::Error> for NetworkError {
     fn from(err: anyhow::Error) -> NetworkError {
@@ -50,45 +39,16 @@ impl From<String> for NetworkError {
 
 impl From<io::Error> for NetworkError {
     fn from(err: io::Error) -> NetworkError {
-        // anyhow::Error::new(err)
-        //     .context(NetworkErrorKind::IoError)
-        //     .into()
         NetworkError::IoError(err)
     }
 }
 
 impl From<bcs::Error> for NetworkError {
     fn from(err: bcs::Error) -> NetworkError {
-        // anyhow::Error::new(err)
-        //     .context(NetworkErrorKind::BcsError)
-        //     .into()
         NetworkError::BcsError(err)
     }
 }
 
-// impl From<PeerManagerError> for NetworkError {
-//     fn from(err: PeerManagerError) -> NetworkError {
-//         match err {
-//             PeerManagerError::IoError(_) => anyhow::Error::new(err)
-//                 .context(NetworkErrorKind::IoError)
-//                 .into(),
-//             PeerManagerError::NotConnected(_) => anyhow::Error::new(err)
-//                 .context(NetworkErrorKind::NotConnected)
-//                 .into(),
-//             err => anyhow::Error::new(err)
-//                 .context(NetworkErrorKind::PeerManagerError)
-//                 .into(),
-//         }
-//     }
-// }
-
-// impl From<application::error::Error> for NetworkError {
-//     fn from(err: application::error::Error) -> NetworkError {
-//         anyhow::Error::new(err)
-//             .context(NetworkErrorKind::IoError)
-//             .into()
-//     }
-// }
 
 impl Display for NetworkError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

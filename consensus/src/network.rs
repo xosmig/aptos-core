@@ -30,7 +30,7 @@ use aptos_consensus_types::{
 use aptos_logger::prelude::*;
 use aptos_network2::{
     application::interface::NetworkClient,
-    protocols::{network::Event, network::NetworkEvents, rpc::error::RpcError},
+    protocols::{network::Event, network::NetworkEvents, RpcError},
     ProtocolId,
 };
 use aptos_reliable_broadcast::RBNetworkSender;
@@ -43,7 +43,7 @@ use bytes::Bytes;
 use fail::fail_point;
 use futures::{
     channel::oneshot,
-    stream::{select, select_all},
+    stream::select,
     SinkExt, Stream, StreamExt,
 };
 use serde::{de::DeserializeOwned, Serialize};
@@ -720,9 +720,6 @@ impl NetworkTask {
                     {
                         warn!(error = ?e, "aptos channel closed");
                     };
-                },
-                _ => {
-                    // Ignore `NewPeer` and `LostPeer` events
                 },
             });
         }

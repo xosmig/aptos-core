@@ -10,7 +10,7 @@
 //
 
 use crate::{
-    noise::{stream::NoiseStream, AntiReplayTimestamps, HandshakeAuthMode, NoiseUpgrader},
+    noise::{stream::NoiseStream, AntiReplayTimestamps, NoiseUpgrader},
     testutils::fake_socket::{ReadOnlyTestSocket, ReadWriteTestSocket},
 };
 use aptos_config::network_id::NetworkContext;

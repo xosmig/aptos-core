@@ -295,41 +295,41 @@ impl InboundRpcs {
         self.inbound_rpc_tasks.select_next_some()
     }
 
-    /// Handle a completed response from the application handler. If successful,
-    /// we update the appropriate counters and enqueue the response message onto
-    /// the outbound write queue.
-    pub async fn send_outbound_response(
-        &mut self,
-        // write_reqs_tx: &mut aptos_channels::Sender<NetworkMessage>,
-        maybe_response: Result<RpcResponse, RpcError>,
-    ) -> Result<(), RpcError> {
-        let network_context = &self.network_context;
-        let response = match maybe_response {
-            Ok(response) => response,
-            Err(err) => {
-                // counters::rpc_messages(network_context, RESPONSE_LABEL, FAILED_LABEL).inc();
-                return Err(err);
-            },
-        };
-        let res_len = response.raw_response.len() as u64;
-
-        // Send outbound response to remote peer.
-        trace!(
-            NetworkSchema::new(network_context).remote_peer(&self.remote_peer_id),
-            "{} Sending rpc response to peer {} for request_id {}",
-            network_context,
-            self.remote_peer_id.short_str(),
-            response.request_id,
-        );
-        let message = NetworkMessage::RpcResponse(response);
-        // TODO: rebuild in non-channel way
-        //write_reqs_tx.send(message).await?;
-
-        // Collect counters for sent response.
-        // counters::rpc_messages(network_context, RESPONSE_LABEL, SENT_LABEL).inc();
-        // counters::rpc_bytes(network_context, RESPONSE_LABEL, SENT_LABEL).inc_by(res_len);
-        Ok(())
-    }
+    // /// Handle a completed response from the application handler. If successful,
+    // /// we update the appropriate counters and enqueue the response message onto
+    // /// the outbound write queue.
+    // pub async fn send_outbound_response(
+    //     &mut self,
+    //     // write_reqs_tx: &mut aptos_channels::Sender<NetworkMessage>,
+    //     maybe_response: Result<RpcResponse, RpcError>,
+    // ) -> Result<(), RpcError> {
+    //     let network_context = &self.network_context;
+    //     let response = match maybe_response {
+    //         Ok(response) => response,
+    //         Err(err) => {
+    //             // counters::rpc_messages(network_context, RESPONSE_LABEL, FAILED_LABEL).inc();
+    //             return Err(err);
+    //         },
+    //     };
+    //     let res_len = response.raw_response.len() as u64;
+    //
+    //     // Send outbound response to remote peer.
+    //     trace!(
+    //         NetworkSchema::new(network_context).remote_peer(&self.remote_peer_id),
+    //         "{} Sending rpc response to peer {} for request_id {}",
+    //         network_context,
+    //         self.remote_peer_id.short_str(),
+    //         response.request_id,
+    //     );
+    //     let message = NetworkMessage::RpcResponse(response);
+    //     // TODO: rebuild in non-channel way
+    //     //write_reqs_tx.send(message).await?;
+    //
+    //     // Collect counters for sent response.
+    //     // counters::rpc_messages(network_context, RESPONSE_LABEL, SENT_LABEL).inc();
+    //     // counters::rpc_bytes(network_context, RESPONSE_LABEL, SENT_LABEL).inc_by(res_len);
+    //     Ok(())
+    // }
 }
 
 /// `OutboundRpcs` handles new outbound rpc requests made from the application layer.

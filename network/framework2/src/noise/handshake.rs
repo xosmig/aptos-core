@@ -12,12 +12,12 @@
 //! [stream]: crate::noise::stream
 
 use crate::{
-    //application::storage::PeersAndMetadata,
+    application::storage::PeersAndMetadata,
     logging::NetworkSchema,
     noise::{error::NoiseHandshakeError, stream::NoiseStream},
 };
 use aptos_config::{
-    config::{Peer, PeerRole, PeerSet},
+    config::{Peer, PeerRole},
     network_id::{NetworkContext, NetworkId},
 };
 use aptos_crypto::{noise, x25519};
@@ -27,7 +27,6 @@ use aptos_short_hex_str::{AsShortHexStr, ShortHexStr};
 use aptos_types::PeerId;
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use std::{collections::HashMap, convert::TryFrom as _, fmt::Debug, sync::Arc, sync::RwLock};
-use crate::application::storage::PeersAndMetadata;
 
 /// In a mutually authenticated network, a client message is accompanied with a timestamp.
 /// This is in order to prevent replay attacks, where the attacker does not know the client's static key,
@@ -75,64 +74,6 @@ impl AntiReplayTimestamps {
     }
 }
 
-// /// Noise handshake authentication mode.
-// pub enum HandshakeAuthMode {
-//     /// In `Mutual` mode, both sides will authenticate each other with their
-//     /// `trusted_peers` set. We also include replay attack mitigation in this mode.
-//     ///
-//     /// For example, in the Aptos validator network, validator peers will only
-//     /// allow connections from other validator peers. They will use this mode to
-//     /// check that inbound connections authenticate to a network public key
-//     /// actually contained in the current validator set.
-//     Mutual {
-//         // Only use anti replay protection in mutual-auth scenarios. In theory,
-//         // this is applicable everywhere; however, we would need to spend some
-//         // time making this more sophisticated so it garbage collects old
-//         // timestamps and doesn't use unbounded space. These are not problems in
-//         // mutual-auth scenarios because we have a bounded set of trusted peers
-//         // that rarely changes.
-//         anti_replay_timestamps: RwLock<AntiReplayTimestamps>,
-//         peers_and_metadata: Arc<PeersAndMetadata>,
-//     },
-//     /// In `MaybeMutual` mode, the dialer authenticates the server and the server will allow all
-//     /// inbound connections from any peer but will mark connections as `Trusted` if the incoming
-//     /// connection is apart of its trusted peers set.
-//     MaybeMutual(Arc<PeersAndMetadata>),
-// }
-//
-// impl HandshakeAuthMode {
-//     pub fn mutual(peers_and_metadata: Arc<PeersAndMetadata>) -> Self {
-//         HandshakeAuthMode::Mutual {
-//             anti_replay_timestamps: RwLock::new(AntiReplayTimestamps::default()),
-//             peers_and_metadata,
-//         }
-//     }
-//
-//     pub fn maybe_mutual(peers_and_metadata: Arc<PeersAndMetadata>) -> Self {
-//         HandshakeAuthMode::MaybeMutual(peers_and_metadata)
-//     }
-//
-//     pub fn server_only(network_ids: &[NetworkId]) -> Self {
-//         let peers_and_metadata = PeersAndMetadata::new(network_ids);
-//         HandshakeAuthMode::maybe_mutual(peers_and_metadata)
-//     }
-//
-//     #[cfg(test)]
-//     pub fn server_only_with_metadata(peers_and_metadata: Arc<PeersAndMetadata>) -> Self {
-//         HandshakeAuthMode::maybe_mutual(peers_and_metadata)
-//     }
-//
-//     fn anti_replay_timestamps(&self) -> Option<&RwLock<AntiReplayTimestamps>> {
-//         match &self {
-//             HandshakeAuthMode::Mutual {
-//                 anti_replay_timestamps,
-//                 ..
-//             } => Some(anti_replay_timestamps),
-//             HandshakeAuthMode::MaybeMutual(_) => None,
-//         }
-//     }
-// }
-
 // Noise Upgrader
 // --------------
 // Noise by default is not aware of the above or lower protocol layers,
@@ -149,8 +90,6 @@ pub struct NoiseUpgrader {
     pub network_context: NetworkContext,
     /// Config for executing Noise handshakes. Includes our static private key.
     noise_config: noise::NoiseConfig,
-    /// Configured known peers
-    // trusted_peers: Arc<RwLock<Vec<(NetworkId, PeerSet)>>>,
     peers_and_metadata: Arc<PeersAndMetadata>,
     /// When negatiating mutual trust we need these timestamps
     anti_replay_timestamps: Option<RwLock<AntiReplayTimestamps>>,
@@ -170,7 +109,6 @@ impl NoiseUpgrader {
         network_context: NetworkContext,
         key: x25519::PrivateKey,
         // auth_mode: HandshakeAuthMode, // TODO: pass in trusted peer source
-        // trusted_peers: Arc<RwLock<Vec<(NetworkId, PeerSet)>>>,
         peers_and_metadata: Arc<PeersAndMetadata>,
         mutual_auth: bool,
     ) -> Self {
@@ -182,7 +120,6 @@ impl NoiseUpgrader {
         Self {
             network_context,
             noise_config: noise::NoiseConfig::new(key),
-            // trusted_peers,
             peers_and_metadata,
             anti_replay_timestamps,
         }
@@ -193,7 +130,6 @@ impl NoiseUpgrader {
     }
 
     pub fn is_trusted_peer(&self, network_id: &NetworkId, peer_id: &PeerId) -> Option<Peer> {
-        // TODO: implement
         let trusted_peers = match self.peers_and_metadata.get_trusted_peers(network_id) {
             Ok(ps) => {ps}
             Err(_) => {return None;}

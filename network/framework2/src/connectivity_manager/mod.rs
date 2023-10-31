@@ -65,15 +65,13 @@ use std::{
 };
 use futures_util::stream::Fuse;
 use tokio::runtime::Handle;
-use tokio_retry::strategy::{ExponentialBackoff, jitter};
+use tokio_retry::strategy::jitter;
 use tokio_stream::wrappers::ReceiverStream;
 use aptos_config::config::NetworkConfig;
 use crate::application::ApplicationCollector;
 use crate::application::storage::ConnectionNotification;
 use crate::protocols::network::OutboundPeerConnections;
-use crate::transport::{AptosNetTransport,AptosNetTransportActual};
-
-// pub mod builder;
+use crate::transport::AptosNetTransportActual;
 
 #[cfg(test)]
 mod test;
@@ -295,7 +293,7 @@ struct PublicKeys([HashSet<x25519::PublicKey>; DiscoverySource::NUM_VARIANTS]);
 enum DialResult {
     Success,
     Cancelled,
-    AlreadyConnected,
+    _AlreadyConnected,
     Failed,
     // Failed(PeerManagerError),
 }
@@ -340,7 +338,6 @@ where
         peer_senders: Arc<OutboundPeerConnections>,
     ) -> Self {
         let connectivity_check_interval = Duration::from_millis(config.connectivity_check_interval_ms);
-        // let backoff_strategy = ExponentialBackoff::from_millis(config.connection_backoff_base).factor(1000);
         let max_delay = Duration::from_millis(config.max_connection_delay_ms);
         let outbound_connection_limit = Some(config.max_outbound_connections);
         let mutual_authentication = config.mutual_authentication;
@@ -984,16 +981,17 @@ fn log_dial_result(
                 peer_id.short_str()
             );
         },
-        DialResult::AlreadyConnected => {
-            info!(
-            NetworkSchema::new(&network_context)
-            .remote_peer(&peer_id)
-            .network_address(&addr),
-            "{} Already connected to peer: {}",
-            network_context,
-            peer_id.short_str(),
-            // a
-            );
+        DialResult::_AlreadyConnected => {
+            unreachable!("nobody uses DialResult AlreadyConnected");
+            // info!(
+            // NetworkSchema::new(&network_context)
+            // .remote_peer(&peer_id)
+            // .network_address(&addr),
+            // "{} Already connected to peer: {}",
+            // network_context,
+            // peer_id.short_str(),
+            // // a
+            // );
         },
         DialResult::Failed => {
             info!(

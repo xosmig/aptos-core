@@ -4,42 +4,27 @@
 
 //! Convenience Network API for Aptos
 
-pub use crate::protocols::rpc::error::RpcError;
-use crate::{application::interface::{OutboundRpcMatcher, OpenRpcRequestState, protocol_is_high_priority}, error::NetworkError, transport::ConnectionMetadata, ProtocolId, counters};
-// use aptos_channels::aptos_channel;
+pub use crate::protocols::RpcError;
+use crate::{application::interface::{OutboundRpcMatcher, protocol_is_high_priority}, error::NetworkError, ProtocolId, counters};
 use aptos_logger::prelude::*;
-use aptos_short_hex_str::AsShortHexStr;
 use aptos_types::{network_address::NetworkAddress, PeerId};
 use bytes::Bytes;
 use futures::{
     channel::oneshot,
-    future,
-    stream::{FilterMap, FusedStream, Map, Select, Stream, StreamExt},
+    stream::{FusedStream, Stream},
     task::{Context, Poll},
 };
-use pin_project::pin_project;
 use serde::{de::DeserializeOwned, Serialize};
-use std::any::TypeId;
-use std::{cmp::min, fmt::Debug, marker::PhantomData, pin::Pin, time::Duration};
-use std::cell::Cell;
+use std::{fmt::Debug, marker::PhantomData, pin::Pin, time::Duration};
 use std::collections::{BTreeMap, HashMap};
-// use std::error::Error;
-use std::future::Future;
-use std::ops::{Add, DerefMut, Sub};
+use std::ops::Add;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, LockResult, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
-// use anyhow::Error;
-use futures::channel::oneshot::Canceled;
 use tokio::runtime::Handle;
-use tokio::sync::mpsc::error::{SendError, TryRecvError, TrySendError};
-use tokio::sync::mpsc::Receiver;
-use tokio::time::error::Elapsed;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio_stream::wrappers::ReceiverStream;
 use aptos_config::network_id::{NetworkContext, NetworkId, PeerNetworkId};
-// use crate::application::error::Error::RpcError;
-// use aptos_infallible::RwLock;
-// use crate::error::NetworkErrorKind;
 use crate::protocols::wire::messaging::v1::{DirectSendMsg, NetworkMessage, RequestId, RpcRequest, RpcResponse};
 use hex::ToHex;
 use aptos_config::config::RoleType;
@@ -224,33 +209,29 @@ impl<TMessage: Message + Unpin> NetworkEvents<TMessage> {
 }
 
 async fn rpc_response_sender(
-    mut receiver: oneshot::Receiver<Result<Bytes, RpcError>>,
+    receiver: oneshot::Receiver<Result<Bytes, RpcError>>,
     rpc_id: RequestId,
-    // peer_network_id: PeerId,
-    // network_sender: NetworkSender<TMessage>,
     peer_sender: tokio::sync::mpsc::Sender<NetworkMessage>,
     request_received_start: tokio::time::Instant, // TODO: use TimeService
     network_context: NetworkContext, // for metrics
     protocol_id: ProtocolId, // for metrics
 ) {
     // TODO: reimplement timeout
-    // info!("app_int rpc_respond {}", rpc_id);
     let bytes = match receiver.await {
         Ok(iresult) => match iresult{
             Ok(bytes) => {bytes}
-            Err(err2) => {
+            Err(_) => {
                 counters::rpc_messages(network_context.network_id(),protocol_id.as_str(),network_context.role(),counters::RESPONSE_LABEL,counters::OUTBOUND_LABEL,"err");
                 return;
             }
         }
-        Err(err) => {
+        Err(_) => {
             counters::rpc_messages(network_context.network_id(),protocol_id.as_str(),network_context.role(),counters::RESPONSE_LABEL,counters::OUTBOUND_LABEL,counters::CANCELED_LABEL);
             return;
         }
     };
     let now = tokio::time::Instant::now();
     let dt = now.duration_since(request_received_start);
-    let blen = bytes.len();
     let msg = NetworkMessage::RpcResponse(RpcResponse{
         request_id: rpc_id,
         priority: 0,
@@ -298,7 +279,7 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
                     NetworkMessage::Error(err) => {
                         // We just drop error responses! TODO: never send them
                         // fall through, maybe get another
-                        info!("app_int err msg discarded");
+                        info!("app_int err msg discarded: {:?}", err);
                     }
                     NetworkMessage::RpcRequest(request) => {
                         // info!("app_int rpc_req {} id={}, {}b", request.protocol_id, request.request_id, request.raw_request.len());
@@ -315,7 +296,7 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
                         };
                         let rpc_id = request.request_id;
                         // setup responder oneshot channel
-                        let (responder, response_reader) = oneshot::channel();//oneshot::Sender<Result<Bytes, RpcError>>
+                        let (responder, response_reader) = oneshot::channel();
                         mself.update_peers();
                         let raw_sender = match mself.peers.get(&msg.sender) {
                             None => {
@@ -333,7 +314,7 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
                         return Poll::Ready(Some(Event::RpcRequest(
                             msg.sender, app_msg, request.protocol_id, responder)))
                     }
-                    NetworkMessage::RpcResponse(response) => {
+                    NetworkMessage::RpcResponse(_) => {
                         unreachable!("NetworkMessage::RpcResponse should not arrive in NetworkEvents because it is handled by Peer and reconnected with oneshot there");
                         // TODO network2: add rpc-response matching at the application level here
                         // let request_state = mself.open_outbound_rpc.remove(&response.request_id);
@@ -356,7 +337,7 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
                         // };
                         // request_state.sender.send(Ok(response.raw_response.into()));
                         // // we processed a legit message, even if it didn't come back through the expected channel, yield
-                        return Poll::Pending
+                        // return Poll::Pending
                     }
                     NetworkMessage::DirectSendMsg(message) => {
                         // info!("app_int dm");
@@ -448,16 +429,18 @@ impl<TMessage> Clone for NetworkSender<TMessage> {
 impl<TMessage> NetworkSender<TMessage> {
     /// Request that a given Peer be dialed at the provided `NetworkAddress` and
     /// synchronously wait for the request to be performed.
-    pub async fn dial_peer(&self, peer: PeerId, addr: NetworkAddress) -> Result<(), NetworkError> {
-        // self.connection_reqs_tx.dial_peer(peer, addr).await?;
-        Ok(())
+    pub async fn dial_peer(&self, _peer: PeerId, _addr: NetworkAddress) -> Result<(), NetworkError> {
+        // dead network-1 code we might want to bring back...
+        unreachable!("NetworkSender.dial_peer unimplemented (and unused)");
+        // Ok(())
     }
 
     /// Request that a given Peer be disconnected and synchronously wait for the request to be
     /// performed.
-    pub async fn disconnect_peer(&self, peer: PeerId) -> Result<(), NetworkError> {
-        // self.connection_reqs_tx.disconnect_peer(peer).await?;
-        Ok(())
+    pub async fn disconnect_peer(&self, _peer: PeerId) -> Result<(), NetworkError> {
+        // dead network-1 code we might want to bring back...
+        unreachable!("NetworkSender.disconnect_peer unimplemented (and unused)");
+        // Ok(())
     }
 
     fn update_peers(&self) {
@@ -486,50 +469,6 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                     }
                     Some(peer) => {
                         let msg = msg_src()?;
-                        let protocol_id_str = msg.protocol_id_as_str();
-                        let data_len = msg.data_len() as u64;
-                        let send_result = if high_prio {
-                            peer.sender_high_prio.try_send(msg)
-                        } else {
-                            peer.sender.try_send(msg)
-                        };
-                        match send_result {
-                            Ok(_) => {
-                                counters::count_app_send_message_bytes(self.network_id, self.role_type, protocol_id_str, counters::SENT_LABEL, data_len);
-                                Ok(())
-                            }
-                            Err(tse) => match &tse {
-                                TrySendError::Full(_) => {
-                                    counters::count_app_send_message_bytes(self.network_id, self.role_type, protocol_id_str, "peerfull", data_len);
-                                    Err(NetworkError::PeerFullCondition)
-                                }
-                                TrySendError::Closed(_) => {
-                                    counters::count_app_send_message_bytes(self.network_id, self.role_type, protocol_id_str, "peergone", data_len);
-                                    Err(NetworkError::NotConnected)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            Err(lf_err) => {
-                // lock fail, wtf
-                Err(NetworkError::Error(lf_err.to_string()))
-            }
-        }
-    }
-
-    /// low lock shadow, msg already serialized and ready to send
-    fn peer_try_send_inner(&self, peer_network_id: &PeerNetworkId, msg: NetworkMessage, high_prio: bool) -> Result<(), NetworkError> {
-        match self.peers.read() {
-            Ok(peers) => {
-                match peers.get(peer_network_id) {
-                    None => {
-                        // TODO? we _could_ know the protocol_id here
-                        counters::count_app_send_message_bytes(self.network_id, self.role_type, "unk", "peergone", 0);
-                        Err(NetworkError::NotConnected)
-                    }
-                    Some(peer) => {
                         let protocol_id_str = msg.protocol_id_as_str();
                         let data_len = msg.data_len() as u64;
                         let send_result = if high_prio {
@@ -753,7 +692,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                     }
                 }
             }
-            Err(le) => {
+            Err(_) => {
                 // lock fail, wtf
                 // TODO: better error for lock fail?
                 return Err(RpcError::TimedOut);
@@ -780,41 +719,39 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                         return Err(err);
                     }
                 }
-                Err(cancelled) => {
+                Err(_) => {
                     // TODO: counter?
-                    // warn!("app_int rpc reply cancelled");
                     return Err(RpcError::UnexpectedResponseChannelCancel);
                 }
             }
             Err(_timeout) => {
                 // TODO: counter?
-                // warn!("app_int rpc reply timeout");
                 return Err(RpcError::TimedOut)
             }
         }
     }
 
-    /// Send a message to a single recipient.
-    pub fn rpc_reply(
-        &self,
-        recipient: PeerId,
-        protocol: ProtocolId,
-        request_id: RequestId,
-        message: TMessage,
-    ) -> Result<(), NetworkError> {
-        let peer_network_id = PeerNetworkId::new(self.network_id, recipient);
-        let msg_src = || -> Result<NetworkMessage,NetworkError> {
-            let mdata = protocol.to_bytes(&message)?.into();
-            Ok(NetworkMessage::RpcResponse(RpcResponse {
-                request_id: 0,
-                priority: 0,
-                raw_response: mdata,
-            }))
-        };
-        self.update_peers();
-        // TODO: since we've gone to the trouble to have an RPC reply ready to go, maybe send it blocking?
-        self.peer_try_send(&peer_network_id, msg_src, protocol_is_high_priority(protocol))
-    }
+    // /// Send a message to a single recipient.
+    // pub fn rpc_reply(
+    //     &self,
+    //     recipient: PeerId,
+    //     protocol: ProtocolId,
+    //     request_id: RequestId,
+    //     message: TMessage,
+    // ) -> Result<(), NetworkError> {
+    //     let peer_network_id = PeerNetworkId::new(self.network_id, recipient);
+    //     let msg_src = || -> Result<NetworkMessage,NetworkError> {
+    //         let mdata = protocol.to_bytes(&message)?.into();
+    //         Ok(NetworkMessage::RpcResponse(RpcResponse {
+    //             request_id: 0,
+    //             priority: 0,
+    //             raw_response: mdata,
+    //         }))
+    //     };
+    //     self.update_peers();
+    //     // TODO: since we've gone to the trouble to have an RPC reply ready to go, maybe send it blocking?
+    //     self.peer_try_send(&peer_network_id, msg_src, protocol_is_high_priority(protocol))
+    // }
 }
 
 /// Generalized functionality for any request across `DirectSend` and `Rpc`.

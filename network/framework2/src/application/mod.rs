@@ -2,8 +2,6 @@
 // Parts of the project are originally copyright © Meta Platforms, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeMap;
-use std::marker::PhantomData;
 use aptos_logger::info;
 use crate::ProtocolId;
 use crate::protocols::network::ReceivedMessage;
@@ -39,7 +37,7 @@ impl ApplicationConnections {
 /// Routing by ProtocolId for all application code built into a node.
 /// Typically built early in startup code and then read-only.
 pub struct ApplicationCollector {
-    // apps: BTreeMap<ProtocolId,ApplicationConnections>,
+    // TODO: this was BTreeMap but had weird bugs that way. It should maybe be BTreeMap or binary search LUT
     apps: Vec<ApplicationConnections>,
 }
 
@@ -48,18 +46,15 @@ pub struct ApplicationCollector {
 impl ApplicationCollector {
     pub fn new() -> Self {
         Self {
-            // apps: BTreeMap::new(),
             apps: Vec::new(),
         }
     }
 
     pub fn add(&mut self, connections: ApplicationConnections) {
-        // self.apps.insert(connections.protocol_id, connections);
         self.apps.push(connections);
     }
 
     pub fn get(&self, protocol_id: &ProtocolId) -> Option<&ApplicationConnections> {
-        // self.apps.get(protocol_id)
         for ac in self.apps.iter() {
             if ac.protocol_id == *protocol_id {
                 return Some(ac);
@@ -69,7 +64,6 @@ impl ApplicationCollector {
     }
 
     pub fn iter(&self) -> Iter {
-        // self.apps.iter()
         Iter::new(self.apps.iter())
     }
 }

@@ -13,7 +13,7 @@ use aptos_logger::{
 use aptos_metrics_core::{register_int_counter_vec, IntCounter, IntCounterVec};
 use aptos_network2::{
     application::interface::{NetworkClient, NetworkClientInterface, NetworkEvents},
-    protocols::{network::Event, rpc::error::RpcError, wire::handshake::v1::ProtocolId},
+    protocols::{network::Event, RpcError, wire::handshake::v1::ProtocolId},
 };
 use aptos_time_service::{TimeService, TimeServiceTrait};
 use aptos_types::{account_address::AccountAddress, PeerId};
@@ -26,11 +26,8 @@ use once_cell::sync::Lazy;
 use rand::{rngs::OsRng, Rng};
 use serde::{Deserialize, Serialize};
 use std::{ops::DerefMut, sync::Arc, time::Duration};
-use std::collections::HashMap;
-use std::time::Instant;
 use tokio::{runtime::Handle, select, sync::RwLock};
 use aptos_network2::application::error::Error;
-use aptos_network2::application::metadata::PeerMetadata;
 use aptos_network2::application::storage::ConnectionNotification;
 use aptos_network2::error::NetworkError;
 
@@ -296,7 +293,8 @@ async fn connection_listener(
     match network_client.peers_and_metadata.get_connected_peers_and_metadata() {
         Ok(peers) => {
             info!("netbench connection_listener got {} initial peers", peers.len());
-            for (peer_network_id, peer_metadata) in peers {
+            //for (peer_network_id, _peer_metadata) in peers {
+            for peer_network_id in peers.keys() {
                 info!("netbench connection_listener new for initial {:?}", peer_network_id);
                 if config.enable_direct_send_testing {
                     handle.spawn(direct_sender(
@@ -428,6 +426,7 @@ pub async fn direct_sender_worker(
         direct_messages("tickC");
 
         let start = time_service.now();
+        counter += 1;
         {
             // tweak the random payload a little on every send
             let counter_bytes: [u8; 8] = counter.to_le_bytes();

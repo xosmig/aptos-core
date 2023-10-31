@@ -2,8 +2,6 @@
 // Parts of the project are originally copyright © Meta Platforms, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Rpc protocol errors
-
 use aptos_types::PeerId;
 use futures::channel::{mpsc, oneshot};
 use std::io;

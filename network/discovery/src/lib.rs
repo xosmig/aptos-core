@@ -12,7 +12,7 @@ use aptos_event_notifications::ReconfigNotificationListener;
 use aptos_logger::prelude::*;
 use aptos_network2::{
     connectivity_manager::{ConnectivityRequest, DiscoverySource},
-    // counters::inc_by_with_context,
+    counters::inc_by_with_context,
     logging::NetworkSchema,
 };
 use aptos_time_service::TimeService;
@@ -133,7 +133,7 @@ impl<P: OnChainConfigProvider> DiscoveryChangeListener<P> {
     async fn run(mut self: Pin<Box<Self>>) {
         let network_context = self.network_context;
         let discovery_source = self.discovery_source;
-        let mut update_channel = self.update_channel.clone();
+        let update_channel = self.update_channel.clone();
         let source_stream = &mut self.source_stream;
         info!(
             NetworkSchema::new(&network_context),
@@ -150,7 +150,7 @@ impl<P: OnChainConfigProvider> DiscoveryChangeListener<P> {
                 );
                 let request = ConnectivityRequest::UpdateDiscoveredPeers(discovery_source, update);
                 if let Err(error) = update_channel.try_send(request) {
-                    // inc_by_with_context(&DISCOVERY_COUNTS, &network_context, "send_failure", 1); // TODO network2: re-add
+                    inc_by_with_context(&DISCOVERY_COUNTS, &network_context, "send_failure", 1); // TODO network2: re-add
                     warn!(
                         NetworkSchema::new(&network_context),
                         "{} Failed to send update {:?}", network_context, error

@@ -1,29 +1,24 @@
 // Copyright © Aptos Foundation
 
-use std::future::Future;
-use std::io::{Error, ErrorKind};
-use std::ops::{DerefMut, Mul};
 use std::sync::Arc;
 use std::time::Duration;
-use futures::channel::oneshot;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::Receiver;
-use crate::protocols::wire::messaging::v1::{MultiplexMessage, MultiplexMessageSink, MultiplexMessageStream, NetworkMessage, WriteError};
-use bytes::Bytes;
+use crate::protocols::wire::messaging::v1::{MultiplexMessage, MultiplexMessageSink, MultiplexMessageStream, NetworkMessage};
 use futures::io::{AsyncRead,AsyncReadExt,AsyncWrite};
 use futures::StreamExt;
 use futures::SinkExt;
 use futures::stream::Fuse;
-use tokio::sync::mpsc::error::{SendError, TryRecvError, TrySendError};
+use tokio::sync::mpsc::error::TryRecvError;
 use aptos_config::config::{NetworkConfig, RoleType};
 use aptos_config::network_id::{NetworkContext, NetworkId, PeerNetworkId};
 use aptos_logger::{error, info, warn};
-use aptos_metrics_core::{Histogram, HistogramVec, IntCounter, IntCounterVec, register_histogram_vec, register_int_counter_vec};
+use aptos_metrics_core::{IntCounter, IntCounterVec, register_int_counter_vec};
 use crate::application::ApplicationCollector;
 use crate::application::interface::{Closer, OpenRpcRequestState, OutboundRpcMatcher};
 use crate::application::storage::PeersAndMetadata;
 use crate::ProtocolId;
-use crate::protocols::network::{OutboundPeerConnections, PeerStub, ReceivedMessage, RpcError};
+use crate::protocols::network::{OutboundPeerConnections, PeerStub, ReceivedMessage};
 use crate::protocols::stream::{StreamFragment, StreamHeader, StreamMessage};
 use crate::transport::ConnectionMetadata;
 use once_cell::sync::Lazy;
@@ -58,8 +53,10 @@ where
     handle.spawn(writer_task(network_id, to_send, to_send_high_prio, writer, max_frame_size, closed.clone()));
     handle.spawn(reader_task(reader, apps, remote_peer_network_id, open_outbound_rpc.clone(), handle.clone(), closed.clone(), role_type));
     let stub = PeerStub::new(sender, sender_high_prio, open_outbound_rpc);
-    // TODO: peer connection counter, unless PeersAndMetadata is doing it
-    peers_and_metadata.insert_connection_metadata(remote_peer_network_id, connection_metadata.clone());
+    // TODO: start_peer counter, (PeersAndMetadata keeps gauge, count event here)
+    if let Err(err) = peers_and_metadata.insert_connection_metadata(remote_peer_network_id, connection_metadata.clone()) {
+        error!("start_peer PeersAndMetadata could not insert metadata: {:?}", err);
+    }
     peer_senders.insert(remote_peer_network_id, stub);
     handle.spawn(peer_cleanup_task(remote_peer_network_id, connection_metadata, closed, peers_and_metadata, peer_senders));
 }
@@ -269,7 +266,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
             let data_len = mm.data_len();
             tokio::select! {
                 send_result = self.writer.send(&mm) => match send_result {
-                    Ok(wat) => {
+                    Ok(_) => {
                         peer_message_frames_written(&self.network_id).inc();
                         peer_message_bytes_written(&self.network_id).inc_by(data_len as u64);
                     }
@@ -285,26 +282,26 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                 }
             }
         }
-        closed.close();
+        closed.close().await;
         info!("writer_thread closing");
     }
 
-    fn split_message(&self, msg: &mut NetworkMessage) -> Vec<u8> {
-        match msg {
-            NetworkMessage::Error(_) => {
-                unreachable!("NetworkMessage::Error should always fit in a single frame")
-            },
-            NetworkMessage::RpcRequest(request) => {
-                request.raw_request.split_off(self.max_frame_size)
-            },
-            NetworkMessage::RpcResponse(response) => {
-                response.raw_response.split_off(self.max_frame_size)
-            },
-            NetworkMessage::DirectSendMsg(message) => {
-                message.raw_msg.split_off(self.max_frame_size)
-            },
-        }
-    }
+    // fn split_message(&self, msg: &mut NetworkMessage) -> Vec<u8> {
+    //     match msg {
+    //         NetworkMessage::Error(_) => {
+    //             unreachable!("NetworkMessage::Error should always fit in a single frame")
+    //         },
+    //         NetworkMessage::RpcRequest(request) => {
+    //             request.raw_request.split_off(self.max_frame_size)
+    //         },
+    //         NetworkMessage::RpcResponse(response) => {
+    //             response.raw_response.split_off(self.max_frame_size)
+    //         },
+    //         NetworkMessage::DirectSendMsg(message) => {
+    //             message.raw_msg.split_off(self.max_frame_size)
+    //         },
+    //     }
+    // }
 }
 
 pub static NETWORK_PEER_MESSAGE_FRAMES_WRITTEN: Lazy<IntCounterVec> = Lazy::new(||
@@ -331,9 +328,9 @@ pub fn peer_message_bytes_written(network_id: &NetworkId) -> IntCounter {
 
 async fn writer_task(
     network_id: NetworkId,
-    mut to_send: Receiver<NetworkMessage>,
-    mut to_send_high_prio: Receiver<NetworkMessage>,
-    mut writer: MultiplexMessageSink<impl AsyncWrite + Unpin + Send + 'static>,
+    to_send: Receiver<NetworkMessage>,
+    to_send_high_prio: Receiver<NetworkMessage>,
+    writer: MultiplexMessageSink<impl AsyncWrite + Unpin + Send + 'static>,
     max_frame_size: usize,
     closed: Closer,
 ) {
@@ -353,7 +350,7 @@ async fn complete_rpc(rpc_state: OpenRpcRequestState, nmsg: NetworkMessage) {
                 counters::rpc_message_bytes(rpc_state.network_id, rpc_state.protocol_id.as_str(), rpc_state.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "delivered", data_len);
                 counters::outbound_rpc_request_latency(rpc_state.role_type, rpc_state.network_id, rpc_state.protocol_id).observe(dt.as_secs_f64());
             }
-            Err(err) => {
+            Err(_) => {
                 counters::rpc_message_bytes(rpc_state.network_id, rpc_state.protocol_id.as_str(), rpc_state.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "declined", data_len);
             }
         }
@@ -549,12 +546,12 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
             };
         }
 
-        closed.close();
+        closed.close().await;
     }
 }
 
 async fn reader_task(
-    mut reader: Fuse<MultiplexMessageStream<impl AsyncRead + Unpin + Send>>,
+    reader: Fuse<MultiplexMessageStream<impl AsyncRead + Unpin + Send>>,
     apps: Arc<ApplicationCollector>,
     remote_peer_network_id: PeerNetworkId,
     open_outbound_rpc: OutboundRpcMatcher,
@@ -577,7 +574,7 @@ async fn peer_cleanup_task(
     closed.wait().await;
     info!("peer {} closed, cleanup", remote_peer_network_id);
     peer_senders.remove(&remote_peer_network_id);
-    peers_and_metadata.remove_peer_metadata(remote_peer_network_id, connection_metadata.connection_id);
+    _ = peers_and_metadata.remove_peer_metadata(remote_peer_network_id, connection_metadata.connection_id);
 }
 
 pub static NETWORK_PEER_READ_MESSAGES: Lazy<IntCounterVec> = Lazy::new(||

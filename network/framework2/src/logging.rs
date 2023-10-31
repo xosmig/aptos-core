@@ -28,39 +28,7 @@ use crate::{
 use aptos_config::network_id::NetworkContext;
 use aptos_logger::Schema;
 use aptos_netcore::transport::ConnectionOrigin;
-use aptos_num_variants::NumVariants;
 use aptos_types::{network_address::NetworkAddress, PeerId};
-use serde::Serialize;
-
-// TODO: DiscoverySource moved from connectivity_manager, but might need to move back (without a bunch of stuff)
-
-/// Different sources for peer addresses, ordered by priority (Onchain=highest,
-/// Config=lowest).
-// #[repr(u8)]
-// #[derive(Copy, Clone, Eq, Hash, PartialEq, Ord, PartialOrd, NumVariants, Serialize)]
-// pub enum DiscoverySource {
-//     OnChainValidatorSet,
-//     File,
-//     Rest,
-//     Config,
-// }
-//
-// impl std::fmt::Debug for DiscoverySource {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         write!(f, "{}", self)
-//     }
-// }
-//
-// impl std::fmt::Display for DiscoverySource {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         write!(f, "{}", match self {
-//             DiscoverySource::OnChainValidatorSet => "OnChainValidatorSet",
-//             DiscoverySource::File => "File",
-//             DiscoverySource::Config => "Config",
-//             DiscoverySource::Rest => "Rest",
-//         })
-//     }
-// }
 
 #[derive(Schema)]
 pub struct NetworkSchema<'a> {

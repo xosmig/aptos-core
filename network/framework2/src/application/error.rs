@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{error::NetworkError, protocols::network::RpcError};
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 // #[derive(Clone, Debug, Deserialize, Error, PartialEq, Eq, Serialize)]

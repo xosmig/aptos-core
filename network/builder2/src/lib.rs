@@ -1,16 +1,11 @@
 // Copyright © Aptos Foundation
 
-use std::collections::BTreeMap;
-use std::io;
-use std::io::{Chain, Error, ErrorKind};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 use futures::{AsyncRead, AsyncWrite, AsyncWriteExt, StreamExt};
 use tokio::runtime::Handle;
-use tokio::sync::mpsc::error::TrySendError;
-use tokio::sync::mpsc::Receiver;
-use aptos_config::config::{DiscoveryMethod, HANDSHAKE_VERSION, NetworkConfig, Peer, PeerRole, PeerSet, RoleType};
+use aptos_config::config::{DiscoveryMethod, HANDSHAKE_VERSION, NetworkConfig, PeerRole, RoleType};
 use aptos_config::network_id::{NetworkContext, NetworkId, PeerNetworkId};
 use aptos_crypto::x25519;
 use aptos_event_notifications::{DbBackedOnChainConfig,EventSubscriptionService};
@@ -20,7 +15,6 @@ use aptos_netcore::transport::memory::MemoryTransport;
 use aptos_netcore::transport::tcp::{TCPBufferCfg, TcpSocket, TcpTransport};
 use aptos_netcore::transport::{ConnectionOrigin, Transport};
 use aptos_network2::application::ApplicationCollector;
-use aptos_network2::application::interface::OutboundRpcMatcher;
 use aptos_network2::application::metadata::PeerMetadata;
 // use aptos_network_discovery::DiscoveryChangeListener;
 use aptos_time_service::TimeService;
@@ -30,15 +24,12 @@ use aptos_network2::connectivity_manager::{ConnectivityManager, ConnectivityRequ
 use aptos_network2::logging::NetworkSchema;
 use aptos_network2::noise::stream::NoiseStream;
 use aptos_network2::{counters, peer};
-use aptos_network2::protocols::wire::handshake::v1::{ProtocolId, ProtocolIdSet};
-use aptos_network2::protocols::wire::messaging::v1::NetworkMessage;
-use aptos_network2::protocols::network::{OutboundPeerConnections, PeerStub, ReceivedMessage};
+use aptos_network2::protocols::wire::handshake::v1::ProtocolIdSet;
+use aptos_network2::protocols::network::OutboundPeerConnections;
 use aptos_network2::transport::{APTOS_TCP_TRANSPORT, AptosNetTransport, AptosNetTransportActual, Connection};
 use aptos_network_discovery::DiscoveryChangeListener;
 use aptos_short_hex_str::AsShortHexStr;
-use aptos_types::account_address::AccountAddress;
 use aptos_types::network_address::{NetworkAddress, Protocol};
-use aptos_types::PeerId;
 use tokio_retry::strategy::ExponentialBackoff;
 
 // use peer::Peer;
@@ -72,7 +63,6 @@ pub enum AuthenticationMode {
 /// via [`NetworkBuilder::create`].
 pub struct NetworkBuilder {
     state: State,
-    executor: Option<Handle>,
     time_service: TimeService,
     network_context: NetworkContext,
     chain_id: ChainId,
@@ -102,7 +92,6 @@ impl NetworkBuilder {
         let (connectivity_req_sender, connectivity_req_rx) = tokio::sync::mpsc::channel::<ConnectivityRequest>(10);
         let mut nb = NetworkBuilder{
             state: State::CREATED,
-            executor: None,
             time_service,
             network_context,
             chain_id,
@@ -246,7 +235,7 @@ impl NetworkBuilder {
             panic!("NetworkBuilder.build but not in state BUILT");
         }
         let handle = self.handle.clone().unwrap();
-        handle.enter();
+        _ = handle.enter();
         let seeds = self.config.merge_seeds();
         let connectivity_req_rx = self.connectivity_req_rx.take().unwrap();
         let (tpm, ant) = self.build_transport();
@@ -271,7 +260,7 @@ impl NetworkBuilder {
             self.config.listen_address.clone(),
             handle,
             self.network_context.network_id(),
-            self.apps.clone(),
+            // self.apps.clone(),
         );
         info!("network {:?} listening on {:?}", self.network_context.network_id(), listen_addr);
         self.state = State::STARTED;
@@ -288,12 +277,12 @@ fn transport_peer_manager_start(
     listen_address: NetworkAddress,
     executor: Handle,
     network_id: NetworkId,
-    apps: Arc<ApplicationCollector>,
+    // apps: Arc<ApplicationCollector>,
 ) -> NetworkAddress {
     let result = match tpm {
-        TransportPeerManager::Tcp(mut pm) => { pm.listen( listen_address,  executor ) }
+        TransportPeerManager::Tcp(pm) => { pm.listen( listen_address,  executor ) }
         #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
-        TransportPeerManager::Memory(mut pm) => { pm.listen( listen_address,  executor ) }
+        TransportPeerManager::Memory(pm) => { pm.listen( listen_address,  executor ) }
     };
     match result {
         Ok(listen_address) => { listen_address }
@@ -395,7 +384,7 @@ impl<TTransport, TSocket> PeerManager<TTransport, TSocket>
                     info!("listener_thread got connection {:?}, ok={:?}", remote_addr, ok);
                     if !ok {
                         // conted and logged inside check function above, just close here and be done.
-                        connection.socket.close();
+                        _ = connection.socket.close().await;
                         continue;
                     }
                     let remote_peer_network_id = PeerNetworkId::new(self.network_context.network_id(), connection.metadata.remote_peer_id);

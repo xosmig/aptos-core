@@ -21,7 +21,6 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     sync::Arc,
 };
-use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use aptos_config::config::{PeerRole, RoleType};
 use aptos_config::network_id::NetworkContext;
@@ -32,7 +31,6 @@ use serde::Serialize;
 use aptos_logger::info;
 use aptos_metrics_core::{IntGauge,IntGaugeVec,register_int_gauge_vec};
 use aptos_netcore::transport::ConnectionOrigin;
-use aptos_short_hex_str::AsShortHexStr;
 use aptos_types::account_address::AccountAddress;
 
 /// A simple container that tracks all peers and peer metadata for the node.
@@ -95,7 +93,7 @@ impl PeersAndMetadata {
                 all_peers.push(peer_network_id);
             }
         }
-        return all_peers;
+        all_peers
     }
 
     /// Return copy of list of peers if generation is different than previously held.
@@ -118,7 +116,7 @@ impl PeersAndMetadata {
                 if require_connected && !peer_metadata.is_connected() {
                     continue;
                 }
-                if (protocol_ids.len() != 0) && !peer_metadata.supports_any_protocol(protocol_ids) {
+                if !protocol_ids.is_empty() && !peer_metadata.supports_any_protocol(protocol_ids) {
                     continue;
                 }
                 let peer_network_id = PeerNetworkId::new(*network_id, *peer_id);
@@ -126,7 +124,7 @@ impl PeersAndMetadata {
             }
         }
         let generation_actual = self.generation.load(Ordering::SeqCst);
-        return Some((all_peers, generation_actual));
+        Some((all_peers, generation_actual))
     }
 
     /// Return copy of list of peers if generation is different than previously held.
@@ -246,8 +244,7 @@ impl PeersAndMetadata {
                 }
             }
         }
-        while !to_del.is_empty() {
-            let evict = to_del.pop().unwrap();
+        for evict in to_del.into_iter() {
             let llast = listeners.len() - 1;
             if evict != llast {
                 listeners.swap(evict, llast);
@@ -271,7 +268,7 @@ impl PeersAndMetadata {
         connection_metadata: ConnectionMetadata,
     ) -> Result<(), Error> {
         let mut writer = self.peers_and_metadata.write();
-        let mut peer_metadata_for_network = writer.get_mut(&peer_network_id.network_id()).unwrap();
+        let peer_metadata_for_network = writer.get_mut(&peer_network_id.network_id()).unwrap();
         self.generation.fetch_add(1 , Ordering::SeqCst);
         let net_context = NetworkContext::new(peer_role_to_role_type(connection_metadata.role), peer_network_id.network_id(), peer_network_id.peer_id());
         peer_metadata_for_network.entry(peer_network_id.peer_id())
@@ -296,7 +293,7 @@ impl PeersAndMetadata {
         connection_state: ConnectionState,
     ) -> Result<(), Error> {
         let mut writer = self.peers_and_metadata.write();
-        let mut peer_metadata_for_network = writer.get_mut(&peer_network_id.network_id()).unwrap();
+        let peer_metadata_for_network = writer.get_mut(&peer_network_id.network_id()).unwrap();
 
         // Update the connection state for the peer or return a missing metadata error
         if let Some(peer_metadata) = peer_metadata_for_network
@@ -335,7 +332,7 @@ impl PeersAndMetadata {
         peer_monitoring_metadata: PeerMonitoringMetadata,
     ) -> Result<(), Error> {
         let mut writer = self.peers_and_metadata.write();
-        let mut peer_metadata_for_network = writer.get_mut(&peer_network_id.network_id()).unwrap();
+        let peer_metadata_for_network = writer.get_mut(&peer_network_id.network_id()).unwrap();
 
         // Update the peer monitoring metadata for the peer or return a missing metadata error
         if let Some(peer_metadata) = peer_metadata_for_network
@@ -358,7 +355,7 @@ impl PeersAndMetadata {
         connection_id: ConnectionId,
     ) -> Result<PeerMetadata, Error> {
         let mut writer = self.peers_and_metadata.write();
-        let mut peer_metadata_for_network = writer.get_mut(&peer_network_id.network_id()).unwrap();
+        let peer_metadata_for_network = writer.get_mut(&peer_network_id.network_id()).unwrap();
 
         // Remove the peer metadata for the peer or return a missing metadata error
         if let Entry::Occupied(entry) = peer_metadata_for_network

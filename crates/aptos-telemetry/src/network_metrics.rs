@@ -1,21 +1,21 @@
 // Copyright © Aptos Foundation
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::utils;
+// use crate::utils;
 use aptos_telemetry_service::types::telemetry::TelemetryEvent;
-use prometheus::core::Collector;
+// use prometheus::core::Collector;
 use std::collections::BTreeMap;
 
 /// Network metrics event name
 const APTOS_NODE_NETWORK_METRICS: &str = "APTOS_NODE_NETWORK_METRICS";
 
-/// Network metric keys
-const NETWORK_INBOUND_CONNECTIONS: &str = "network_inbound_connections";
-const NETWORK_INBOUND_MESSAGE_SUM: &str = "network_inbound_message_sum";
-const NETWORK_INBOUND_TRAFFIC_SUM: &str = "network_inbound_traffic_sum";
-const NETWORK_OUTBOUND_CONNECTIONS: &str = "network_outbound_connections";
-const NETWORK_OUTBOUND_MESSAGE_SUM: &str = "network_outbound_message_sum";
-const NETWORK_OUTBOUND_TRAFFIC_SUM: &str = "network_outbound_traffic_sum";
+// /// Network metric keys
+// const NETWORK_INBOUND_CONNECTIONS: &str = "network_inbound_connections";
+// const NETWORK_INBOUND_MESSAGE_SUM: &str = "network_inbound_message_sum";
+// const NETWORK_INBOUND_TRAFFIC_SUM: &str = "network_inbound_traffic_sum";
+// const NETWORK_OUTBOUND_CONNECTIONS: &str = "network_outbound_connections";
+// const NETWORK_OUTBOUND_MESSAGE_SUM: &str = "network_outbound_message_sum";
+// const NETWORK_OUTBOUND_TRAFFIC_SUM: &str = "network_outbound_traffic_sum";
 
 /// Collects and sends the build information via telemetry
 pub(crate) async fn create_network_metric_telemetry_event() -> TelemetryEvent {
@@ -43,7 +43,7 @@ fn collect_network_metrics(network_metrics: &mut BTreeMap<String, String>) {
 }
 
 /// Collects the connection metrics and appends them to the given map
-fn collect_connection_metrics(network_metrics: &mut BTreeMap<String, String>) {
+fn collect_connection_metrics(_network_metrics: &mut BTreeMap<String, String>) {
     // TODO network2 redo counters
     // // Calculate the number of inbound and outbound connections
     // let mut inbound_connection_count: f64 = 0.0;
@@ -75,7 +75,7 @@ fn collect_connection_metrics(network_metrics: &mut BTreeMap<String, String>) {
 }
 
 /// Collects the message and traffic metrics and appends them to the given map
-fn collect_message_and_traffic_metrics(network_metrics: &mut BTreeMap<String, String>) {
+fn collect_message_and_traffic_metrics(_network_metrics: &mut BTreeMap<String, String>) {
     // TODO network2 redo counters
     // // Calculate the inbound messages and traffic
     // let inbound_metric_families =

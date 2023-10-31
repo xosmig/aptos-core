@@ -93,7 +93,7 @@ async fn connect_outbound<TTransport, TSocket>(
     let dialed_peer_id = connection.metadata.remote_peer_id;
     if dialed_peer_id != peer_id {
         warn!("dial {:?} did not reach peer {:?} but peer {:?}", addr, peer_id, dialed_peer_id);
-        connection.socket.close();
+        _ = connection.socket.close().await; // discard secondary close error
         return Err(Error::new(ErrorKind::InvalidData, "peer_id mismatch"));
     }
     info!("dial starting peer {:?}", addr);

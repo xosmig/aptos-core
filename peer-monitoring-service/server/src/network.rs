@@ -1,7 +1,7 @@
 // Copyright © Aptos Foundation
 // SPDX-License-Identifier: Apache-2.0
 
-use aptos_config::network_id::{NetworkId, PeerNetworkId};
+use aptos_config::network_id::PeerNetworkId;
 use aptos_network2::{
     application::interface::NetworkEvents,
     protocols::network::{Event, RpcError},
@@ -15,7 +15,7 @@ use bytes::Bytes;
 use futures::{
     channel::oneshot,
     future,
-    stream::{select_all, BoxStream, Stream, StreamExt},
+    stream::{BoxStream, Stream, StreamExt},
 };
 use std::{
     pin::Pin,

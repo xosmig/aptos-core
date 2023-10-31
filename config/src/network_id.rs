@@ -93,8 +93,8 @@ impl Serialize for NetworkId {
             Validator,
             Public,
             Private(String),
-            Vfn,
-            NewPublic,
+            _Vfn,
+            _NewPublic,
             Internal,
         }
 

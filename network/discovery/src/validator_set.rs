@@ -4,7 +4,7 @@
 
 use crate::{
     counters::{DISCOVERY_COUNTS, EVENT_PROCESSING_LOOP_BUSY_DURATION_S, NETWORK_KEY_MISMATCH},
-    DiscoveryError,
+    DiscoveryError, inc_by_with_context,
 };
 use aptos_config::{
     config::{Peer, PeerRole, PeerSet},
@@ -13,7 +13,7 @@ use aptos_config::{
 use aptos_crypto::x25519;
 use aptos_event_notifications::ReconfigNotificationListener;
 use aptos_logger::prelude::*;
-use aptos_network2::logging::NetworkSchema; // counters::inc_by_with_context TODO network2 rebuild counters in place
+use aptos_network2::logging::NetworkSchema;
 use aptos_short_hex_str::AsShortHexStr;
 use aptos_types::on_chain_config::{OnChainConfigPayload, OnChainConfigProvider, ValidatorSet};
 use futures::Stream;
@@ -81,13 +81,12 @@ impl<P: OnChainConfigProvider> ValidatorSetStream<P> {
                 .map(|peer| &peer.keys),
         );
 
-        // TODO network2 redo counters
-        // inc_by_with_context(
-        //     &DISCOVERY_COUNTS,
-        //     &self.network_context,
-        //     "new_nodes",
-        //     peer_set.len() as u64,
-        // );
+        inc_by_with_context(
+            &DISCOVERY_COUNTS,
+            &self.network_context,
+            "new_nodes",
+            peer_set.len() as u64,
+        );
 
         peer_set
     }

@@ -89,7 +89,6 @@ pub struct NetworkClient<Message> {
     rpc_protocols_and_preferences: Vec<ProtocolId>, // Protocols are sorted by preference (highest to lowest)
     network_senders: HashMap<NetworkId, NetworkSender<Message>>,
     pub peers_and_metadata: Arc<PeersAndMetadata>,
-    // open_outbound_rpc: OutboundRpcMatcher,
 }
 
 impl<Message: NetworkMessageTrait + Clone> NetworkClient<Message> {
@@ -342,7 +341,7 @@ impl OutboundRpcMatcher {
             for (k, v) in they.iter() {
                 if now > v.deadline {
                     info!("app_int outbound rpc id={} expired by {:?}", k, now.duration_since(v.deadline));
-                    to_delete.push(k.clone());
+                    to_delete.push(*k);
                 }
             }
         }
@@ -353,6 +352,12 @@ impl OutboundRpcMatcher {
                 they.remove(&k);
             }
         }
+    }
+}
+
+impl Default for OutboundRpcMatcher {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -372,8 +377,9 @@ impl Closer {
         }
     }
 
+    /// wait for exit. ignores errors.
     pub async fn wait(&mut self) {
-        self.done.wait_for(|x| *x).await;
+        _ = self.done.wait_for(|x| *x).await;
     }
 
     pub async fn close(&self) {
@@ -381,7 +387,13 @@ impl Closer {
     }
 
     pub fn is_closed(&self) -> bool {
-        self.done.borrow().clone()
+        *self.done.borrow()
+    }
+}
+
+impl Default for Closer {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

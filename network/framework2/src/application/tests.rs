@@ -9,13 +9,13 @@ use crate::{
         metadata::{ConnectionState, PeerMetadata},
         storage::PeersAndMetadata,
     },
-    peer_manager::{
-        ConnectionRequestSender, PeerManagerNotification, PeerManagerRequest,
-        PeerManagerRequestSender,
-    },
+    // peer_manager::{
+    //     ConnectionRequestSender, PeerManagerNotification, PeerManagerRequest,
+    //     PeerManagerRequestSender,
+    // },
     protocols::{
         network::{Event, NetworkEvents, NetworkSender, NewNetworkEvents, NewNetworkSender},
-        rpc::InboundRpcRequest,
+        // rpc::InboundRpcRequest,
         wire::handshake::v1::{ProtocolId, ProtocolIdSet},
     },
     transport::ConnectionMetadata,

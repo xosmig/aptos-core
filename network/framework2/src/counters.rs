@@ -2,7 +2,6 @@
 // Parts of the project are originally copyright © Meta Platforms, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::os::macos::raw::stat;
 use std::time::Duration;
 use crate::protocols::wire::handshake::v1::ProtocolId;
 use aptos_config::network_id::{NetworkContext, NetworkId};

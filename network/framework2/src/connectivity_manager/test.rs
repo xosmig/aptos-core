@@ -4,8 +4,8 @@
 
 use super::*;
 use crate::{
-    peer::DisconnectReason,
-    peer_manager::{conn_notifs_channel, ConnectionNotification, ConnectionRequest},
+    // peer::DisconnectReason,
+    // peer_manager::{conn_notifs_channel, ConnectionNotification, ConnectionRequest},
     transport::ConnectionMetadata,
 };
 use aptos_channels::{aptos_channel, message_queues::QueueStyle};
