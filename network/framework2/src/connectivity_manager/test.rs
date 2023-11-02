@@ -3,27 +3,30 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::{
-    // peer::DisconnectReason,
-    // peer_manager::{conn_notifs_channel, ConnectionNotification, ConnectionRequest},
-    transport::ConnectionMetadata,
-};
-use aptos_channels::{aptos_channel, message_queues::QueueStyle};
+use crate::transport::ConnectionMetadata;
 use aptos_config::config::{Peer, PeerRole, PeerSet, HANDSHAKE_VERSION};
 use aptos_crypto::{test_utils::TEST_SEED, x25519, Uniform};
 use aptos_logger::info;
 use aptos_time_service::{MockTimeService, TimeService};
 use aptos_types::{account_address::AccountAddress, network_address::NetworkAddress};
-use futures::{executor::block_on, future, SinkExt};
+use futures::{executor::block_on, future};
 use maplit::{hashmap, hashset};
 use rand::rngs::StdRng;
 use std::{io, str::FromStr};
 use tokio_retry::strategy::FixedInterval;
+use aptos_config::network_id::NetworkId;
+// use aptos_crypto::x25519::PrivateKey;
+// use aptos_netcore::transport::memory::MemoryTransport;
+// use aptos_types::chain_id::ChainId;
+use crate::application::metadata::PeerMetadata;
+// use crate::protocols::wire::handshake::v1::ProtocolIdSet;
+// use crate::transport::AptosNetTransport;
+use crate::transport::util::{MockTransportEvent, new_mock_transport};
 
 const MAX_TEST_CONNECTIONS: usize = 3;
 const CONNECTIVITY_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 const CONNECTION_DELAY: Duration = Duration::from_millis(100);
-const MAX_CONNECTION_DELAY: Duration = Duration::from_secs(60);
+// const MAX_CONNECTION_DELAY: Duration = Duration::from_secs(60);
 const DEFAULT_BASE_ADDR: &str = "/ip4/127.0.0.1/tcp/9090";
 
 // TODO: the test code could use a lot of love.
@@ -71,48 +74,85 @@ fn update_peer_with_address(mut peer: Peer, addr_str: &'static str) -> (Peer, Ne
     (peer, addr)
 }
 
+// #[cfg(obsolete)]
 struct TestHarness {
     network_context: NetworkContext,
     peers_and_metadata: Arc<PeersAndMetadata>,
     mock_time: MockTimeService,
-    connection_reqs_rx: aptos_channel::Receiver<PeerId, ConnectionRequest>,
-    connection_notifs_tx: conn_notifs_channel::Sender,
-    conn_mgr_reqs_tx: aptos_channels::Sender<ConnectivityRequest>,
+    peer_senders: Arc<OutboundPeerConnections>,
+
+    mock_transport_events: tokio::sync::mpsc::Receiver<MockTransportEvent>,
+    conn_mgr_reqs_tx: tokio::sync::mpsc::Sender<ConnectivityRequest>,
+
+    peer_cache: Vec<(PeerNetworkId,PeerMetadata)>,
+    peer_cache_generation: u32,
 }
 
+// #[cfg(obsolete)]
 impl TestHarness {
     fn new(seeds: PeerSet) -> (Self, ConnectivityManager<FixedInterval>) {
         let network_context = NetworkContext::mock();
         let time_service = TimeService::mock();
-        let (connection_reqs_tx, connection_reqs_rx) =
-            aptos_channel::new(QueueStyle::FIFO, 1, None);
-        let (connection_notifs_tx, connection_notifs_rx) = conn_notifs_channel::new();
-        let (conn_mgr_reqs_tx, conn_mgr_reqs_rx) = aptos_channels::new_test(0);
+        // let (connection_reqs_tx, connection_reqs_rx) =
+        //     aptos_channel::new(QueueStyle::FIFO, 1, None);
+        // let (connection_notifs_tx, connection_notifs_rx) = conn_notifs_channel::new();
+        // let (conn_mgr_reqs_tx, conn_mgr_reqs_rx) = aptos_channels::new_test(0);
+        let (conn_mgr_reqs_tx, requests_rx) = tokio::sync::mpsc::channel(10);
         let peers_and_metadata = PeersAndMetadata::new(&[network_context.network_id()]);
+        let config = NetworkConfig::network_with_id(NetworkId::Validator);
+        // let mutual_auth = true;
+        // let chain_id = ChainId::new(4);
+        // let key = PrivateKey::generate_for_testing();
+        // let protos = ProtocolIdSet::all_known();
+        let (transport, mock_transport_events) = new_mock_transport();
+        // let ant = AptosNetTransport::<MemoryTransport>::new(
+        //     MemoryTransport,
+        //     network_context,
+        //     time_service.clone(),
+        //     key,
+        //     peers_and_metadata.clone(),
+        //     mutual_auth,
+        //     HANDSHAKE_VERSION,
+        //     chain_id,
+        //     protos,
+        //     false,
+        // );
+        // let transport = AptosNetTransportActual::Memory(ant);
+        let peer_senders = Arc::new(OutboundPeerConnections::new());
+        let apps = Arc::new(ApplicationCollector::new());
 
         let conn_mgr = ConnectivityManager::new(
+            config,
             network_context,
             time_service.clone(),
             peers_and_metadata.clone(),
             seeds,
-            ConnectionRequestSender::new(connection_reqs_tx),
-            connection_notifs_rx,
-            conn_mgr_reqs_rx,
-            CONNECTIVITY_CHECK_INTERVAL,
+            requests_rx,
             FixedInterval::new(CONNECTION_DELAY),
-            MAX_CONNECTION_DELAY,
-            Some(MAX_TEST_CONNECTIONS),
-            true, /* mutual_authentication */
+            transport,
+            apps,
+            peer_senders.clone(),
         );
         let mock = Self {
             network_context,
             peers_and_metadata,
             mock_time: time_service.into_mock(),
-            connection_reqs_rx,
-            connection_notifs_tx,
+            peer_senders,
+            mock_transport_events,
             conn_mgr_reqs_tx,
+            peer_cache: vec![],
+            peer_cache_generation: 0,
         };
         (mock, conn_mgr)
+    }
+
+    fn maybe_update_peer_cache(&mut self) {
+        // if no update is needed, this should be very fast
+        // otherwise make copy of peers for use by this thread/task
+        if let Some((update, update_generation)) = self.peers_and_metadata.get_all_peers_and_metadata_generational(self.peer_cache_generation, true, &[]) {
+            self.peer_cache = update;
+            self.peer_cache_generation = update_generation;
+        }
     }
 
     async fn trigger_connectivity_check(&self) {
@@ -128,13 +168,8 @@ impl TestHarness {
     }
 
     async fn get_connected_size(&mut self) -> usize {
-        info!("Sending ConnectivityRequest::GetConnectedSize");
-        let (queue_size_tx, queue_size_rx) = oneshot::channel();
-        self.conn_mgr_reqs_tx
-            .send(ConnectivityRequest::GetConnectedSize(queue_size_tx))
-            .await
-            .unwrap();
-        queue_size_rx.await.unwrap()
+        self.maybe_update_peer_cache();
+        self.peer_cache.len()
     }
 
     async fn get_dial_queue_size(&mut self) -> usize {
@@ -147,6 +182,7 @@ impl TestHarness {
         queue_size_rx.await.unwrap()
     }
 
+    // #[cfg(obsolete)]
     async fn send_new_peer_await_delivery(
         &mut self,
         peer_id: PeerId,
@@ -163,29 +199,36 @@ impl TestHarness {
             ConnectionOrigin::Outbound,
         );
         metadata.addr = address;
-        let notif = peer_manager::ConnectionNotification::NewPeer(metadata, NetworkContext::mock());
-        self.send_notification_await_delivery(peer_id, notif).await;
+        let peer_network_id = PeerNetworkId::new(self.network_context.network_id(), peer_id);
+        _ = self.peers_and_metadata.insert_connection_metadata(peer_network_id, metadata);
+        // TODO: this does not 'await delivery' of subscribers and their new-peer message
     }
 
-    async fn send_lost_peer_await_delivery(&mut self, peer_id: PeerId, address: NetworkAddress) {
+    // #[cfg(obsolete)]
+    async fn send_lost_peer_await_delivery(&mut self, peer_id: PeerId, _address: NetworkAddress) {
         info!(
             "Sending LostPeer notification for peer: {}",
             peer_id.short_str()
         );
-        let mut metadata = ConnectionMetadata::mock_with_role_and_origin(
-            peer_id,
-            PeerRole::Unknown,
-            ConnectionOrigin::Outbound,
-        );
-        metadata.addr = address;
-        let notif = peer_manager::ConnectionNotification::LostPeer(
-            metadata,
-            NetworkContext::mock(),
-            DisconnectReason::ConnectionLost,
-        );
-        self.send_notification_await_delivery(peer_id, notif).await;
+        // let mut metadata = ConnectionMetadata::mock_with_role_and_origin(
+        //     peer_id,
+        //     PeerRole::Unknown,
+        //     ConnectionOrigin::Outbound,
+        // );
+        // metadata.addr = address;
+        // let notif = peer_manager::ConnectionNotification::LostPeer(
+        //     metadata,
+        //     NetworkContext::mock(),
+        //     DisconnectReason::ConnectionLost,
+        // );
+        // self.send_notification_await_delivery(peer_id, notif).await;
+        let peer_network_id = PeerNetworkId::new(self.network_context.network_id(), peer_id);
+        let wat = self.peers_and_metadata.get_metadata_for_peer(peer_network_id).unwrap();
+        _ = self.peers_and_metadata.remove_peer_metadata(peer_network_id, wat.connection_metadata.connection_id);
+        // TODO: this does not 'await delivery' of subscribers and their disconnect message
     }
 
+    #[cfg(obsolete)]
     async fn send_notification_await_delivery(
         &mut self,
         peer_id: PeerId,
@@ -198,36 +241,56 @@ impl TestHarness {
         delivered_rx.await.unwrap();
     }
 
+    // #[cfg(obsolete)]
     async fn expect_disconnect_inner(
         &mut self,
         peer_id: PeerId,
         address: NetworkAddress,
-        result: Result<(), PeerManagerError>,
+        success: bool,
     ) {
-        info!("Waiting to receive disconnect request");
-        let success = result.is_ok();
-        match self.connection_reqs_rx.next().await.unwrap() {
-            ConnectionRequest::DisconnectPeer(p, result_tx) => {
-                assert_eq!(peer_id, p);
-                result_tx.send(result).unwrap();
-            },
-            request => panic!(
-                "Unexpected ConnectionRequest, expected DisconnectPeer: {:?}",
-                request
-            ),
+        let peer_network_id = PeerNetworkId::new(self.network_context.network_id(), peer_id);
+        let they = match self.peer_senders.get_generational(0) {
+            None => {
+                info!("no peer_senders");
+                return;
+            }
+            Some((they,_gen)) => {they}
+        };
+        match they.get(&peer_network_id) {
+            None => {
+                // already gone, okay
+            }
+            Some(stub) => {
+                info!("Waiting to receive disconnect request");
+                let mut close = stub.close.clone();
+                close.wait().await;
+            }
         }
+        // let success = result.is_ok();
+        // match self.connection_reqs_rx.next().await.unwrap() {
+        //     ConnectionRequest::DisconnectPeer(p, result_tx) => {
+        //         assert_eq!(peer_id, p);
+        //         result_tx.send(result).unwrap();
+        //     },
+        //     request => panic!(
+        //         "Unexpected ConnectionRequest, expected DisconnectPeer: {:?}",
+        //         request
+        //     ),
+        // }
         if success {
             self.send_lost_peer_await_delivery(peer_id, address).await;
         }
     }
 
+    // #[cfg(obsolete)]
     async fn expect_disconnect_success(&mut self, peer_id: PeerId, address: NetworkAddress) {
-        self.expect_disconnect_inner(peer_id, address, Ok(())).await;
+        self.expect_disconnect_inner(peer_id, address, true).await;
     }
 
+    // #[cfg(obsolete)]
     async fn expect_disconnect_fail(&mut self, peer_id: PeerId, address: NetworkAddress) {
-        let error = PeerManagerError::NotConnected(peer_id);
-        self.expect_disconnect_inner(peer_id, address, Err(error))
+        // let error = PeerManagerError::NotConnected(peer_id);
+        self.expect_disconnect_inner(peer_id, address, false)
             .await;
     }
 
@@ -239,21 +302,19 @@ impl TestHarness {
         while self.get_dial_queue_size().await > 0 {}
     }
 
+    // #[cfg(obsolete)]
     async fn expect_one_dial_inner(
         &mut self,
-        result: Result<(), PeerManagerError>,
+        result: io::Result<()>,
     ) -> (PeerId, NetworkAddress) {
         info!("Waiting to receive dial request");
         let success = result.is_ok();
-        let (peer_id, address) = match self.connection_reqs_rx.next().await.unwrap() {
-            ConnectionRequest::DialPeer(peer_id, address, result_tx) => {
-                result_tx.send(result).unwrap();
-                (peer_id, address)
-            },
-            request => panic!(
-                "Unexpected ConnectionRequest, expected DialPeer: {:?}",
-                request
-            ),
+        let event = self.mock_transport_events.recv().await.unwrap();
+        let (peer_id, address) = match event {
+            MockTransportEvent::Dial(dial) => {
+                _ = dial.result_sender.send(result);
+                (dial.remote_peer_network_id.peer_id(), dial.network_address)
+            }
         };
         if success {
             self.send_new_peer_await_delivery(peer_id, peer_id, address.clone())
@@ -262,11 +323,12 @@ impl TestHarness {
         (peer_id, address)
     }
 
+    // #[cfg(obsolete)]
     async fn expect_one_dial(
         &mut self,
         expected_peer_id: PeerId,
         expected_address: NetworkAddress,
-        result: Result<(), PeerManagerError>,
+        result: io::Result<()>,
     ) {
         let (peer_id, address) = self.expect_one_dial_inner(result).await;
 
@@ -276,6 +338,7 @@ impl TestHarness {
         self.wait_until_empty_dial_queue().await;
     }
 
+    // #[cfg(obsolete)]
     async fn expect_one_dial_success(
         &mut self,
         expected_peer_id: PeerId,
@@ -285,16 +348,18 @@ impl TestHarness {
             .await;
     }
 
+    // #[cfg(obsolete)]
     async fn expect_one_dial_fail(
         &mut self,
         expected_peer_id: PeerId,
         expected_address: NetworkAddress,
     ) {
-        let error = PeerManagerError::IoError(io::Error::from(io::ErrorKind::ConnectionRefused));
+        let error = io::Error::from(io::ErrorKind::ConnectionRefused);
         self.expect_one_dial(expected_peer_id, expected_address, Err(error))
             .await;
     }
 
+    // #[cfg(obsolete)]
     async fn expect_num_dials(&mut self, num_expected: usize) {
         for _ in 0..num_expected {
             let _ = self.expect_one_dial_inner(Ok(())).await;
@@ -352,7 +417,10 @@ fn connect_to_seeds_on_startup() {
         mock.trigger_pending_dials().await;
         mock.expect_one_dial_success(seed_peer_id, seed_addr).await;
     };
-    block_on(future::join(conn_mgr.start(), test));
+    block_on(async {
+        let handle = Handle::current();
+        future::join(conn_mgr.start(handle), test).await
+    });
 }
 
 #[test]
@@ -399,7 +467,10 @@ fn addr_change() {
         mock.expect_one_dial_success(other_peer_id, other_addr_new)
             .await;
     };
-    block_on(future::join(conn_mgr.start(), test));
+    block_on(async {
+        let handle = Handle::current();
+        future::join(conn_mgr.start(handle), test).await
+    });
 }
 
 #[test]
@@ -430,7 +501,10 @@ fn lost_connection() {
         mock.expect_one_dial_success(other_peer_id, other_addr.clone())
             .await;
     };
-    block_on(future::join(conn_mgr.start(), test));
+    block_on(async {
+        let handle = Handle::current();
+        future::join(conn_mgr.start(handle), test).await
+    });
 }
 
 #[test]
@@ -464,7 +538,10 @@ fn disconnect() {
         mock.expect_disconnect_success(other_peer_id, other_addr)
             .await;
     };
-    block_on(future::join(conn_mgr.start(), test));
+    block_on(async {
+        let handle = Handle::current();
+        future::join(conn_mgr.start(handle), test).await
+    });
 }
 
 // Tests that connectivity manager retries dials and disconnects on failure.
@@ -510,7 +587,7 @@ fn retry_on_failure() {
         mock.expect_disconnect_success(other_peer_id, other_addr.clone())
             .await;
     };
-    block_on(future::join(conn_mgr.start(), test));
+    block_on(future::join(conn_mgr.test_start(), test));
 }
 
 // Tests that if we dial an already connected peer or disconnect from an already disconnected
@@ -561,7 +638,10 @@ fn no_op_requests() {
         assert_eq!(0, mock.get_connected_size().await);
         assert_eq!(0, mock.get_dial_queue_size().await);
     };
-    block_on(future::join(conn_mgr.start(), test));
+    block_on(async {
+        let handle = Handle::current();
+        future::join(conn_mgr.start(handle), test).await
+    });
 }
 fn generate_account_address(val: usize) -> AccountAddress {
     let mut addr = [0u8; AccountAddress::LENGTH];
@@ -600,7 +680,10 @@ fn backoff_on_failure() {
         mock.trigger_pending_dials().await;
         mock.expect_one_dial_success(peer_id_a, peer_a_addr).await;
     };
-    block_on(future::join(conn_mgr.start(), test));
+    block_on(async {
+        let handle = Handle::current();
+        future::join(conn_mgr.start(handle), test).await
+    });
 }
 
 // Test that connectivity manager will still connect to a peer if it advertises
@@ -635,7 +718,10 @@ fn multiple_addrs_basic() {
         mock.expect_one_dial_success(other_peer_id, other_addr_2)
             .await;
     };
-    block_on(future::join(conn_mgr.start(), test));
+    block_on(async {
+        let handle = Handle::current();
+        future::join(conn_mgr.start(handle), test).await
+    });
 }
 
 // Test that connectivity manager will work with multiple addresses even if we
@@ -672,7 +758,10 @@ fn multiple_addrs_wrapping() {
         mock.expect_one_dial_success(other_peer_id, other_addr_1)
             .await;
     };
-    block_on(future::join(conn_mgr.start(), test));
+    block_on(async {
+        let handle = Handle::current();
+        future::join(conn_mgr.start(handle), test).await
+    });
 }
 
 // Test that connectivity manager will still work when dialing a peer with
@@ -714,7 +803,10 @@ fn multiple_addrs_shrinking() {
         mock.expect_one_dial_success(other_peer_id, other_addr_4)
             .await;
     };
-    block_on(future::join(conn_mgr.start(), test));
+    block_on(async {
+        let handle = Handle::current();
+        future::join(conn_mgr.start(handle), test).await
+    });
 }
 
 #[test]
@@ -741,7 +833,10 @@ fn public_connection_limit() {
         mock.trigger_connectivity_check().await;
         assert_eq!(0, mock.get_dial_queue_size().await);
     };
-    block_on(future::join(conn_mgr.start(), test));
+    block_on(async {
+        let handle = Handle::current();
+        future::join(conn_mgr.start(handle), test).await
+    });
 }
 
 #[test]

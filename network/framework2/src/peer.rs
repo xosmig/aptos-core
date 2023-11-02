@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::Receiver;
-use crate::protocols::wire::messaging::v1::{MultiplexMessage, MultiplexMessageSink, MultiplexMessageStream, NetworkMessage};
+use crate::protocols::wire::messaging::v1::{ErrorCode, MultiplexMessage, MultiplexMessageSink, MultiplexMessageStream, NetworkMessage};
 use futures::io::{AsyncRead,AsyncReadExt,AsyncWrite};
 use futures::StreamExt;
 use futures::SinkExt;
@@ -15,10 +15,10 @@ use aptos_config::network_id::{NetworkContext, NetworkId, PeerNetworkId};
 use aptos_logger::{error, info, warn};
 use aptos_metrics_core::{IntCounter, IntCounterVec, register_int_counter_vec};
 use crate::application::ApplicationCollector;
-use crate::application::interface::{Closer, OpenRpcRequestState, OutboundRpcMatcher};
+use crate::application::interface::{OpenRpcRequestState, OutboundRpcMatcher};
 use crate::application::storage::PeersAndMetadata;
 use crate::ProtocolId;
-use crate::protocols::network::{OutboundPeerConnections, PeerStub, ReceivedMessage};
+use crate::protocols::network::{Closer, OutboundPeerConnections, PeerStub, ReceivedMessage};
 use crate::protocols::stream::{StreamFragment, StreamHeader, StreamMessage};
 use crate::transport::ConnectionMetadata;
 use once_cell::sync::Lazy;
@@ -52,7 +52,7 @@ where
     handle.spawn(open_outbound_rpc.clone().cleanup(Duration::from_millis(100), closed.clone()));
     handle.spawn(writer_task(network_id, to_send, to_send_high_prio, writer, max_frame_size, closed.clone()));
     handle.spawn(reader_task(reader, apps, remote_peer_network_id, open_outbound_rpc.clone(), handle.clone(), closed.clone(), role_type));
-    let stub = PeerStub::new(sender, sender_high_prio, open_outbound_rpc);
+    let stub = PeerStub::new(sender, sender_high_prio, open_outbound_rpc, closed.clone());
     // TODO: start_peer counter, (PeersAndMetadata keeps gauge, count event here)
     if let Err(err) = peers_and_metadata.insert_connection_metadata(remote_peer_network_id, connection_metadata.clone()) {
         error!("start_peer PeersAndMetadata could not insert metadata: {:?}", err);
@@ -263,6 +263,17 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                     }
                 }
             };
+            if let MultiplexMessage::Message(nm) = &mm {
+                if let NetworkMessage::Error(ec) = &nm {
+                    match ec {
+                        ErrorCode::DisconnectCommand => {
+                            info!("writer_thread got DisconnectCommand");
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            }
             let data_len = mm.data_len();
             tokio::select! {
                 send_result = self.writer.send(&mm) => match send_result {

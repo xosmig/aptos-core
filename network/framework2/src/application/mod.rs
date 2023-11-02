@@ -12,6 +12,7 @@ pub mod metadata;
 pub mod storage;
 
 /// Container for connection to application code listening on a ProtocolId
+#[derive(Debug)]
 pub struct ApplicationConnections {
     pub protocol_id: ProtocolId,
 

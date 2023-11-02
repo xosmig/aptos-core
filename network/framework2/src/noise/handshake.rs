@@ -558,7 +558,7 @@ mod test {
         let (client_private_key, client_public_key) = create_key_pair(&mut rng);
         let (server_private_key, server_public_key) = create_key_pair(&mut rng);
 
-        let (client_auth, server_auth, client_network_context, server_network_context) =
+        let (mutual_auth, peers_and_metadata, client_network_context, server_network_context) =
             if is_mutual_auth {
                 // Create the client and server network context
                 let insert_trusted_peers = peers_and_metadata.is_none();
@@ -583,8 +583,10 @@ mod test {
                 }
 
                 (
-                    HandshakeAuthMode::mutual(peers_and_metadata.clone()),
-                    HandshakeAuthMode::mutual(peers_and_metadata),
+                    true,
+                    // HandshakeAuthMode::mutual(peers_and_metadata.clone()),
+                    // HandshakeAuthMode::mutual(peers_and_metadata),
+                    peers_and_metadata,
                     client_network_context,
                     server_network_context,
                 )
@@ -598,15 +600,17 @@ mod test {
                     );
 
                 (
-                    HandshakeAuthMode::server_only_with_metadata(peers_and_metadata.clone()),
-                    HandshakeAuthMode::server_only_with_metadata(peers_and_metadata),
+                    false,
+                    peers_and_metadata,
+                    // HandshakeAuthMode::server_only_with_metadata(peers_and_metadata.clone()),
+                    // HandshakeAuthMode::server_only_with_metadata(peers_and_metadata),
                     client_network_context,
                     server_network_context,
                 )
             };
 
-        let client = NoiseUpgrader::new(client_network_context, client_private_key, client_auth);
-        let server = NoiseUpgrader::new(server_network_context, server_private_key, server_auth);
+        let client = NoiseUpgrader::new(client_network_context, client_private_key, peers_and_metadata.clone(), mutual_auth);
+        let server = NoiseUpgrader::new(server_network_context, server_private_key, peers_and_metadata, mutual_auth);
 
         ((client, client_public_key), (server, server_public_key))
     }
@@ -778,10 +782,12 @@ mod test {
         // build a client with an unrecognized peer id, so the connection will be
         // unauthenticated
         let client_peer_id = PeerId::random();
+        let peers_and_metadata = PeersAndMetadata::new(&[]);
         let client = NoiseUpgrader::new(
             NetworkContext::mock_with_peer_id(client_peer_id),
             client_private_key,
-            HandshakeAuthMode::mutual(PeersAndMetadata::new(&[])),
+            peers_and_metadata,
+            true,
         );
 
         let (_, (server, server_public_key)) = build_peers(true, None);

@@ -5,7 +5,7 @@
 use crate::{
     application::{error::Error, storage::PeersAndMetadata},
     protocols::{
-        network::{Message, NetworkSender}, // NetworkEvents
+        network::{Closer, Message, NetworkSender}, // NetworkEvents
         wire::handshake::v1::{ProtocolId, ProtocolIdSet},
     },
 };
@@ -356,42 +356,6 @@ impl OutboundRpcMatcher {
 }
 
 impl Default for OutboundRpcMatcher {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Closer someone replicates Go Context.Done() or a Mutex+Condition variable
-#[derive(Clone)]
-pub struct Closer {
-    pub wat: Arc<tokio::sync::Mutex<tokio::sync::watch::Sender<bool>>>,
-    pub done: tokio::sync::watch::Receiver<bool>,
-}
-
-impl Closer {
-    pub fn new() -> Self {
-        let (sender, receiver) = tokio::sync::watch::channel(false);
-        Self {
-            wat: Arc::new(tokio::sync::Mutex::new(sender)),
-            done: receiver,
-        }
-    }
-
-    /// wait for exit. ignores errors.
-    pub async fn wait(&mut self) {
-        _ = self.done.wait_for(|x| *x).await;
-    }
-
-    pub async fn close(&self) {
-        self.wat.lock().await.send_modify(|x| *x = true);
-    }
-
-    pub fn is_closed(&self) -> bool {
-        *self.done.borrow()
-    }
-}
-
-impl Default for Closer {
     fn default() -> Self {
         Self::new()
     }

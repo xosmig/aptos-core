@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::protocols::wire::messaging::v1::NetworkMessage;
-use anyhow::{bail, ensure};
+// use anyhow::{bail, ensure};
 #[cfg(any(test, feature = "fuzzing"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -65,11 +65,13 @@ impl Debug for StreamFragment {
     }
 }
 
+#[cfg(obsolete)]
 pub struct InboundStreamBuffer {
     stream: Option<InboundStream>,
     max_fragments: usize,
 }
 
+#[cfg(obsolete)]
 impl InboundStreamBuffer {
     pub fn new(max_fragments: usize) -> Self {
         Self {
@@ -106,6 +108,7 @@ impl InboundStreamBuffer {
     }
 }
 
+#[cfg(obsolete)]
 pub struct InboundStream {
     request_id: u32,
     num_fragments: u8,
@@ -113,6 +116,7 @@ pub struct InboundStream {
     message: NetworkMessage,
 }
 
+#[cfg(obsolete)]
 impl InboundStream {
     fn new(header: StreamHeader, max_fragments: usize) -> anyhow::Result<Self> {
         ensure!(

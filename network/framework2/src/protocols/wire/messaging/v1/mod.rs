@@ -89,6 +89,8 @@ pub enum ErrorCode {
     ParsingError(ParsingErrorType),
     /// A message was received for a protocol that is not supported over this connection.
     NotSupported(NotSupportedType),
+    /// A command sent internally which causes a peer to disconnect, not an actual message to send.
+    DisconnectCommand,
 }
 
 impl ErrorCode {

@@ -70,7 +70,9 @@ use tokio_stream::wrappers::ReceiverStream;
 use aptos_config::config::NetworkConfig;
 use crate::application::ApplicationCollector;
 use crate::application::storage::ConnectionNotification;
-use crate::protocols::network::OutboundPeerConnections;
+use crate::protocols::network::{OutboundPeerConnections, PeerStub};
+// use crate::protocols::wire::messaging::v1::ErrorCode::DisconnectCommand;
+// use crate::protocols::wire::messaging::v1::NetworkMessage;
 use crate::transport::AptosNetTransportActual;
 
 #[cfg(test)]
@@ -101,11 +103,6 @@ pub struct ConnectivityManager<TBackoff> {
     connected: HashMap<PeerId, ConnectionMetadata>,
     /// All information about peers from discovery sources.
     discovered_peers: DiscoveredPeerSet,
-    /// Channel to send connection requests to PeerManager.
-    // connection_reqs_tx: ConnectionRequestSender,
-    /// Channel to receive notifications from PeerManager.
-    // connection_notifs_rx: conn_notifs_channel::Receiver,
-    // connection_notifs_rx: tokio::sync::mpsc::Receiver<ConnectionNotification>,
     /// Channel over which we receive requests from other actors.
     requests_rx: Fuse<ReceiverStream<ConnectivityRequest>>,//futures::Stream<Item=ConnectivityRequest>,
     /// Peers queued to be dialed, potentially with some delay. The dial can be canceled by
@@ -135,6 +132,8 @@ pub struct ConnectivityManager<TBackoff> {
     apps: Arc<ApplicationCollector>,
     /// for created peers
     peer_senders: Arc<OutboundPeerConnections>,
+    peer_senders_cache: HashMap<PeerNetworkId, PeerStub>,
+    peer_senders_generation: u32,
 }
 
 /// Different sources for peer addresses, ordered by priority (Onchain=highest,
@@ -324,15 +323,8 @@ where
         time_service: TimeService,
         peers_and_metadata: Arc<PeersAndMetadata>,
         seeds: PeerSet,
-        // connection_reqs_tx: ConnectionRequestSender, // TODO: rebuild request system?
-        // connection_notifs_rx: conn_notifs_channel::Receiver,
-        // requests_rx: futures::Stream<Item=ConnectivityRequest>,
         requests_rx: tokio::sync::mpsc::Receiver<ConnectivityRequest>,
-        // connectivity_check_interval: Duration,
         backoff_strategy: TBackoff,
-        // max_delay: Duration,
-        // outbound_connection_limit: Option<usize>,
-        // mutual_authentication: bool,
         transport: AptosNetTransportActual,
         apps: Arc<ApplicationCollector>,
         peer_senders: Arc<OutboundPeerConnections>,
@@ -368,8 +360,6 @@ where
             peers_and_metadata,
             connected: HashMap::new(),
             discovered_peers: DiscoveredPeerSet::default(),
-            // connection_reqs_tx,
-            // connection_notifs_rx,
             requests_rx,
             dial_queue: HashMap::new(),
             dial_states: HashMap::new(),
@@ -383,6 +373,8 @@ where
             transport,
             apps,
             peer_senders,
+            peer_senders_cache: HashMap::new(),
+            peer_senders_generation: 0,
         };
 
         // set the initial config addresses and pubkeys
@@ -449,6 +441,11 @@ where
         );
     }
 
+    #[cfg(test)]
+    pub async fn test_start(mut self) {
+        self.start(Handle::current()).await
+    }
+
     /// Returns the trusted peers for the current network context.
     /// If no set exists, an error is logged and None is returned.
     fn get_trusted_peers(&self) -> Option<Arc<RwLock<PeerSet>>> {
@@ -503,20 +500,22 @@ where
                     stale_peer.short_str()
                 );
 
-                // TODO: rebuild disconnect API
-                // if let Err(disconnect_error) =
-                //     self.connection_reqs_tx.disconnect_peer(stale_peer).await
-                // {
-                //     info!(
-                //         NetworkSchema::new(&self.network_context)
-                //             .remote_peer(&stale_peer),
-                //         error = %disconnect_error,
-                //         "{} Failed to close stale connection to peer {}, error: {}",
-                //         self.network_context,
-                //         stale_peer.short_str(),
-                //         disconnect_error
-                //     );
-                // }
+                match self.peer_senders.get_generational(self.peer_senders_generation) {
+                    None => {}
+                    Some((new_peer_senders, new_generation)) => {
+                        self.peer_senders_cache = new_peer_senders;
+                        self.peer_senders_generation = new_generation;
+                    }
+                }
+                let stale = PeerNetworkId::new(self.network_context.network_id(), stale_peer);
+                match self.peer_senders_cache.get(&stale) {
+                    None => {
+                        // already gone, nothing to do
+                    }
+                    Some(stub) => {
+                        stub.close.close().await;
+                    }
+                }
             }
         }
     }

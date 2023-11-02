@@ -209,7 +209,7 @@ impl NetworkBuilder {
             }
             #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
             Protocol::Memory(_) => {
-                let ant = AptosNetTransport::new(
+                let ant = AptosNetTransport::<MemoryTransport>::new(
                     MemoryTransport,
                     self.network_context,
                     self.time_service.clone(),

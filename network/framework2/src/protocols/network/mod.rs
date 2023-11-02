@@ -128,7 +128,7 @@ impl NetworkApplicationConfig {
 }
 
 // TODO network2: is this the final home of ReceivedMessage? better place to put it?
-#[derive(Debug)]
+#[derive(Debug,Clone,PartialEq)]
 pub struct ReceivedMessage {
     pub message: NetworkMessage,
     pub sender: PeerNetworkId,
@@ -162,6 +162,15 @@ impl ReceivedMessage {
     }
 }
 
+/// Trait specifying the signature for `new()` `NetworkEvents`
+pub trait NewNetworkEvents {
+    fn new(
+        network_source: NetworkSource,
+        peer_senders: Arc<OutboundPeerConnections>,
+        label: &str,
+        contexts: Arc<BTreeMap<NetworkId, NetworkContext>>,
+    ) -> Self;
+}
 
 pub struct NetworkEvents<TMessage> {
     network_source: NetworkSource, //::sync::mpsc::Receiver<ReceivedMessage>,
@@ -179,8 +188,8 @@ pub struct NetworkEvents<TMessage> {
     contexts: Arc<BTreeMap<NetworkId, NetworkContext>>,
 }
 
-impl<TMessage: Message + Unpin> NetworkEvents<TMessage> {
-    pub fn new(
+impl<TMessage: Message + Unpin> NewNetworkEvents for NetworkEvents<TMessage> {
+    fn new(
         network_source: NetworkSource,
         peer_senders: Arc<OutboundPeerConnections>,
         label: &str,
@@ -189,7 +198,6 @@ impl<TMessage: Message + Unpin> NetworkEvents<TMessage> {
         Self {
             network_source,
             done: false,
-            // open_outbound_rpc,//Arc::new(RwLock::new(BTreeMap::new())),
             peer_senders,
             peers: HashMap::new(),
             peers_generation: 0,
@@ -198,7 +206,9 @@ impl<TMessage: Message + Unpin> NetworkEvents<TMessage> {
             contexts,
         }
     }
+}
 
+impl<TMessage: Message + Unpin> NetworkEvents<TMessage> {
     fn update_peers(&mut self) {
         if let Some((new_peers, new_generation)) = self.peer_senders.get_generational(self.peers_generation) {
             self.peers_generation = new_generation;
@@ -816,12 +826,49 @@ impl Stream for NetworkSource {
     }
 }
 
+/// Closer someone replicates Go Context.Done() or a Mutex+Condition variable
+#[derive(Clone,Debug)]
+pub struct Closer {
+    pub wat: Arc<tokio::sync::Mutex<tokio::sync::watch::Sender<bool>>>,
+    pub done: tokio::sync::watch::Receiver<bool>,
+}
+
+impl Closer {
+    pub fn new() -> Self {
+        let (sender, receiver) = tokio::sync::watch::channel(false);
+        Self {
+            wat: Arc::new(tokio::sync::Mutex::new(sender)),
+            done: receiver,
+        }
+    }
+
+    /// wait for exit. ignores errors.
+    pub async fn wait(&mut self) {
+        _ = self.done.wait_for(|x| *x).await;
+    }
+
+    pub async fn close(&self) {
+        self.wat.lock().await.send_modify(|x| *x = true);
+    }
+
+    pub fn is_closed(&self) -> bool {
+        *self.done.borrow()
+    }
+}
+
+impl Default for Closer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct PeerStub {
     /// channel to Peer's write thread
     pub sender: tokio::sync::mpsc::Sender<NetworkMessage>,
     pub sender_high_prio: tokio::sync::mpsc::Sender<NetworkMessage>,
     pub rpc_counter: Arc<AtomicU32>,
+    pub close: Closer,
     open_outbound_rpc: OutboundRpcMatcher,
 }
 
@@ -830,11 +877,13 @@ impl PeerStub {
         sender: tokio::sync::mpsc::Sender<NetworkMessage>,
         sender_high_prio: tokio::sync::mpsc::Sender<NetworkMessage>,
         open_outbound_rpc: OutboundRpcMatcher,
+        close: Closer,
     ) -> Self {
         Self {
             sender,
             sender_high_prio,
             rpc_counter: Arc::new(AtomicU32::new(0)),
+            close,
             open_outbound_rpc,
         }
     }

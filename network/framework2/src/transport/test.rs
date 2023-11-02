@@ -72,8 +72,10 @@ where
     let (
         listener_network_context,
         dialer_network_context,
-        listener_auth_mode,
-        dialer_auth_mode,
+        peers_and_metadata,
+        mutual_auth,
+        // listener_auth_mode,
+        // dialer_auth_mode,
         trusted_peers,
     ) = match auth {
         Auth::Mutual => {
@@ -100,8 +102,10 @@ where
             (
                 listener_network_context,
                 dialer_network_context,
-                HandshakeAuthMode::mutual(peers_and_metadata.clone()),
-                HandshakeAuthMode::mutual(peers_and_metadata),
+                // HandshakeAuthMode::mutual(peers_and_metadata.clone()),
+                // HandshakeAuthMode::mutual(peers_and_metadata),
+                peers_and_metadata,
+                true,
                 trusted_peers,
             )
         },
@@ -133,8 +137,10 @@ where
             (
                 listener_network_context,
                 dialer_network_context,
-                HandshakeAuthMode::maybe_mutual(peers_and_metadata.clone()),
-                HandshakeAuthMode::maybe_mutual(peers_and_metadata),
+                // HandshakeAuthMode::maybe_mutual(peers_and_metadata.clone()),
+                // HandshakeAuthMode::maybe_mutual(peers_and_metadata),
+                peers_and_metadata,
+                false,
                 trusted_peers,
             )
         },
@@ -154,8 +160,10 @@ where
             (
                 listener_network_context,
                 dialer_network_context,
-                HandshakeAuthMode::server_only(&[network_id]),
-                HandshakeAuthMode::server_only(&[network_id]),
+                // HandshakeAuthMode::server_only(&[network_id]),
+                // HandshakeAuthMode::server_only(&[network_id]),
+                peers_and_metadata,
+                false,
                 trusted_peers,
             )
         },
@@ -169,7 +177,9 @@ where
         listener_network_context,
         time_service.clone(),
         listener_key,
-        listener_auth_mode,
+        peers_and_metadata.clone(),
+        mutual_auth,
+        // listener_auth_mode,
         HANDSHAKE_VERSION,
         chain_id,
         supported_protocols.clone(),
@@ -181,7 +191,9 @@ where
         dialer_network_context,
         time_service.clone(),
         dialer_key,
-        dialer_auth_mode,
+        peers_and_metadata.clone(),
+        mutual_auth,
+        // dialer_auth_mode,
         HANDSHAKE_VERSION,
         chain_id,
         supported_protocols.clone(),

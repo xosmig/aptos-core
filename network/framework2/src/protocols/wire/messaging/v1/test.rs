@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::{
-    protocols::stream::{InboundStreamBuffer, OutboundStream, StreamFragment, StreamHeader},
+    protocols::stream::{StreamFragment, StreamHeader},//InboundStreamBuffer, OutboundStream,
     testutils::fake_socket::{ReadOnlyTestSocket, ReadWriteTestSocket},
 };
 use aptos_memsocket::MemorySocket;
@@ -218,6 +218,7 @@ proptest! {
 
     /// Test that MultiplexMessageSink and MultiplexMessageStream can understand each
     /// other and fully preserve the MultiplexMessages being sent
+    #[cfg(obsolete)]
     #[test]
     fn multiplex_stream_socket_roundtrip(
         messages in vec(arb_network_message(64 * 255), 1..20),

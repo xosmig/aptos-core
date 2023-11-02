@@ -19,12 +19,22 @@ use crate::peer;
 use crate::protocols::network::OutboundPeerConnections;
 use crate::transport::AptosNetTransport;
 use futures::AsyncWriteExt;
+#[cfg(any(test, feature = "testing", feature = "fuzzing"))]
+use tokio::sync::oneshot;
+#[cfg(any(test, feature = "testing", feature = "fuzzing"))]
+use crate::application::interface::OutboundRpcMatcher;
+#[cfg(any(test, feature = "testing", feature = "fuzzing"))]
+use crate::protocols::wire::messaging::v1::NetworkMessage;
+#[cfg(any(test, feature = "testing", feature = "fuzzing"))]
+use crate::protocols::network::{Closer,PeerStub};
 
 #[derive(Clone)]
 pub enum AptosNetTransportActual {
     Tcp(AptosNetTransport<TcpTransport>),
     #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
     Memory(AptosNetTransport<MemoryTransport>),
+    #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
+    Mock(MockTransport),
 }
 
 impl AptosNetTransportActual {
@@ -47,10 +57,61 @@ impl AptosNetTransportActual {
             AptosNetTransportActual::Memory(tt) => {
                 connect_outbound(tt, remote_peer_network_id, network_address, config, apps, handle.clone(), peers_and_metadata, peer_senders, network_context).await
             }
+            #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
+            AptosNetTransportActual::Mock(mt) => {
+                let (result_sender, mock_dial_result) = oneshot::channel::<io::Result<()>>();
+                let msg = MockTransportEvent::Dial(MockTransportDial{
+                    remote_peer_network_id,
+                    network_address,
+                    result_sender,
+                });
+                mt.call.send(msg).await;
+                let result = mock_dial_result.await.unwrap();
+                if result.is_ok() {
+                    // peers_and_metadata.insert_connection_metadata()
+                    let (sender, _to_send) = tokio::sync::mpsc::channel::<NetworkMessage>(1);
+                    let (sender_high_prio, _to_send_high_prio) = tokio::sync::mpsc::channel::<NetworkMessage>(1);
+                    let stub = PeerStub::new(
+                        sender,
+                        sender_high_prio,
+                        OutboundRpcMatcher::new(),
+                        Closer::new(),
+                    );
+                    peer_senders.insert(remote_peer_network_id,stub);
+                }
+                result
+            }
         }
     }
 }
 
+#[cfg(any(test, feature = "testing", feature = "fuzzing"))]
+#[derive(Clone)]
+pub struct MockTransport {
+    // TODO: this will becom a channel of enum of struct if we have to support more than dial()
+    pub call: tokio::sync::mpsc::Sender<MockTransportEvent>,
+}
+
+#[cfg(any(test, feature = "testing", feature = "fuzzing"))]
+pub enum MockTransportEvent {
+    Dial(MockTransportDial),
+}
+
+#[cfg(any(test, feature = "testing", feature = "fuzzing"))]
+pub struct MockTransportDial {
+    pub remote_peer_network_id: PeerNetworkId,
+    pub network_address: NetworkAddress,
+    pub result_sender: oneshot::Sender<io::Result<()>>,
+}
+
+#[cfg(any(test, feature = "testing", feature = "fuzzing"))]
+pub fn new_mock_transport() -> (AptosNetTransportActual, tokio::sync::mpsc::Receiver<MockTransportEvent>) {
+    let (tx, rx) = tokio::sync::mpsc::channel(10);
+    let mt = MockTransport{
+        call:tx,
+    };
+    (AptosNetTransportActual::Mock(mt), rx)
+}
 
 async fn connect_outbound<TTransport, TSocket>(
     transport: &AptosNetTransport<TTransport>,
