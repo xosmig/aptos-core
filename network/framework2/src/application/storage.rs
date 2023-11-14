@@ -147,7 +147,7 @@ impl PeersAndMetadata {
                 if require_connected && !peer_metadata.is_connected() {
                     continue;
                 }
-                if (protocol_ids.len() != 0) && !peer_metadata.supports_any_protocol(protocol_ids) {
+                if (!protocol_ids.is_empty()) && !peer_metadata.supports_any_protocol(protocol_ids) {
                     continue;
                 }
                 let peer_network_id = PeerNetworkId::new(*network_id, *peer_id);
@@ -155,7 +155,7 @@ impl PeersAndMetadata {
             }
         }
         let generation_actual = self.generation.load(Ordering::SeqCst);
-        return Some((all_data, generation_actual));
+        Some((all_data, generation_actual))
     }
 
     /// Returns all connected peers that support at least one of
@@ -368,9 +368,13 @@ impl PeersAndMetadata {
             if active_connection_id == connection_id {
                 self.generation.fetch_add(1 , Ordering::SeqCst);
 
-                let ret = Ok(entry.remove());
+                let peer_metadata = entry.remove();
                 count_gauges(writer.iter());
-                ret
+                // TODO: fix network context and disconnect reason?
+                let nc = NetworkContext::new(RoleType::Validator, peer_network_id.network_id(), PeerId::ZERO);
+                let event = ConnectionNotification::LostPeer(peer_metadata.connection_metadata.clone(), nc, DisconnectReason::Requested);
+                self.broadcast(event);
+                Ok(peer_metadata)
             } else {
                 Err(Error::UnexpectedError(format!(
                     "The peer connection id did not match! Given: {:?}, found: {:?}.",

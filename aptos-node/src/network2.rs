@@ -13,7 +13,7 @@ use aptos_network2_builder::NetworkBuilder;
 // use aptos_consensus::network_interface::{DIRECT_SEND, RPC};
 use aptos_logger::{debug, info};
 use aptos_network2::application::interface::NetworkClient;
-use aptos_network2::protocols::network::{NetworkEvents, NetworkSender, NetworkSource, NewNetworkSender, OutboundPeerConnections};
+use aptos_network2::protocols::network::{NetworkEvents, NetworkSender, NetworkSource, NewNetworkEvents, NewNetworkSender, OutboundPeerConnections};
 use aptos_network2::application::storage::PeersAndMetadata;
 use aptos_time_service::TimeService;
 use aptos_types::chain_id::ChainId;

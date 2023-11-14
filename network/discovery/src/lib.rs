@@ -150,7 +150,7 @@ impl<P: OnChainConfigProvider> DiscoveryChangeListener<P> {
                 );
                 let request = ConnectivityRequest::UpdateDiscoveredPeers(discovery_source, update);
                 if let Err(error) = update_channel.try_send(request) {
-                    inc_by_with_context(&DISCOVERY_COUNTS, &network_context, "send_failure", 1); // TODO network2: re-add
+                    inc_by_with_context(&DISCOVERY_COUNTS, &network_context, "send_failure", 1);
                     warn!(
                         NetworkSchema::new(&network_context),
                         "{} Failed to send update {:?}", network_context, error

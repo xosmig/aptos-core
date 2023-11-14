@@ -61,6 +61,7 @@ aptos-types = { workspace = true, features = ["fuzzing"] }
 proptest = { workspace = true }
 proptest-derive = { workspace = true }
 rand_core = { workspace = true }
+console-subscriber = { workspace = true }
 
 [features]
 default = []

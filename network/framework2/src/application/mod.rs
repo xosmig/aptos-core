@@ -56,16 +56,17 @@ impl ApplicationCollector {
     }
 
     pub fn get(&self, protocol_id: &ProtocolId) -> Option<&ApplicationConnections> {
-        for ac in self.apps.iter() {
-            if ac.protocol_id == *protocol_id {
-                return Some(ac);
-            }
-        }
-        None
+        self.apps.iter().find(|&ac| ac.protocol_id == *protocol_id)
     }
 
     pub fn iter(&self) -> Iter {
         Iter::new(self.apps.iter())
+    }
+}
+
+impl Default for ApplicationCollector {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -83,10 +84,7 @@ impl<'a> Iterator for Iter<'a> {
     type Item = (&'a ProtocolId,&'a ApplicationConnections);
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.subi.next() {
-            None => {None}
-            Some(sv) => {Some((&sv.protocol_id,sv))}
-        }
+        self.subi.next().map(|sv| (&sv.protocol_id,sv))
     }
 }
 

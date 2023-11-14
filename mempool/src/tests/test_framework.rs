@@ -19,17 +19,17 @@ use aptos_infallible::{Mutex, RwLock};
 use aptos_mempool_notifications::MempoolNotifier;
 use aptos_network2::{
     application::{
-        interface::{NetworkClient, NetworkServiceEvents},
+        interface::{NetworkClient},// NetworkServiceEvents
         storage::PeersAndMetadata,
     },
-    peer_manager::{
-        conn_notifs_channel, ConnectionRequestSender, PeerManagerNotification, PeerManagerRequest,
-        PeerManagerRequestSender,
-    },
+    // peer_manager::{
+    //     conn_notifs_channel, ConnectionRequestSender, PeerManagerNotification, PeerManagerRequest,
+    //     PeerManagerRequestSender,
+    // },
     protocols::{
         direct_send::Message,
         network::{NetworkEvents, NetworkSender, NewNetworkEvents, NewNetworkSender},
-        rpc::InboundRpcRequest,
+        // rpc::InboundRpcRequest,
         wire::handshake::v1::ProtocolId::MempoolDirectSend,
     },
     testutils::{

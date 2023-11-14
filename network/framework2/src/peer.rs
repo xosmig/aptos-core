@@ -113,7 +113,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
             let rest = blob.split_off(self.max_frame_size);
             self.large_message = Some(rest);
         }
-        self.large_fragment_id = self.large_fragment_id + 1;
+        self.large_fragment_id += 1;
         self.send_large = false;
         MultiplexMessage::Stream(StreamMessage::Fragment(StreamFragment {
             request_id: self.stream_request_id,
@@ -123,13 +123,13 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
     }
 
     fn start_large(&mut self, msg: NetworkMessage) -> MultiplexMessage {
-        self.stream_request_id = self.stream_request_id + 1;
+        self.stream_request_id += 1;
         self.send_large = false;
         self.large_fragment_id = 0;
         let mut num_fragments = msg.data_len() / self.max_frame_size;
         let mut msg = msg;
         while num_fragments * self.max_frame_size < msg.data_len() {
-            num_fragments = num_fragments + 1;
+            num_fragments += 1;
         }
         if num_fragments > 0x0ff {
             panic!("huge message cannot be fragmented {:?} > 255 * {:?}", msg.data_len(), self.max_frame_size);
@@ -263,16 +263,16 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                     }
                 }
             };
-            if let MultiplexMessage::Message(nm) = &mm {
-                if let NetworkMessage::Error(ec) = &nm {
-                    match ec {
-                        ErrorCode::DisconnectCommand => {
+            if let MultiplexMessage::Message(NetworkMessage::Error(ErrorCode::DisconnectCommand)) = &mm {
+                // if let NetworkMessage::Error(ec) = &nm {
+                //     match ec {
+                //         ErrorCode::DisconnectCommand => {
                             info!("writer_thread got DisconnectCommand");
                             break;
-                        }
-                        _ => {}
-                    }
-                }
+                    //     }
+                    //     _ => {}
+                    // }
+                // }
             }
             let data_len = mm.data_len();
             tokio::select! {

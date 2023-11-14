@@ -20,7 +20,7 @@ use aptos_config::{
 };
 use aptos_netcore::transport::ConnectionOrigin;
 use aptos_network2::{
-    peer_manager::{PeerManagerNotification, PeerManagerRequest},
+    // peer_manager::{PeerManagerNotification, PeerManagerRequest},
     ProtocolId,
 };
 use aptos_types::{transaction::SignedTransaction, PeerId};

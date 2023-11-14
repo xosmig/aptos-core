@@ -9,12 +9,18 @@ use aptos_crypto::{test_utils::TEST_SEED, x25519, Uniform};
 use aptos_logger::info;
 use aptos_time_service::{MockTimeService, TimeService};
 use aptos_types::{account_address::AccountAddress, network_address::NetworkAddress};
-use futures::{executor::block_on, future};
+use futures::future;
 use maplit::{hashmap, hashset};
 use rand::rngs::StdRng;
 use std::{io, str::FromStr};
+// use std::future::Future;
+use std::sync::Once;
+use tokio::runtime::Runtime;
+//use tokio::time::error::Elapsed;
+//use tokio::time::Timeout;
 use tokio_retry::strategy::FixedInterval;
 use aptos_config::network_id::NetworkId;
+// use crate::application::error::Error;
 // use aptos_crypto::x25519::PrivateKey;
 // use aptos_netcore::transport::memory::MemoryTransport;
 // use aptos_types::chain_id::ChainId;
@@ -36,6 +42,16 @@ const DEFAULT_BASE_ADDR: &str = "/ip4/127.0.0.1/tcp/9090";
 const MAX_DELAY_WITH_JITTER: Duration = Duration::from_millis(
     CONNECTION_DELAY.as_millis() as u64 + MAX_CONNECTION_DELAY_JITTER.as_millis() as u64,
 );
+
+static SETUP_ONCE :Once = Once::new();
+
+fn setup() {
+    SETUP_ONCE.call_once(|| {
+        println!("connectivity_manager::test::setup() called");
+        console_subscriber::init();
+        aptos_logger::Logger::new().level(aptos_logger::Level::Debug).init();
+    });
+}
 
 fn network_address(addr_str: &'static str) -> NetworkAddress {
     NetworkAddress::from_str(addr_str).unwrap()
@@ -189,7 +205,7 @@ impl TestHarness {
         notif_peer_id: PeerId,
         address: NetworkAddress,
     ) {
-        info!(
+        println!(
             "Sending NewPeer notification for peer: {}",
             peer_id.short_str()
         );
@@ -206,7 +222,7 @@ impl TestHarness {
 
     // #[cfg(obsolete)]
     async fn send_lost_peer_await_delivery(&mut self, peer_id: PeerId, _address: NetworkAddress) {
-        info!(
+        println!(
             "Sending LostPeer notification for peer: {}",
             peer_id.short_str()
         );
@@ -223,8 +239,13 @@ impl TestHarness {
         // );
         // self.send_notification_await_delivery(peer_id, notif).await;
         let peer_network_id = PeerNetworkId::new(self.network_context.network_id(), peer_id);
-        let wat = self.peers_and_metadata.get_metadata_for_peer(peer_network_id).unwrap();
-        _ = self.peers_and_metadata.remove_peer_metadata(peer_network_id, wat.connection_metadata.connection_id);
+        let pm = self.peers_and_metadata.get_metadata_for_peer(peer_network_id).unwrap();
+        match self.peers_and_metadata.remove_peer_metadata(peer_network_id, pm.connection_metadata.connection_id) {
+            Ok(_) => {}
+            Err(err) => {
+                assert!(false, "could not remove peer: {:?}", err);
+            }
+        }
         // TODO: this does not 'await delivery' of subscribers and their disconnect message
     }
 
@@ -251,7 +272,7 @@ impl TestHarness {
         let peer_network_id = PeerNetworkId::new(self.network_context.network_id(), peer_id);
         let they = match self.peer_senders.get_generational(0) {
             None => {
-                info!("no peer_senders");
+                println!("no peer_senders");
                 return;
             }
             Some((they,_gen)) => {they}
@@ -261,7 +282,7 @@ impl TestHarness {
                 // already gone, okay
             }
             Some(stub) => {
-                info!("Waiting to receive disconnect request");
+                println!("Waiting to receive disconnect request");
                 let mut close = stub.close.clone();
                 close.wait().await;
             }
@@ -298,20 +319,35 @@ impl TestHarness {
         // Wait for dial queue to be empty. Without this, it's impossible to guarantee that a completed
         // dial is removed from a dial queue. We need this guarantee to see the effects of future
         // triggers for connectivity check.
-        info!("Waiting for dial queue to be empty");
+        println!("Waiting for dial queue to be empty");
         while self.get_dial_queue_size().await > 0 {}
     }
 
     // #[cfg(obsolete)]
+    // expect a dial, send it a result
     async fn expect_one_dial_inner(
         &mut self,
         result: io::Result<()>,
-    ) -> (PeerId, NetworkAddress) {
-        info!("Waiting to receive dial request");
+        timeout: Duration,
+    ) -> Option<(PeerId, NetworkAddress)> {
+        println!("Waiting to receive dial request");
         let success = result.is_ok();
-        let event = self.mock_transport_events.recv().await.unwrap();
+        let event = match tokio::time::timeout(timeout, self.mock_transport_events.recv()).await {
+            Ok(result) => match result {
+                None => {
+                    println!("dial request returned None");
+                    return None;
+                }
+                Some(event) => {event}
+            }
+            Err(_timeout) => {
+                println!("dial request timed out after {:?}", timeout);
+                return None;
+            }
+        };
         let (peer_id, address) = match event {
             MockTransportEvent::Dial(dial) => {
+                println!("got dial {:?}", dial);
                 _ = dial.result_sender.send(result);
                 (dial.remote_peer_network_id.peer_id(), dial.network_address)
             }
@@ -320,17 +356,27 @@ impl TestHarness {
             self.send_new_peer_await_delivery(peer_id, peer_id, address.clone())
                 .await;
         }
-        (peer_id, address)
+        Some((peer_id, address))
     }
 
     // #[cfg(obsolete)]
+    // expect a dial, send it a result, ensure dial was to destination we expect
     async fn expect_one_dial(
         &mut self,
         expected_peer_id: PeerId,
         expected_address: NetworkAddress,
         result: io::Result<()>,
+        timeout: Duration,
     ) {
-        let (peer_id, address) = self.expect_one_dial_inner(result).await;
+        let (peer_id, address) = match self.expect_one_dial_inner(result, timeout).await {
+            None => {
+                assert!(false, "expect_one_dial timeout");
+                return;
+            }
+            Some((peer_id, address)) => {
+                (peer_id, address)
+            }
+        };
 
         assert_eq!(peer_id, expected_peer_id);
         assert_eq!(address, expected_address);
@@ -339,36 +385,41 @@ impl TestHarness {
     }
 
     // #[cfg(obsolete)]
+    // expect a dial, tell it Ok(()), ensure dial was to destination we expect
     async fn expect_one_dial_success(
         &mut self,
         expected_peer_id: PeerId,
         expected_address: NetworkAddress,
+        timeout: Duration,
     ) {
-        self.expect_one_dial(expected_peer_id, expected_address, Ok(()))
+        self.expect_one_dial(expected_peer_id, expected_address, Ok(()), timeout)
             .await;
     }
 
     // #[cfg(obsolete)]
+    // expect a dial, send it a failure, ensure dial was to destination we expect
     async fn expect_one_dial_fail(
         &mut self,
         expected_peer_id: PeerId,
         expected_address: NetworkAddress,
+        timeout: Duration,
     ) {
         let error = io::Error::from(io::ErrorKind::ConnectionRefused);
-        self.expect_one_dial(expected_peer_id, expected_address, Err(error))
+        self.expect_one_dial(expected_peer_id, expected_address, Err(error), timeout)
             .await;
     }
 
     // #[cfg(obsolete)]
-    async fn expect_num_dials(&mut self, num_expected: usize) {
+    async fn expect_num_dials(&mut self, num_expected: usize, timeout: Duration) {
+        // TODO: ideally this would be one total timeout, not N sub timeouts, but this is probably okay for test code
         for _ in 0..num_expected {
-            let _ = self.expect_one_dial_inner(Ok(())).await;
+            let _ = self.expect_one_dial_inner(Ok(()), timeout).await;
         }
         self.wait_until_empty_dial_queue().await;
     }
 
     async fn send_update_discovered_peers(&mut self, src: DiscoverySource, peers: PeerSet) {
-        info!("Sending UpdateDiscoveredPeers");
+        println!("Sending UpdateDiscoveredPeers");
         self.conn_mgr_reqs_tx
             .send(ConnectivityRequest::UpdateDiscoveredPeers(src, peers))
             .await
@@ -378,17 +429,21 @@ impl TestHarness {
 
 #[test]
 fn connect_to_seeds_on_startup() {
+    setup();
     let (seed_peer_id, seed_peer, _, seed_addr) = test_peer(AccountAddress::ONE);
     let seeds: PeerSet = hashmap! {seed_peer_id => seed_peer.clone()};
     let (mut mock, conn_mgr) = TestHarness::new(seeds.clone());
 
     let test = async move {
+        println!("connect_to_seeds_on_startup start");
+
         // Peer manager receives a request to connect to the other peer.
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
-        mock.expect_one_dial_success(seed_peer_id, seed_addr.clone())
+        mock.expect_one_dial_success(seed_peer_id, seed_addr.clone(), Duration::from_secs(1))
             .await;
 
+        println!("connect_to_seeds_on_startup 2");
         // Sending an UpdateDiscoveredPeers with the same seed address should not
         // trigger any dials.
         mock.send_update_discovered_peers(DiscoverySource::OnChainValidatorSet, seeds)
@@ -396,6 +451,7 @@ fn connect_to_seeds_on_startup() {
         mock.trigger_connectivity_check().await;
         assert_eq!(0, mock.get_dial_queue_size().await);
 
+        println!("connect_to_seeds_on_startup 3");
         // Sending new address of seed peer
         let (new_seed, new_seed_addr) =
             update_peer_with_address(seed_peer, "/ip4/127.0.1.1/tcp/8080");
@@ -403,28 +459,33 @@ fn connect_to_seeds_on_startup() {
         mock.send_update_discovered_peers(DiscoverySource::OnChainValidatorSet, update)
             .await;
 
+        println!("connect_to_seeds_on_startup 4");
         // We expect the peer which changed its address to also disconnect.
         mock.send_lost_peer_await_delivery(seed_peer_id, seed_addr.clone())
             .await;
 
+        println!("connect_to_seeds_on_startup 5");
         // We should try to connect to both the new address and seed address.
         mock.trigger_connectivity_check().await;
+        println!("connect_to_seeds_on_startup 5.1");
         mock.trigger_pending_dials().await;
-        mock.expect_one_dial_fail(seed_peer_id, new_seed_addr).await;
+        println!("connect_to_seeds_on_startup 5.2");
+        mock.expect_one_dial_fail(seed_peer_id, new_seed_addr, Duration::from_secs(5)).await;
 
+        println!("connect_to_seeds_on_startup 6");
         // Waiting to receive dial request to seed peer at seed address
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
-        mock.expect_one_dial_success(seed_peer_id, seed_addr).await;
+        mock.expect_one_dial_success(seed_peer_id, seed_addr, Duration::from_secs(1)).await;
+
+        println!("connect_to_seeds_on_startup done");
     };
-    block_on(async {
-        let handle = Handle::current();
-        future::join(conn_mgr.start(handle), test).await
-    });
+    Runtime::new().unwrap().block_on(future::join(conn_mgr.test_start(), test));
 }
 
 #[test]
 fn addr_change() {
+    setup();
     let (other_peer_id, other_peer, _, other_addr) = test_peer(AccountAddress::ZERO);
     let (mut mock, conn_mgr) = TestHarness::new(HashMap::new());
 
@@ -437,7 +498,7 @@ fn addr_change() {
         // Peer manager receives a request to connect to the other peer.
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
-        mock.expect_one_dial_success(other_peer_id, other_addr.clone())
+        mock.expect_one_dial_success(other_peer_id, other_addr.clone(), Duration::from_secs(1))
             .await;
 
         // Send request to connect to other peer at old address. ConnectivityManager should not
@@ -464,17 +525,15 @@ fn addr_change() {
         // We should receive dial request to other peer at new address
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
-        mock.expect_one_dial_success(other_peer_id, other_addr_new)
+        mock.expect_one_dial_success(other_peer_id, other_addr_new, Duration::from_secs(1))
             .await;
     };
-    block_on(async {
-        let handle = Handle::current();
-        future::join(conn_mgr.start(handle), test).await
-    });
+    Runtime::new().unwrap().block_on(future::join(conn_mgr.test_start(), test));
 }
 
 #[test]
 fn lost_connection() {
+    setup();
     let (other_peer_id, other_peer, _, other_addr) = test_peer(AccountAddress::ZERO);
     let (mut mock, conn_mgr) = TestHarness::new(HashMap::new());
 
@@ -487,7 +546,7 @@ fn lost_connection() {
         // Peer manager receives a request to connect to the other peer.
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
-        mock.expect_one_dial_success(other_peer_id, other_addr.clone())
+        mock.expect_one_dial_success(other_peer_id, other_addr.clone(), Duration::from_secs(1))
             .await;
 
         // Sending LostPeer event to signal connection loss
@@ -498,17 +557,15 @@ fn lost_connection() {
         // connection.
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
-        mock.expect_one_dial_success(other_peer_id, other_addr.clone())
+        mock.expect_one_dial_success(other_peer_id, other_addr.clone(), Duration::from_secs(1))
             .await;
     };
-    block_on(async {
-        let handle = Handle::current();
-        future::join(conn_mgr.start(handle), test).await
-    });
+    Runtime::new().unwrap().block_on(future::join(conn_mgr.test_start(), test));
 }
 
 #[test]
 fn disconnect() {
+    setup();
     let (other_peer_id, other_peer, _, other_addr) = test_peer(AccountAddress::ZERO);
     let (mut mock, conn_mgr) = TestHarness::new(HashMap::new());
 
@@ -521,7 +578,7 @@ fn disconnect() {
         // Waiting to receive dial request
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
-        mock.expect_one_dial_success(other_peer_id, other_addr.clone())
+        mock.expect_one_dial_success(other_peer_id, other_addr.clone(), Duration::from_secs(1))
             .await;
 
         // Sending request to make other peer ineligible (by dropping the key)
@@ -538,15 +595,13 @@ fn disconnect() {
         mock.expect_disconnect_success(other_peer_id, other_addr)
             .await;
     };
-    block_on(async {
-        let handle = Handle::current();
-        future::join(conn_mgr.start(handle), test).await
-    });
+    Runtime::new().unwrap().block_on(future::join(conn_mgr.test_start(), test));
 }
 
 // Tests that connectivity manager retries dials and disconnects on failure.
 #[test]
 fn retry_on_failure() {
+    setup();
     let (other_peer_id, peer, _, other_addr) = test_peer(AccountAddress::ZERO);
     let (mut mock, conn_mgr) = TestHarness::new(HashMap::new());
 
@@ -559,13 +614,13 @@ fn retry_on_failure() {
         // First dial attempt fails
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
-        mock.expect_one_dial_fail(other_peer_id, other_addr.clone())
+        mock.expect_one_dial_fail(other_peer_id, other_addr.clone(), Duration::from_secs(1))
             .await;
 
         // We should retry after the failed attempt; this time, it succeeds.
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
-        mock.expect_one_dial_success(other_peer_id, other_addr.clone())
+        mock.expect_one_dial_success(other_peer_id, other_addr.clone(), Duration::from_secs(1))
             .await;
 
         // Sending request to make other peer ineligible (by removing key)
@@ -587,13 +642,14 @@ fn retry_on_failure() {
         mock.expect_disconnect_success(other_peer_id, other_addr.clone())
             .await;
     };
-    block_on(future::join(conn_mgr.test_start(), test));
+    Runtime::new().unwrap().block_on(future::join(conn_mgr.test_start(), test));
 }
 
 // Tests that if we dial an already connected peer or disconnect from an already disconnected
 // peer, connectivity manager does not send any additional dial or disconnect requests.
 #[test]
 fn no_op_requests() {
+    setup();
     let (other_peer_id, peer, _, other_addr) = test_peer(AccountAddress::ZERO);
     let (mut mock, conn_mgr) = TestHarness::new(HashMap::new());
 
@@ -606,7 +662,7 @@ fn no_op_requests() {
         // Peer manager receives a request to connect to the other peer.
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
-        mock.expect_one_dial_fail(other_peer_id, other_addr.clone())
+        mock.expect_one_dial_fail(other_peer_id, other_addr.clone(), Duration::from_secs(1))
             .await;
 
         // Send a delayed NewPeer notification.
@@ -638,10 +694,7 @@ fn no_op_requests() {
         assert_eq!(0, mock.get_connected_size().await);
         assert_eq!(0, mock.get_dial_queue_size().await);
     };
-    block_on(async {
-        let handle = Handle::current();
-        future::join(conn_mgr.start(handle), test).await
-    });
+    Runtime::new().unwrap().block_on(future::join(conn_mgr.test_start(), test));
 }
 fn generate_account_address(val: usize) -> AccountAddress {
     let mut addr = [0u8; AccountAddress::LENGTH];
@@ -651,6 +704,7 @@ fn generate_account_address(val: usize) -> AccountAddress {
 }
 #[test]
 fn backoff_on_failure() {
+    setup();
     let (mut mock, conn_mgr) = TestHarness::new(HashMap::new());
 
     let test = async move {
@@ -671,25 +725,23 @@ fn backoff_on_failure() {
             // Peer manager receives a request to connect to the seed peer.
             mock.trigger_connectivity_check().await;
             mock.trigger_pending_dials().await;
-            mock.expect_one_dial_fail(peer_id_a, peer_a_addr.clone())
+            mock.expect_one_dial_fail(peer_id_a, peer_a_addr.clone(), Duration::from_secs(1))
                 .await;
         }
 
         // Finally, one dial request succeeds
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
-        mock.expect_one_dial_success(peer_id_a, peer_a_addr).await;
+        mock.expect_one_dial_success(peer_id_a, peer_a_addr, Duration::from_secs(1)).await;
     };
-    block_on(async {
-        let handle = Handle::current();
-        future::join(conn_mgr.start(handle), test).await
-    });
+    Runtime::new().unwrap().block_on(future::join(conn_mgr.test_start(), test));
 }
 
 // Test that connectivity manager will still connect to a peer if it advertises
 // multiple listen addresses and some of them don't work.
 #[test]
 fn multiple_addrs_basic() {
+    setup();
     let (other_peer_id, mut peer, pubkey, _) = test_peer(AccountAddress::ZERO);
     let (mut mock, conn_mgr) = TestHarness::new(HashMap::new());
 
@@ -708,26 +760,24 @@ fn multiple_addrs_basic() {
         // Assume that the first listen addr fails to connect.
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
-        mock.expect_one_dial_fail(other_peer_id, other_addr_1).await;
+        mock.expect_one_dial_fail(other_peer_id, other_addr_1, Duration::from_secs(1)).await;
 
         // Since the last connection attempt failed for other_addr_1, we should
         // attempt the next available listener address. In this case, the call
         // succeeds and we should connect to the peer.
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
-        mock.expect_one_dial_success(other_peer_id, other_addr_2)
+        mock.expect_one_dial_success(other_peer_id, other_addr_2, Duration::from_secs(1))
             .await;
     };
-    block_on(async {
-        let handle = Handle::current();
-        future::join(conn_mgr.start(handle), test).await
-    });
+    Runtime::new().unwrap().block_on(future::join(conn_mgr.test_start(), test));
 }
 
 // Test that connectivity manager will work with multiple addresses even if we
 // retry more times than there are addresses.
 #[test]
 fn multiple_addrs_wrapping() {
+    setup();
     let (other_peer_id, mut peer, pubkey, _) = test_peer(AccountAddress::ZERO);
     let (mut mock, conn_mgr) = TestHarness::new(HashMap::new());
 
@@ -744,30 +794,28 @@ fn multiple_addrs_wrapping() {
         // Assume that the first listen addr fails to connect.
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
-        mock.expect_one_dial_fail(other_peer_id, other_addr_1.clone())
+        mock.expect_one_dial_fail(other_peer_id, other_addr_1.clone(), Duration::from_secs(1))
             .await;
 
         // The second attempt also fails.
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
-        mock.expect_one_dial_fail(other_peer_id, other_addr_2).await;
+        mock.expect_one_dial_fail(other_peer_id, other_addr_2, Duration::from_secs(1)).await;
 
         // Our next attempt should wrap around to the first address.
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
-        mock.expect_one_dial_success(other_peer_id, other_addr_1)
+        mock.expect_one_dial_success(other_peer_id, other_addr_1, Duration::from_secs(1))
             .await;
     };
-    block_on(async {
-        let handle = Handle::current();
-        future::join(conn_mgr.start(handle), test).await
-    });
+    Runtime::new().unwrap().block_on(future::join(conn_mgr.test_start(), test));
 }
 
 // Test that connectivity manager will still work when dialing a peer with
 // multiple listen addrs and then that peer advertises a smaller number of addrs.
 #[test]
 fn multiple_addrs_shrinking() {
+    setup();
     let (other_peer_id, mut peer, pubkey, _) = test_peer(AccountAddress::ZERO);
     let (mut mock, conn_mgr) = TestHarness::new(HashMap::new());
 
@@ -785,7 +833,7 @@ fn multiple_addrs_shrinking() {
         // Assume that the first listen addr fails to connect.
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
-        mock.expect_one_dial_fail(other_peer_id, other_addr_1).await;
+        mock.expect_one_dial_fail(other_peer_id, other_addr_1, Duration::from_secs(1)).await;
 
         let other_addr_4 = network_address_with_pubkey("/ip4/127.0.0.1/tcp/9094", pubkey);
         let other_addr_5 = network_address_with_pubkey("/ip4/127.0.0.1/tcp/9095", pubkey);
@@ -800,17 +848,15 @@ fn multiple_addrs_shrinking() {
         // other_addr_4 in this case.
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
-        mock.expect_one_dial_success(other_peer_id, other_addr_4)
+        mock.expect_one_dial_success(other_peer_id, other_addr_4, Duration::from_secs(1))
             .await;
     };
-    block_on(async {
-        let handle = Handle::current();
-        future::join(conn_mgr.start(handle), test).await
-    });
+    Runtime::new().unwrap().block_on(future::join(conn_mgr.test_start(), test));
 }
 
 #[test]
 fn public_connection_limit() {
+    setup();
     let mut seeds = HashMap::new();
 
     for i in 0..=MAX_TEST_CONNECTIONS {
@@ -824,7 +870,7 @@ fn public_connection_limit() {
         // Should receive MAX_TEST_CONNECTIONS for each of the seed peers
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
-        mock.expect_num_dials(MAX_TEST_CONNECTIONS).await;
+        mock.expect_num_dials(MAX_TEST_CONNECTIONS, Duration::from_secs(1)).await;
 
         // Should be expected number of connnections
         assert_eq!(MAX_TEST_CONNECTIONS, mock.get_connected_size().await);
@@ -833,14 +879,12 @@ fn public_connection_limit() {
         mock.trigger_connectivity_check().await;
         assert_eq!(0, mock.get_dial_queue_size().await);
     };
-    block_on(async {
-        let handle = Handle::current();
-        future::join(conn_mgr.start(handle), test).await
-    });
+    Runtime::new().unwrap().block_on(future::join(conn_mgr.test_start(), test));
 }
 
 #[test]
 fn basic_update_discovered_peers() {
+    setup();
     let mut rng = StdRng::from_seed(TEST_SEED);
     let (mock, mut conn_mgr) = TestHarness::new(HashMap::new());
     let trusted_peers = mock
@@ -947,7 +991,7 @@ async fn test_stale_peers_unknown_inbound() {
     connectivity_manager.handle_control_notification(connection_notification);
 
     // Verify we have 2 peers
-    assert_eq!(connectivity_manager.get_connected_peers().len(), 2);
+    assert_eq!(connectivity_manager.peer_metadata_cache.len(), 2);
 
     // Close the stale connections and verify that only peer 1 is disconnected
     tokio::join!(
@@ -993,7 +1037,7 @@ async fn test_stale_peers_vfn_inbound() {
     connectivity_manager.handle_control_notification(connection_notification);
 
     // Verify we have 2 peers
-    assert_eq!(connectivity_manager.get_connected_peers().len(), 2);
+    assert_eq!(connectivity_manager.peer_metadata_cache.len(), 2);
 
     // Close the stale connections and verify that only peer 2 is disconnected
     tokio::join!(

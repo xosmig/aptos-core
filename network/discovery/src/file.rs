@@ -76,7 +76,7 @@ mod tests {
         let time_service = TimeService::real();
         let (conn_mgr_reqs_tx, conn_mgr_reqs_rx) = aptos_channels::new(
             1,
-            &aptos_network::counters::PENDING_CONNECTIVITY_MANAGER_REQUESTS,
+            &aptos_network2::counters::PENDING_CONNECTIVITY_MANAGER_REQUESTS,
         );
         let listener_task = async move {
             let listener = DiscoveryChangeListener::<DbBackedOnChainConfig>::file(

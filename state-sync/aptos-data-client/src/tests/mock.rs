@@ -16,7 +16,7 @@ use aptos_config::{
 use aptos_netcore::transport::ConnectionOrigin;
 use aptos_network2::{
     application::{interface::NetworkClient, metadata::ConnectionState, storage::PeersAndMetadata},
-    peer_manager::{ConnectionRequestSender, PeerManagerRequest, PeerManagerRequestSender},
+    // peer_manager::{ConnectionRequestSender, PeerManagerRequest, PeerManagerRequestSender},
     protocols::{
         network::{NetworkSender, NewNetworkSender},
         wire::handshake::v1::ProtocolId,
@@ -44,11 +44,15 @@ use futures::StreamExt;
 use mockall::mock;
 use rand::{rngs::OsRng, Rng};
 use std::{collections::HashMap, sync::Arc};
+use aptos_network2::protocols::network::OutboundPeerConnections;
+use aptos_network2::protocols::wire::messaging::v1::NetworkMessage;
 
 /// A simple mock network for testing the data client
 pub struct MockNetwork {
-    peer_mgr_reqs_rxs:
-        HashMap<NetworkId, aptos_channel::Receiver<(PeerId, ProtocolId), PeerManagerRequest>>,
+    // peer_mgr_reqs_rxs:
+    //     HashMap<NetworkId, aptos_channel::Receiver<(PeerId, ProtocolId), PeerManagerRequest>>,
+    peer_senders: Arc<OutboundPeerConnections>,
+    peer_receivers: HashMap<PeerNetworkId, tokio::sync::mpsc::Receiver<NetworkMessage>>,
     peers_and_metadata: Arc<PeersAndMetadata>,
 }
 
@@ -67,6 +71,7 @@ impl MockNetwork {
 
         // Create the network senders and receivers for each network
         let mut network_senders = HashMap::new();
+        let peer_senders = Arc::new(OutboundPeerConnections::new());
         let mut peer_mgr_reqs_rxs = HashMap::new();
         for network in &networks {
             // Setup the request managers
@@ -76,8 +81,11 @@ impl MockNetwork {
 
             // Create the network sender
             let network_sender = NetworkSender::new(
-                PeerManagerRequestSender::new(peer_mgr_reqs_tx),
-                ConnectionRequestSender::new(connection_reqs_tx),
+                *network,
+                peer_senders.clone(),
+                if network_id == NetworkId::Validator {RoleType::Validator} else {RoleType::FullNode},
+                // PeerManagerRequestSender::new(peer_mgr_reqs_tx),
+                // ConnectionRequestSender::new(connection_reqs_tx),
             );
 
             // Save the network sender and the request receiver

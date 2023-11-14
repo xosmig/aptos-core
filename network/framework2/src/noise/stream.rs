@@ -536,7 +536,7 @@ mod test {
     };
     use rand::SeedableRng as _;
     use std::io;
-    use std::sync::Arc;
+    // use std::sync::Arc;
     use crate::application::storage::PeersAndMetadata;
 
     /// helper to setup two testing peers

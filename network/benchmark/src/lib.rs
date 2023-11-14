@@ -290,36 +290,32 @@ async fn connection_listener(
     handle: Handle,
 ) {
     let config = node_config.netbench.unwrap();
-    match network_client.peers_and_metadata.get_connected_peers_and_metadata() {
-        Ok(peers) => {
-            info!("netbench connection_listener got {} initial peers", peers.len());
-            //for (peer_network_id, _peer_metadata) in peers {
-            for peer_network_id in peers.keys() {
-                info!("netbench connection_listener new for initial {:?}", peer_network_id);
-                if config.enable_direct_send_testing {
-                    handle.spawn(direct_sender(
-                        node_config.clone(),
-                        network_client.clone(),
-                        time_service.clone(),
-                        peer_network_id.network_id(),
-                        peer_network_id.peer_id(),
-                        shared.clone(),
-                        handle.clone(),
-                    ));
-                }
-                if config.enable_rpc_testing {
-                    handle.spawn(rpc_sender(
-                        node_config.clone(),
-                        network_client.clone(),
-                        time_service.clone(),
-                        peer_network_id.network_id(),
-                        peer_network_id.peer_id(),
-                        shared.clone(),
-                    ));
-                }
+    if let Ok(peers) = network_client.peers_and_metadata.get_connected_peers_and_metadata() {
+        info!("netbench connection_listener got {} initial peers", peers.len());
+        for peer_network_id in peers.keys() {
+            info!("netbench connection_listener new for initial {:?}", peer_network_id);
+            if config.enable_direct_send_testing {
+                handle.spawn(direct_sender(
+                    node_config.clone(),
+                    network_client.clone(),
+                    time_service.clone(),
+                    peer_network_id.network_id(),
+                    peer_network_id.peer_id(),
+                    shared.clone(),
+                    handle.clone(),
+                ));
+            }
+            if config.enable_rpc_testing {
+                handle.spawn(rpc_sender(
+                    node_config.clone(),
+                    network_client.clone(),
+                    time_service.clone(),
+                    peer_network_id.network_id(),
+                    peer_network_id.peer_id(),
+                    shared.clone(),
+                ));
             }
         }
-        Err(_) => {}
     }
     let mut connection_notifications = network_client.peers_and_metadata.subscribe();
     loop {
@@ -364,7 +360,7 @@ async fn connection_listener(
 // Once every X milliseconds log a message
 const BLAB_MILLIS: u64 = 1000; // 1 second
 
-pub async fn direct_sender(
+async fn direct_sender(
     node_config: NodeConfig,
     network_client: NetworkClient<NetbenchMessage>,
     time_service: TimeService,
@@ -399,7 +395,7 @@ pub async fn direct_sender(
     }
 }
 
-pub async fn direct_sender_worker(
+async fn direct_sender_worker(
     node_config: NodeConfig,
     network_client: NetworkClient<NetbenchMessage>,
     time_service: TimeService,
@@ -450,8 +446,8 @@ pub async fn direct_sender_worker(
         let wrapper = NetbenchMessage::DataSend(msg);
         let result = network_client.send_to_peer(wrapper, PeerNetworkId::new(network_id, peer_id));
         if let Err(err) = result {
-            match &err {
-                Error::NetworkError(ne) => match ne {
+            if let Error::NetworkError(ne) = &err {
+                match ne {
                     NetworkError::PeerFullCondition => {
                         // okay, wait, try again
                         direct_messages_send("qdrop", time_service.now().duration_since(start));
@@ -463,7 +459,6 @@ pub async fn direct_sender_worker(
                     }
                     _ => {}
                 }
-                _ => {}
             }
             direct_messages_send("serr", time_service.now().duration_since(start));
             info!(

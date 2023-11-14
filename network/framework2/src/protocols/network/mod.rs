@@ -566,7 +566,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
         let msg_src = || -> Result<NetworkMessage,NetworkError> {
             // TODO: figure out a way to multi-core protocol_id.to_bytes()
             let start = Instant::now();
-            let mdata : Vec<u8> = protocol.to_bytes(&message)?.into();
+            let mdata : Vec<u8> = protocol.to_bytes(&message)?;
             let dt = Instant::now().duration_since(start);
             counters::bcs_encode_count(mdata.len(), dt);
             Ok(NetworkMessage::DirectSendMsg(DirectSendMsg {
@@ -591,7 +591,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
         let peer_network_id = PeerNetworkId::new(self.network_id, recipient);
         let msg_src = || -> Result<NetworkMessage,NetworkError> {
             // TODO: figure out a way to multi-core protocol_id.to_bytes()
-            let mdata = protocol.to_bytes(&message)?.into();
+            let mdata = protocol.to_bytes(&message)?;
             Ok(NetworkMessage::DirectSendMsg(DirectSendMsg {
                 protocol_id: protocol,
                 priority: 0,
@@ -610,7 +610,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
         message: TMessage,
     ) -> Result<(), NetworkError> {
         // TODO: figure out a way to multi-core protocol_id.to_bytes()
-        let mdata : Vec<u8> = protocol.to_bytes(&message)?.into();
+        let mdata : Vec<u8> = protocol.to_bytes(&message)?;
         let msg_src = || -> Result<NetworkMessage,NetworkError> {
             Ok(NetworkMessage::DirectSendMsg(DirectSendMsg {
                 protocol_id: protocol,
@@ -631,10 +631,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
             Ok(())
         } else {
             // return first error. TODO: return summary or concatenation of all errors
-            for err in errs.into_iter() {
-                return Err(err);
-            }
-            Ok(())
+            Err(errs.into_iter().nth(0).unwrap())
         }
     }
 
@@ -665,7 +662,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                     }
                     Some(peer) => {
                         // TODO: figure out a way to multi-core protocol_id.to_bytes()
-                        let mdata: Vec<u8> = protocol.to_bytes(&req_msg)?.into();
+                        let mdata: Vec<u8> = protocol.to_bytes(&req_msg)?;
                         let data_len = mdata.len() as u64;
                         let request_id = peer.rpc_counter.fetch_add(1, Ordering::SeqCst);
                         let msg = NetworkMessage::RpcRequest(RpcRequest {
@@ -721,22 +718,22 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                         let wat = protocol.from_bytes(bytes.as_ref())?;
                         // info!("app_int rpc reply good {} bytes", bytes.len());
                         // TODO: counter? separate from aptos_network_rpc_{messages,bytes} and aptos_network_outbound_rpc_request_latency_seconds? do we need to prove application-visible time?
-                        return Ok(wat);
+                        Ok(wat)
                     }
                     Err(err) => {
                         // TODO: counter?
                         // warn!("app_int rpc reply err: {}", err);
-                        return Err(err);
+                        Err(err)
                     }
                 }
                 Err(_) => {
                     // TODO: counter?
-                    return Err(RpcError::UnexpectedResponseChannelCancel);
+                    Err(RpcError::UnexpectedResponseChannelCancel)
                 }
             }
             Err(_timeout) => {
                 // TODO: counter?
-                return Err(RpcError::TimedOut)
+                Err(RpcError::TimedOut)
             }
         }
     }
@@ -808,7 +805,7 @@ impl NetworkSource {
 
 fn merge_receivers(receivers: Vec<tokio::sync::mpsc::Receiver<ReceivedMessage>>) -> futures::stream::SelectAll<ReceiverStream<ReceivedMessage>> {
     futures::stream::select_all(
-        receivers.into_iter().map(|x| tokio_stream::wrappers::ReceiverStream::new(x))
+        receivers.into_iter().map(tokio_stream::wrappers::ReceiverStream::new)
     )
 }
 
@@ -931,5 +928,11 @@ impl OutboundPeerConnections {
         let mut write = self.peer_connections.write().unwrap();
         write.remove(peer_network_id);
         self.generation.fetch_add(1 , Ordering::SeqCst)
+    }
+}
+
+impl Default for OutboundPeerConnections {
+    fn default() -> Self {
+        Self::new()
     }
 }

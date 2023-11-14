@@ -10,10 +10,9 @@ use aptos_config::config::{NodeConfig, OverrideNodeConfig};
 use aptos_logger::info;
 use aptos_rest_client::Client as RestClient;
 use aptos_sdk::types::PeerId;
-use futures::future::{join_all, ok, try_join_all};
+use futures::future::{join_all, try_join_all};
 use prometheus_http_query::response::{PromqlResult, Sample};
 use std::time::{Duration, Instant};
-use itertools::Itertools;
 use tokio::runtime::Runtime;
 
 /// Trait used to represent a running network comprised of Validators and FullNodes
@@ -156,13 +155,13 @@ pub trait SwarmExt: Swarm {
         let full_nodes = self.full_nodes().collect::<Vec<_>>();
         let num_nodes = validators.len() + full_nodes.len();
 
-        while true {
+        loop {
             let results = try_join_all(
                 validators.iter().map(|node| node.check_connectivity(validators.len() - 1))
                     .chain(full_nodes.iter().map(|node| node.check_connectivity()))).await;
             let wat = match results {
                 Ok(okays) => {
-                    let okay_count = okays.iter().map(|b| match(b){true => 1, false => 0}).fold(0, |a,b| a+b);
+                    let okay_count = okays.iter().map(|b| match b{true => 1, false => 0}).fold(0, |a,b| a+b);
                     if okay_count as usize == num_nodes {
                         info!("Swarm connectivity check passed");
                         return Ok(());

@@ -2777,6 +2777,7 @@ dependencies = [
  "async-trait",
  "bcs 0.1.4",
  "bytes",
+ "console-subscriber",
  "futures",
  "futures-core",
  "futures-util",

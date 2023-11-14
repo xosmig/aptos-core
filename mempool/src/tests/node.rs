@@ -19,13 +19,13 @@ use aptos_infallible::{Mutex, MutexGuard, RwLock};
 use aptos_netcore::transport::ConnectionOrigin;
 use aptos_network2::{
     application::{
-        interface::{NetworkClient, NetworkServiceEvents},
+        interface::{NetworkClient}, // NetworkServiceEvents
         storage::PeersAndMetadata,
     },
-    peer_manager::{
-        conn_notifs_channel, ConnectionNotification, ConnectionRequestSender,
-        PeerManagerNotification, PeerManagerRequest, PeerManagerRequestSender,
-    },
+    // peer_manager::{
+    //     conn_notifs_channel, ConnectionNotification, ConnectionRequestSender,
+    //     PeerManagerNotification, PeerManagerRequest, PeerManagerRequestSender,
+    // },
     protocols::{
         network::{NetworkEvents, NetworkSender, NewNetworkEvents, NewNetworkSender},
         wire::handshake::v1::ProtocolId::MempoolDirectSend,
@@ -50,6 +50,8 @@ use std::{
     sync::Arc,
 };
 use tokio::runtime::Runtime;
+use aptos_network2::protocols::network::{OutboundPeerConnections, PeerStub, ReceivedMessage};
+use aptos_network2::protocols::wire::messaging::v1::NetworkMessage;
 
 type MempoolNetworkHandle = (
     NetworkId,
@@ -450,7 +452,7 @@ impl Node {
     }
 
     /// Retrieves the next network request `PeerManagerRequest`
-    pub fn get_next_network_req(&mut self, network_id: NetworkId) -> PeerManagerRequest {
+    pub fn get_next_network_req(&mut self, network_id: NetworkId) -> ReceivedMessage {
         let runtime = self.runtime.clone();
         self.get_network_interface(network_id)
             .get_next_network_req(runtime)
@@ -461,7 +463,7 @@ impl Node {
         &mut self,
         network_id: NetworkId,
         protocol: ProtocolId,
-        notif: PeerManagerNotification,
+        notif: NetworkMessage,
     ) {
         self.get_network_interface(network_id)
             .send_network_req(protocol, notif);
@@ -478,28 +480,38 @@ impl Node {
 /// Allows us to mock out the network without dealing with the details
 pub struct NodeNetworkInterface {
     /// Peer request receiver for messages
-    pub(crate) network_reqs_rx: aptos_channel::Receiver<(PeerId, ProtocolId), PeerManagerRequest>,
+    pub(crate) network_reqs_rx: tokio::sync::mpsc::Receiver<ReceivedMessage>,//aptos_channel::Receiver<(PeerId, ProtocolId), PeerManagerRequest>,
     /// Peer notification sender for sending outgoing messages to other peers
-    pub(crate) network_notifs_tx:
-        aptos_channel::Sender<(PeerId, ProtocolId), PeerManagerNotification>,
-    /// Sender for connecting / disconnecting peers
-    pub(crate) network_conn_event_notifs_tx: conn_notifs_channel::Sender,
+    pub(crate) network_notifs_tx: Arc<OutboundPeerConnections>,
+
+        peer_cache_generation: u32,
+        peer_cache: HashMap<PeerNetworkId,PeerStub>,
+        // aptos_channel::Sender<(PeerId, ProtocolId), PeerManagerNotification>,
+    // /// Sender for connecting / disconnecting peers
+    // pub(crate) network_conn_event_notifs_tx: conn_notifs_channel::Sender,
 }
 
 impl NodeNetworkInterface {
-    fn get_next_network_req(&mut self, runtime: Arc<Runtime>) -> PeerManagerRequest {
-        runtime.block_on(self.network_reqs_rx.next()).unwrap()
+    fn get_next_network_req(&mut self, runtime: Arc<Runtime>) -> ReceivedMessage {
+        runtime.block_on(self.network_reqs_rx.recv()).unwrap()
     }
 
-    fn send_network_req(&mut self, protocol: ProtocolId, message: PeerManagerNotification) {
-        let remote_peer_id = match &message {
-            PeerManagerNotification::RecvRpc(peer_id, _) => *peer_id,
-            PeerManagerNotification::RecvMessage(peer_id, _) => *peer_id,
-        };
+    fn send_network_req(&mut self, protocol: ProtocolId, message: NetworkMessage) {
+        // let remote_peer_id = match &message {
+        //     PeerManagerNotification::RecvRpc(peer_id, _) => *peer_id,
+        //     PeerManagerNotification::RecvMessage(peer_id, _) => *peer_id,
+        // };
 
-        self.network_notifs_tx
-            .push((remote_peer_id, protocol), message)
-            .unwrap()
+        if let Some((new_peers, new_gen)) = self.network_notifs_tx.get_generational(self.peer_cache_generation) {
+                self.peer_cache = new_peers;
+                self.peer_cache_generation = new_gen;
+        }
+        if let Some(stub)  = self.peer_cache.get(peer_network_id) {
+            _ = stub.sender.try_send(message);
+            // TODO: panic on error?
+        } // TODO: else panic on None destination?
+            // .push((remote_peer_id, protocol), message)
+            // .unwrap()
     }
 
     /// Send a notification specifying, where a remote peer has it's state changed

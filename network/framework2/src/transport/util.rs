@@ -65,7 +65,7 @@ impl AptosNetTransportActual {
                     network_address,
                     result_sender,
                 });
-                mt.call.send(msg).await;
+                mt.call.send(msg).await.map_err(|_| io::Error::from(io::ErrorKind::NotConnected))?;
                 let result = mock_dial_result.await.unwrap();
                 if result.is_ok() {
                     // peers_and_metadata.insert_connection_metadata()
@@ -98,6 +98,7 @@ pub enum MockTransportEvent {
 }
 
 #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
+#[derive(Debug)]
 pub struct MockTransportDial {
     pub remote_peer_network_id: PeerNetworkId,
     pub network_address: NetworkAddress,

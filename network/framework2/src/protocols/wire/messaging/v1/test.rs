@@ -10,8 +10,8 @@ use crate::{
 use aptos_memsocket::MemorySocket;
 use bcs::test_helpers::assert_canonical_encode_decode;
 use futures::{executor::block_on, future, sink::SinkExt, stream::StreamExt};
-use futures_util::stream::select;
-use proptest::{collection::vec, prelude::*};
+// use futures_util::stream::select;
+use proptest::prelude::*; // collection::vec
 
 // Ensure serialization of ProtocolId enum takes 1 byte.
 #[test]
@@ -153,6 +153,7 @@ fn recv_fails_when_larger_than_frame_limit() {
     res_message.unwrap().unwrap_err();
 }
 
+#[cfg(obsolete)]
 fn arb_rpc_request(max_frame_size: usize) -> impl Strategy<Value = RpcRequest> {
     (
         any::<ProtocolId>(),
@@ -170,6 +171,7 @@ fn arb_rpc_request(max_frame_size: usize) -> impl Strategy<Value = RpcRequest> {
         )
 }
 
+#[cfg(obsolete)]
 fn arb_rpc_response(max_frame_size: usize) -> impl Strategy<Value = RpcResponse> {
     (
         any::<RequestId>(),
@@ -183,6 +185,7 @@ fn arb_rpc_response(max_frame_size: usize) -> impl Strategy<Value = RpcResponse>
         })
 }
 
+#[cfg(obsolete)]
 fn arb_direct_send_msg(max_frame_size: usize) -> impl Strategy<Value = DirectSendMsg> {
     let args = (
         any::<ProtocolId>(),
@@ -196,6 +199,7 @@ fn arb_direct_send_msg(max_frame_size: usize) -> impl Strategy<Value = DirectSen
     })
 }
 
+#[cfg(obsolete)]
 fn arb_network_message(max_frame_size: usize) -> impl Strategy<Value = NetworkMessage> {
     prop_oneof![
         any::<ErrorCode>().prop_map(NetworkMessage::Error),

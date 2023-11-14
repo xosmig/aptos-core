@@ -11,13 +11,8 @@ use crate::{
         metadata::{ConnectionState, PeerMetadata},
         storage::PeersAndMetadata,
     },
-    // peer_manager::{
-    //     ConnectionRequestSender, PeerManagerNotification, PeerManagerRequest,
-    //     PeerManagerRequestSender,
-    // },
     protocols::{
-        network::{Event, NetworkEvents, NetworkSender, NewNetworkEvents, NewNetworkSender, ReceivedMessage},
-        // rpc::InboundRpcRequest,
+        network::{ReceivedMessage},//Event, NetworkEvents, NetworkSender,NewNetworkEvents, NewNetworkSender,
         wire::handshake::v1::{ProtocolId, ProtocolIdSet},
     },
     transport::ConnectionMetadata,
@@ -27,22 +22,22 @@ use aptos_config::{
     network_id::{NetworkId, PeerNetworkId},
 };
 use aptos_types::PeerId;
-use futures::channel::oneshot;
-use futures_util::StreamExt;
+//use futures::channel::oneshot;
+// use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
-    hash::Hash,
+    //hash::Hash,
     sync::Arc,
     time::Duration,
 };
-use tokio::sync::mpsc::error::TryRecvError;
-use tokio::time::timeout;
+//use tokio::sync::mpsc::error::TryRecvError;
+//use tokio::time::timeout;
 use crate::protocols::wire::messaging::v1::{DirectSendMsg, NetworkMessage, RpcRequest};
 
 // Useful test constants for timeouts
-const MAX_CHANNEL_TIMEOUT_SECS: u64 = 1;
+// const MAX_CHANNEL_TIMEOUT_SECS: u64 = 1;
 const MAX_MESSAGE_TIMEOUT_SECS: u64 = 2;
 
 /// Represents a test message sent across the network
@@ -52,6 +47,7 @@ struct DummyMessage {
 }
 
 impl DummyMessage {
+    #[cfg(obsolete)]
     pub fn new(message_contents: u64) -> Self {
         Self {
             message_contents: Some(message_contents),
@@ -784,12 +780,14 @@ fn check_registered_networks(
 }
 
 /// Verifies that all returned peers are correct
+#[cfg(obsolete)]
 fn check_all_peers(peers_and_metadata: &Arc<PeersAndMetadata>, expected_peers: Vec<PeerNetworkId>) {
     let all_peers = peers_and_metadata.get_all_peers();
     compare_vectors_ignore_order(all_peers, expected_peers);
 }
 
 /// Verifies that the connected peers and metadata are correct
+#[cfg(obsolete)]
 fn check_connected_peers_and_metadata(
     peers_and_metadata: &Arc<PeersAndMetadata>,
     expected_peers: Vec<PeerNetworkId>,
@@ -804,6 +802,7 @@ fn check_connected_peers_and_metadata(
 }
 
 /// Verifies that the connected and supported peers are correct
+#[cfg(obsolete)]
 fn check_connected_supported_peers(
     peers_and_metadata: &Arc<PeersAndMetadata>,
     protocol_ids: &[ProtocolId],
@@ -902,6 +901,7 @@ fn create_peer_and_connection(
 }
 
 /// Marks the specified peer as disconnected
+#[cfg(obsolete)]
 fn disconnect_peer(peers_and_metadata: &Arc<PeersAndMetadata>, peer_network_id: PeerNetworkId) {
     peers_and_metadata
         .update_connection_state(peer_network_id, ConnectionState::Disconnected)
@@ -909,6 +909,7 @@ fn disconnect_peer(peers_and_metadata: &Arc<PeersAndMetadata>, peer_network_id: 
 }
 
 /// Marks the specified peer as connected
+#[cfg(obsolete)]
 fn connect_peer(peers_and_metadata: &Arc<PeersAndMetadata>, peer_network_id: PeerNetworkId) {
     peers_and_metadata
         .update_connection_state(peer_network_id, ConnectionState::Connected)
@@ -916,6 +917,7 @@ fn connect_peer(peers_and_metadata: &Arc<PeersAndMetadata>, peer_network_id: Pee
 }
 
 /// Marks the specified peer as disconnecting
+#[cfg(obsolete)]
 fn mark_peer_disconnecting(
     peers_and_metadata: &Arc<PeersAndMetadata>,
     peer_network_id: PeerNetworkId,
@@ -935,6 +937,7 @@ fn remove_peer_metadata(
 }
 
 /// Updates the connection metadata for the specified peer
+#[cfg(obsolete)]
 fn update_connection_metadata(
     peers_and_metadata: &Arc<PeersAndMetadata>,
     peer_network_id_3: PeerNetworkId,
