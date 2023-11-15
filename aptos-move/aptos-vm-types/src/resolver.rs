@@ -6,10 +6,13 @@ use aptos_aggregator::{
     types::DelayedFieldID,
 };
 use aptos_state_view::{StateView, StateViewId};
-use aptos_types::state_store::{
-    state_key::StateKey,
-    state_storage_usage::StateStorageUsage,
-    state_value::{StateValue, StateValueMetadataKind},
+use aptos_types::{
+    state_store::{
+        state_key::StateKey,
+        state_storage_usage::StateStorageUsage,
+        state_value::{StateValue, StateValueMetadataKind},
+    },
+    write_set::WriteOp,
 };
 use bytes::Bytes;
 use move_core_types::{language_storage::StructTag, value::MoveTypeLayout};
@@ -62,6 +65,12 @@ pub trait TResourceGroupView {
     type GroupKey;
     type ResourceTag;
     type Layout;
+
+    /// Some resolvers might not be capable of the optimization, and should return false.
+    /// Others might return based on the config or the run paramaters.
+    fn is_resource_group_split_in_change_set_capable(&self) -> bool {
+        false
+    }
 
     /// The size of the resource group, based on the sizes of the latest entries at observed
     /// tags. During parallel execution, this is an estimated value that will get validated,
@@ -119,17 +128,9 @@ pub trait TResourceGroupView {
             .map(|maybe_bytes| maybe_bytes.is_some())
     }
 
-    /// Executor view may internally implement a naive resource group cache when:
-    /// - ExecutorView is not based on block executor, such as ExecutorViewBase
-    /// - providing backwards compatibility (older gas versions) in storage adapter.
-    ///
-    /// The trait allows releasing the cache in such cases. Otherwise (default behavior),
-    /// if naive cache is not implemeneted (e.g. in block executor), None is returned.
     fn release_group_cache(
         &self,
-    ) -> Option<HashMap<Self::GroupKey, BTreeMap<Self::ResourceTag, Bytes>>> {
-        None
-    }
+    ) -> Option<HashMap<Self::GroupKey, BTreeMap<Self::ResourceTag, Bytes>>>;
 }
 
 /// Allows to query modules from the state.
@@ -185,28 +186,31 @@ pub trait StateStorageView {
 /// TODO: audit and reconsider the default implementation (e.g. should not
 /// resolve AggregatorV2 via the state-view based default implementation, as it
 /// doesn't provide a value exchange functionality).
-pub trait TExecutorView<K, T, L, I>:
+pub trait TExecutorView<K, T, L, I, V>:
     TResourceView<Key = K, Layout = L>
     + TModuleView<Key = K>
     + TAggregatorV1View<Identifier = K>
-    + TDelayedFieldView<Identifier = I>
+    + TDelayedFieldView<Identifier = I, ResourceKey = K, ResourceGroupTag = T, ResourceValue = V>
     + StateStorageView
 {
 }
 
-impl<A, K, T, L, I> TExecutorView<K, T, L, I> for A where
+impl<A, K, T, L, I, V> TExecutorView<K, T, L, I, V> for A where
     A: TResourceView<Key = K, Layout = L>
         + TModuleView<Key = K>
         + TAggregatorV1View<Identifier = K>
-        + TDelayedFieldView<Identifier = I>
+        + TDelayedFieldView<Identifier = I, ResourceKey = K, ResourceGroupTag = T, ResourceValue = V>
         + StateStorageView
 {
 }
 
-pub trait ExecutorView: TExecutorView<StateKey, StructTag, MoveTypeLayout, DelayedFieldID> {}
+pub trait ExecutorView:
+    TExecutorView<StateKey, StructTag, MoveTypeLayout, DelayedFieldID, WriteOp>
+{
+}
 
 impl<T> ExecutorView for T where
-    T: TExecutorView<StateKey, StructTag, MoveTypeLayout, DelayedFieldID>
+    T: TExecutorView<StateKey, StructTag, MoveTypeLayout, DelayedFieldID, WriteOp>
 {
 }
 
@@ -273,12 +277,8 @@ pub trait StateValueMetadataResolver {
         state_key: &StateKey,
     ) -> anyhow::Result<Option<StateValueMetadataKind>>;
 
+    /// Can also be used to get the metadata of a resource group at a provided group key.
     fn get_resource_state_value_metadata(
-        &self,
-        state_key: &StateKey,
-    ) -> anyhow::Result<Option<StateValueMetadataKind>>;
-
-    fn get_resource_group_state_value_metadata(
         &self,
         state_key: &StateKey,
     ) -> anyhow::Result<Option<StateValueMetadataKind>>;

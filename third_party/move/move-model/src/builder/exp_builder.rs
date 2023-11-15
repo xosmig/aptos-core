@@ -906,8 +906,6 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
                 if is_wildcard(resource) {
                     ResourceSpecifier::DeclaredInModule(module_id)
                 } else {
-                    // Construct an expansion type so we can feed it through the standard translation
-                    // process.
                     let mident = sp(specifier.loc, EA::ModuleIdent_ {
                         address: *address,
                         module: *module,
@@ -916,16 +914,33 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
                         specifier.loc,
                         EA::ModuleAccess_::ModuleAccess(mident, *resource),
                     );
-                    let ety = sp(
-                        specifier.loc,
-                        EA::Type_::Apply(maccess, type_args.as_ref().cloned().unwrap_or_default()),
-                    );
-                    let ty = self.translate_type(&ety);
-                    if let Type::Struct(mid, sid, inst) = ty {
-                        ResourceSpecifier::Resource(mid.qualified_inst(sid, inst))
+                    let sym = self.parent.module_access_to_qualified(&maccess);
+                    if let Type::Struct(mid, sid, _) = self.parent.parent.lookup_type(&loc, &sym) {
+                        if type_args.is_none() {
+                            // If no type args are provided, we assume this is either a non-generic
+                            // or a generic type without instantiation, which is a valid wild card.
+                            ResourceSpecifier::Resource(mid.qualified_inst(sid, vec![]))
+                        } else {
+                            // Otherwise construct an expansion type so we can feed it through the standard translation
+                            // process.
+                            let ety = sp(
+                                specifier.loc,
+                                EA::Type_::Apply(
+                                    maccess,
+                                    type_args.as_ref().cloned().unwrap_or_default(),
+                                ),
+                            );
+                            let ty = self.translate_type(&ety);
+                            if let Type::Struct(mid, sid, inst) = ty {
+                                ResourceSpecifier::Resource(mid.qualified_inst(sid, inst))
+                            } else {
+                                // errors reported
+                                debug_assert!(self.parent.parent.env.has_errors());
+                                ResourceSpecifier::Any
+                            }
+                        }
                     } else {
-                        // errors reported
-                        debug_assert!(self.parent.parent.env.has_errors());
+                        // error reported
                         ResourceSpecifier::Any
                     }
                 }
@@ -1788,13 +1803,13 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
                         Some(entries) => {
                             if entries.len() != 1 {
                                 self.error(
-                                loc,
-                                &format!(
-                                    "Expect a unique spec function from lifted lambda: {}, found {}",
-                                    remapped_sym.display(self.symbol_pool()),
-                                    entries.len()
-                                ),
-                            );
+                                    loc,
+                                    &format!(
+                                        "Expect a unique spec function from lifted lambda: {}, found {}",
+                                        remapped_sym.display(self.symbol_pool()),
+                                        entries.len()
+                                    ),
+                                );
                                 return Some(self.new_error_exp());
                             }
                             entries.last().unwrap().clone()
@@ -1835,12 +1850,12 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
 
                     if full_arg_types.len() != spec_fun_entry.params.len() {
                         self.error(
-                        loc,
-                        &format!(
-                            "Parameter number mismatch on calling a spec function from lifted lambda: {},",
-                            remapped_sym.display(self.symbol_pool())
-                        ),
-                    );
+                            loc,
+                            &format!(
+                                "Parameter number mismatch on calling a spec function from lifted lambda: {},",
+                                remapped_sym.display(self.symbol_pool())
+                            ),
+                        );
                         return Some(self.new_error_exp());
                     }
                     let param_type_error = full_arg_types
@@ -2079,7 +2094,7 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
                 let builtin_sym = self.parent.parent.builtin_qualified_symbol(&name.value);
                 if let Some(entry) = self.parent.parent.const_table.get(&builtin_sym).cloned() {
                     if self.is_visible(entry.visibility) {
-                        return self.translate_constant(loc, entry, expected_type);
+                        return self.translate_constant(loc, entry, expected_type, &builtin_sym);
                     }
                 }
                 // If not found, treat as global var in this module.
@@ -2087,7 +2102,7 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
             },
         };
         if let Some(entry) = self.parent.parent.const_table.get(&global_var_sym).cloned() {
-            return self.translate_constant(loc, entry, expected_type);
+            return self.translate_constant(loc, entry, expected_type, &global_var_sym);
         }
 
         if let Some(entry) = self.parent.parent.spec_var_table.get(&global_var_sym) {
@@ -2149,16 +2164,31 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
     }
 
     /// Creates an expression for a constant, checking the expected type.
+    /// Reports an error if the constant is not visible.
     fn translate_constant(
         &mut self,
         loc: &Loc,
         entry: ConstEntry,
         expected_type: &Type,
+        sym: &QualifiedSymbol,
     ) -> ExpData {
-        let ConstEntry { ty, value, .. } = entry;
-        let ty = self.check_type(loc, &ty, expected_type, "");
-        let id = self.new_node_id_with_type_loc(&ty, loc);
-        ExpData::Value(id, value)
+        // Constants are always visible in specs.
+        if self.mode != ExpTranslationMode::Spec && sym.module_name != self.parent.module_name {
+            self.error(
+                loc,
+                &format!(
+                    "constant `{}` cannot be used here because it is private to the module `{}`",
+                    sym.display_full(self.parent.parent.env),
+                    sym.module_name.display_full(self.parent.parent.env)
+                ),
+            );
+            self.new_error_exp()
+        } else {
+            let ConstEntry { ty, value, .. } = entry;
+            let ty = self.check_type(loc, &ty, expected_type, "");
+            let id = self.new_node_id_with_type_loc(&ty, loc);
+            ExpData::Value(id, value)
+        }
     }
 
     fn resolve_local(
