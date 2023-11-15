@@ -23,6 +23,7 @@ use crate::protocols::stream::{StreamFragment, StreamHeader, StreamMessage};
 use crate::transport::ConnectionMetadata;
 use once_cell::sync::Lazy;
 use crate::counters;
+use crate::counters::{network_application_inbound_traffic, network_application_outbound_traffic};
 
 pub fn start_peer<TSocket>(
     config: &NetworkConfig,
@@ -50,7 +51,7 @@ where
     let closed = Closer::new();
     let network_id = remote_peer_network_id.network_id();
     handle.spawn(open_outbound_rpc.clone().cleanup(Duration::from_millis(100), closed.clone()));
-    handle.spawn(writer_task(network_id, to_send, to_send_high_prio, writer, max_frame_size, closed.clone()));
+    handle.spawn(writer_task(network_id, to_send, to_send_high_prio, writer, max_frame_size, role_type, closed.clone()));
     handle.spawn(reader_task(reader, apps, remote_peer_network_id, open_outbound_rpc.clone(), handle.clone(), closed.clone(), role_type));
     let stub = PeerStub::new(sender, sender_high_prio, open_outbound_rpc, closed.clone());
     // TODO: start_peer counter, (PeersAndMetadata keeps gauge, count event here)
@@ -76,6 +77,8 @@ struct WriterContext<WriteThing: AsyncWrite + Unpin + Send> {
     next_large_msg: Option<NetworkMessage>,
     /// TODO: pull this from node config
     max_frame_size: usize,
+    /// RoleType for metrics
+    role_type: RoleType,
 
     /// messages from apps to send to the peer
     to_send: Receiver<NetworkMessage>,
@@ -91,6 +94,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
         to_send_high_prio: Receiver<NetworkMessage>,
         writer: MultiplexMessageSink<WriteThing>,
         max_frame_size: usize,
+        role_type: RoleType,
     ) -> Self {
         Self {
             network_id,
@@ -100,6 +104,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
             send_large: false,
             next_large_msg: None,
             max_frame_size,
+            role_type,
             to_send,
             to_send_high_prio,
             writer,
@@ -160,7 +165,8 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
     fn try_high_prio_next_msg(&mut self) -> Option<MultiplexMessage> {
         match self.to_send_high_prio.try_recv() {
             Ok(msg) => {
-                info!("writer_thread to_send_high_prio {} bytes prot={}", msg.data_len(), msg.protocol_id_as_str());
+                // info!("writer_thread to_send_high_prio {} bytes prot={}", msg.data_len(), msg.protocol_id_as_str());
+                network_application_outbound_traffic(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), msg.data_len() as u64);
                 if msg.data_len() > self.max_frame_size {
                     // finish prior large message before starting a new large message
                     self.next_large_msg = Some(msg);
@@ -183,7 +189,8 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
         }
         match self.to_send.try_recv() {
             Ok(msg) => {
-                info!("writer_thread to_send {} bytes prot={}", msg.data_len(), msg.protocol_id_as_str());
+                // info!("writer_thread to_send {} bytes prot={}", msg.data_len(), msg.protocol_id_as_str());
+                network_application_outbound_traffic(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), msg.data_len() as u64);
                 if msg.data_len() > self.max_frame_size {
                     // finish prior large message before starting a new large message
                     self.next_large_msg = Some(msg);
@@ -264,15 +271,8 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                 }
             };
             if let MultiplexMessage::Message(NetworkMessage::Error(ErrorCode::DisconnectCommand)) = &mm {
-                // if let NetworkMessage::Error(ec) = &nm {
-                //     match ec {
-                //         ErrorCode::DisconnectCommand => {
-                            info!("writer_thread got DisconnectCommand");
-                            break;
-                    //     }
-                    //     _ => {}
-                    // }
-                // }
+                info!("writer_thread got DisconnectCommand");
+                break;
             }
             let data_len = mm.data_len();
             tokio::select! {
@@ -343,9 +343,10 @@ async fn writer_task(
     to_send_high_prio: Receiver<NetworkMessage>,
     writer: MultiplexMessageSink<impl AsyncWrite + Unpin + Send + 'static>,
     max_frame_size: usize,
+    role_type: RoleType,
     closed: Closer,
 ) {
-    let wt = WriterContext::new(network_id, to_send, to_send_high_prio, writer, max_frame_size);
+    let wt = WriterContext::new(network_id, to_send, to_send_high_prio, writer, max_frame_size, role_type);
     wt.run(closed).await;
     info!("peer writer exited")
 }
@@ -437,6 +438,7 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
     }
 
     async fn handle_message(&self, nmsg: NetworkMessage) {
+        network_application_inbound_traffic(self.role_type.as_str(), self.remote_peer_network_id.network_id().as_str(), nmsg.protocol_id_as_str(), nmsg.data_len() as u64);
         match &nmsg {
             NetworkMessage::Error(errm) => {
                 // TODO: counter

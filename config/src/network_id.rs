@@ -211,7 +211,7 @@ impl NetworkId {
         }
     }
 
-    pub fn as_str(&self) -> &str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             NetworkId::Validator => "Validator",
             NetworkId::Public => "Public",

@@ -544,7 +544,6 @@ pub static NETWORK_APPLICATION_INBOUND_METRIC: Lazy<HistogramVec> = Lazy::new(||
         &[
             "role_type",
             "network_id",
-            "peer_id",
             "protocol_id",
             "metric"
         ]
@@ -553,16 +552,16 @@ pub static NETWORK_APPLICATION_INBOUND_METRIC: Lazy<HistogramVec> = Lazy::new(||
 });
 
 pub fn network_application_inbound_traffic(
-    network_context: NetworkContext,
-    protocol_id: ProtocolId,
+    role_type: &'static str,
+    network_id: &'static str,
+    protocol_id: &'static str,
     size: u64,
 ) {
     NETWORK_APPLICATION_INBOUND_METRIC
         .with_label_values(&[
-            network_context.role().as_str(),
-            network_context.network_id().as_str(),
-            network_context.peer_id().short_str().as_str(),
-            protocol_id.as_str(),
+            role_type,
+            network_id,
+            protocol_id,
             "size",
         ])
         .observe(size as f64);
@@ -575,7 +574,6 @@ pub static NETWORK_APPLICATION_OUTBOUND_METRIC: Lazy<HistogramVec> = Lazy::new(|
         &[
             "role_type",
             "network_id",
-            "peer_id",
             "protocol_id",
             "metric"
         ]
@@ -584,16 +582,16 @@ pub static NETWORK_APPLICATION_OUTBOUND_METRIC: Lazy<HistogramVec> = Lazy::new(|
 });
 
 pub fn network_application_outbound_traffic(
-    network_context: NetworkContext,
-    protocol_id: ProtocolId,
+    role_type: &'static str,
+    network_id: &'static str,
+    protocol_id: &'static str,
     size: u64,
 ) {
     NETWORK_APPLICATION_OUTBOUND_METRIC
         .with_label_values(&[
-            network_context.role().as_str(),
-            network_context.network_id().as_str(),
-            network_context.peer_id().short_str().as_str(),
-            protocol_id.as_str(),
+            role_type,
+            network_id,
+            protocol_id,
             "size",
         ])
         .observe(size as f64);
