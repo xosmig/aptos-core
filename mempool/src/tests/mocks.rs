@@ -152,15 +152,13 @@ impl MockSharedMempool {
             network_senders,
             peers_and_metadata.clone(),
         );
-        let network_and_events = hashmap! {NetworkId::Validator => network_events};
-        let network_service_events = NetworkServiceEvents::new(network_and_events);
 
         start_shared_mempool(
             handle,
             &config,
             mempool.clone(),
             network_client,
-            network_service_events,
+            network_events,
             client_events,
             quorum_store_receiver,
             mempool_listener,
