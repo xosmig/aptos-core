@@ -244,8 +244,18 @@ pub fn rpc_message_bytes(
     state_label: &'static str,
     data_len: u64,
 ) {
-    rpc_messages(network_id, protocol_id, role_type, message_type_label, message_direction_label, state_label).inc();
-    rpc_bytes(network_id, protocol_id, role_type, message_type_label, message_direction_label, state_label).inc_by(data_len);
+    let values = &[
+        role_type.as_str(),
+        network_id.as_str(),
+        protocol_id,
+        message_type_label,
+        message_direction_label,
+        state_label,
+    ];
+    //rpc_messages(network_id, protocol_id, role_type, message_type_label, message_direction_label, state_label).inc();
+    //rpc_bytes(network_id, protocol_id, role_type, message_type_label, message_direction_label, state_label).inc_by(data_len);
+    APTOS_NETWORK_RPC_MESSAGES.with_label_values(values).inc();
+    APTOS_NETWORK_RPC_BYTES.with_label_values(values).inc_by(data_len);
 }
 
 pub static INVALID_NETWORK_MESSAGES: Lazy<IntCounterVec> = Lazy::new(|| {

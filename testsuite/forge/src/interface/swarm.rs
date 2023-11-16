@@ -195,8 +195,8 @@ pub trait SwarmExt: Swarm {
         //
         //     tokio::time::sleep(Duration::from_millis(500)).await;
         // }
-        info!("Swarm connectivity check passed unreachable?");
-        Ok(())
+        // info!("Swarm connectivity check passed unreachable?");
+        // Ok(())
     }
 
     /// Perform a safety check, ensuring that no forks have occurred in the network.

@@ -231,12 +231,12 @@ async fn rpc_response_sender(
         Ok(iresult) => match iresult{
             Ok(bytes) => {bytes}
             Err(_) => {
-                counters::rpc_messages(network_context.network_id(),protocol_id.as_str(),network_context.role(),counters::RESPONSE_LABEL,counters::OUTBOUND_LABEL,"err");
+                counters::rpc_messages(network_context.network_id(),protocol_id.as_str(),network_context.role(),counters::RESPONSE_LABEL,counters::OUTBOUND_LABEL,"err").inc();
                 return;
             }
         }
         Err(_) => {
-            counters::rpc_messages(network_context.network_id(),protocol_id.as_str(),network_context.role(),counters::RESPONSE_LABEL,counters::OUTBOUND_LABEL,counters::CANCELED_LABEL);
+            counters::rpc_messages(network_context.network_id(),protocol_id.as_str(),network_context.role(),counters::RESPONSE_LABEL,counters::OUTBOUND_LABEL,counters::CANCELED_LABEL).inc();
             return;
         }
     };
@@ -250,10 +250,10 @@ async fn rpc_response_sender(
     match peer_sender.send(msg).await {
         Ok(_) => {
             counters::inbound_rpc_handler_latency(&network_context, protocol_id).observe(dt.as_secs_f64());
-            counters::rpc_messages(network_context.network_id(),protocol_id.as_str(),network_context.role(),counters::RESPONSE_LABEL,counters::OUTBOUND_LABEL,counters::SENT_LABEL);
+            counters::rpc_messages(network_context.network_id(),protocol_id.as_str(),network_context.role(),counters::RESPONSE_LABEL,counters::OUTBOUND_LABEL,counters::SENT_LABEL).inc();
         }
         Err(_) => {
-            counters::rpc_messages(network_context.network_id(),protocol_id.as_str(),network_context.role(),counters::RESPONSE_LABEL,counters::OUTBOUND_LABEL,"peererr");
+            counters::rpc_messages(network_context.network_id(),protocol_id.as_str(),network_context.role(),counters::RESPONSE_LABEL,counters::OUTBOUND_LABEL,"peererr").inc();
         }
     }
 }
@@ -321,6 +321,7 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
                         // TODO network2: reimplement timeout/cleanup
                         let network_context = mself.contexts.get(&msg.sender.network_id()).unwrap();
                         Handle::current().spawn(rpc_response_sender(response_reader, rpc_id, raw_sender, request_received_start, *network_context, request.protocol_id));
+                        counters::rpc_messages(msg.sender.network_id(), request.protocol_id.as_str(), network_context.role(), counters::REQUEST_LABEL, counters::INBOUND_LABEL, "delivered").inc();
                         return Poll::Ready(Some(Event::RpcRequest(
                             msg.sender, app_msg, request.protocol_id, responder)))
                     }

@@ -604,8 +604,8 @@ where
             }
             eligible.push((peer_id, peer));
         }
-        let num_eligible = eligible.len();
-        info!("peers: {} discovered, {} eligible, {} ineligible, {} already connected, {} already in dial queue, {} wrong role", num_discovered, num_eligible, ineligible, already_connected, already_in_dial_queue, wrong_role);
+        // TODO? bring this back but sampled?
+        //info!("peers: {} discovered, {} eligible, {} ineligible, {} already connected, {} already in dial queue, {} wrong role", num_discovered, eligible.len(), ineligible, already_connected, already_in_dial_queue, wrong_role);
 
         // Prioritize by PeerRole
         // Shuffle so we don't get stuck on certain peers

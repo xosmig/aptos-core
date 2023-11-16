@@ -4,6 +4,7 @@
 
 use crate::{
     application::{error::Error, storage::PeersAndMetadata},
+    counters,
     protocols::{
         network::{Closer, Message, NetworkSender}, // NetworkEvents
         wire::handshake::v1::{ProtocolId, ProtocolIdSet},
@@ -340,16 +341,16 @@ impl OutboundRpcMatcher {
         {
             for (k, v) in they.iter() {
                 if now > v.deadline {
-                    info!("app_int outbound rpc id={} expired by {:?}", k, now.duration_since(v.deadline));
                     to_delete.push(*k);
                 }
             }
         }
         if !to_delete.is_empty() {
-            // TODO: counter add to_delete.len() RPCs timed out and dropped
             for k in to_delete.into_iter() {
-                info!("app_int outbound rpc dropped timeout cleanup, id={}", k);
-                they.remove(&k);
+                let reqo = they.remove(&k);
+                if let Some(rpc_state) = reqo {
+                    counters::rpc_messages(rpc_state.network_id, rpc_state.protocol_id.as_str(), rpc_state.role_type, counters::RESPONSE_LABEL, counters::OUTBOUND_LABEL, "timeout").inc();
+                }
             }
         }
     }
