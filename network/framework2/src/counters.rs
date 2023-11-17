@@ -638,27 +638,3 @@ pub fn bcs_encode_count(length: usize, dt: Duration) {
     NETWORK_BCS_ENCODE_BYTES.inc_by(length as u64);
     NETWORK_BCS_ENCODES.inc();
 }
-
-pub static APTOS_APP_SEND_MESSAGES: Lazy<IntCounterVec> = Lazy::new(|| {
-    register_int_counter_vec!(
-        "aptos_network_app_send_messages",
-        "Number of messages sent per protocol_id",
-        &["role_type", "network_id", "protocol_id", "state"]
-    )
-        .unwrap()
-});
-
-pub static APTOS_APP_SEND_BYTES: Lazy<IntCounterVec> = Lazy::new(|| {
-    register_int_counter_vec!(
-        "aptos_network_app_send_bytes",
-        "Number of bytes sent per protocol_id",
-        &["role_type", "network_id", "protocol_id", "state"]
-    )
-        .unwrap()
-});
-
-pub fn count_app_send_message_bytes(network_id: NetworkId, role_type: RoleType, protocol_id: &'static str, state: &'static str, data_len: u64) {
-    let values = [role_type.as_str(), network_id.as_str(), protocol_id, state];
-    APTOS_APP_SEND_MESSAGES.with_label_values(&values).inc();
-    APTOS_APP_SEND_BYTES.with_label_values(&values).inc_by(data_len);
-}

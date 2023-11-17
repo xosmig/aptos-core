@@ -226,7 +226,8 @@ async fn rpc_response_sender(
     network_context: NetworkContext, // for metrics
     protocol_id: ProtocolId, // for metrics
 ) {
-    // TODO: reimplement timeout
+    // cancel happens in OutboundRpcMatcher.cleanup() and .cleanup_internal()
+    // cancel there closes the channel which gets here as an error
     let bytes = match receiver.await {
         Ok(iresult) => match iresult{
             Ok(bytes) => {bytes}
@@ -475,7 +476,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                 match peers.get(peer_network_id) {
                     None => {
                         // TODO? we _could_ know the protocol_id here
-                        counters::count_app_send_message_bytes(self.network_id, self.role_type, "unk", "peergone", 0);
+                        counters::direct_send_message_bytes(self.network_id, "unk", self.role_type, "peergone", 0);
                         Err(NetworkError::NotConnected)
                     }
                     Some(peer) => {
@@ -489,16 +490,16 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                         };
                         match send_result {
                             Ok(_) => {
-                                counters::count_app_send_message_bytes(self.network_id, self.role_type, protocol_id_str, counters::SENT_LABEL, data_len);
+                                counters::direct_send_message_bytes(self.network_id, protocol_id_str, self.role_type, counters::SENT_LABEL, data_len);
                                 Ok(())
                             }
                             Err(tse) => match &tse {
                                 TrySendError::Full(_) => {
-                                    counters::count_app_send_message_bytes(self.network_id, self.role_type, protocol_id_str, "peerfull", data_len);
+                                    counters::direct_send_message_bytes(self.network_id, protocol_id_str, self.role_type, "peerfull", data_len);
                                     Err(NetworkError::PeerFullCondition)
                                 }
                                 TrySendError::Closed(_) => {
-                                    counters::count_app_send_message_bytes(self.network_id, self.role_type, protocol_id_str, "peergone", data_len);
+                                    counters::direct_send_message_bytes(self.network_id, protocol_id_str, self.role_type, "peergone", data_len);
                                     Err(NetworkError::NotConnected)
                                 }
                             }
@@ -522,7 +523,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                 match peers.get(peer_network_id) {
                     None => {
                         // TODO? we _could_ know the protocol_id here
-                        counters::count_app_send_message_bytes(self.network_id, self.role_type, "unk", "peergone", 0);
+                        counters::direct_send_message_bytes(self.network_id, "unk", self.role_type, "peergone", 0);
                         // Err(NetworkErrorKind::NotConnected.into())
                         return Err(NetworkError::NotConnected);
                     }
@@ -546,7 +547,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
         // let handle = Handle::current();
         match sender.send(msg).await {
             Ok(_) => {
-                counters::count_app_send_message_bytes(self.network_id, self.role_type, protocol_id_str, counters::SENT_LABEL, data_len);
+                counters::direct_send_message_bytes(self.network_id, protocol_id_str, self.role_type, counters::SENT_LABEL, data_len);
                 Ok(())
             }
             Err(_send_err) => {
