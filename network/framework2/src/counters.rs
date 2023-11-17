@@ -213,27 +213,6 @@ pub static APTOS_NETWORK_RPC_BYTES: Lazy<IntCounterVec> = Lazy::new(|| {
     .unwrap()
 });
 
-/// probably use rpc_message_bytes() to do both bytes and message increment
-pub fn rpc_bytes(
-    // network_context: &NetworkContext,
-    network_id: NetworkId,
-    protocol_id: &'static str, // ProtocolId.as_str() or "unk"
-    role_type: RoleType,
-    message_type_label: &'static str,
-    message_direction_label: &'static str,
-    state_label: &'static str,
-) -> IntCounter {
-    APTOS_NETWORK_RPC_BYTES.with_label_values(&[
-        role_type.as_str(),
-        network_id.as_str(),
-        // network_context.peer_id().short_str().as_str(),
-        protocol_id,
-        message_type_label,
-        message_direction_label,
-        state_label,
-    ])
-}
-
 /// count bytes and increment message count
 pub fn rpc_message_bytes(
     network_id: NetworkId,

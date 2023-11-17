@@ -243,6 +243,7 @@ async fn rpc_response_sender(
     };
     let now = tokio::time::Instant::now();
     let dt = now.duration_since(request_received_start);
+    let data_len = bytes.len();
     let msg = NetworkMessage::RpcResponse(RpcResponse{
         request_id: rpc_id,
         priority: 0,
@@ -251,10 +252,10 @@ async fn rpc_response_sender(
     match peer_sender.send(msg).await {
         Ok(_) => {
             counters::inbound_rpc_handler_latency(&network_context, protocol_id).observe(dt.as_secs_f64());
-            counters::rpc_messages(network_context.network_id(),protocol_id.as_str(),network_context.role(),counters::RESPONSE_LABEL,counters::OUTBOUND_LABEL,counters::SENT_LABEL).inc();
+            counters::rpc_message_bytes(network_context.network_id(),protocol_id.as_str(),network_context.role(),counters::RESPONSE_LABEL,counters::OUTBOUND_LABEL,counters::SENT_LABEL, data_len as u64);
         }
         Err(_) => {
-            counters::rpc_messages(network_context.network_id(),protocol_id.as_str(),network_context.role(),counters::RESPONSE_LABEL,counters::OUTBOUND_LABEL,"peererr").inc();
+            counters::rpc_message_bytes(network_context.network_id(),protocol_id.as_str(),network_context.role(),counters::RESPONSE_LABEL,counters::OUTBOUND_LABEL,"peererr", data_len as u64);
         }
     }
 }
@@ -293,15 +294,18 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
                         info!("app_int err msg discarded: {:?}", err);
                     }
                     NetworkMessage::RpcRequest(request) => {
+                        let role_type = mself.contexts.get(&msg.sender.network_id()).unwrap().role();
                         // info!("app_int rpc_req {} id={}, {}b", request.protocol_id, request.request_id, request.raw_request.len());
                         let request_received_start = tokio::time::Instant::now();
                         // TODO: figure out a way to multi-core protocol_id.from_bytes()
+                        let data_len = request.raw_request.len();
                         let app_msg = match request.protocol_id.from_bytes(request.raw_request.as_slice()) {
                             Ok(x) => { x },
                             Err(err) => {
                                 mself.done = true;
                                 // TODO network2: log error, count error, close connection
                                 warn!("app_int rpc_req {} id={}; err {}, {} {} -> {}; from {:?}", request.protocol_id, request.request_id, err, mself.label, request.raw_request.encode_hex_upper::<String>(), std::any::type_name::<TMessage>(), &mself.network_source);
+                                counters::rpc_message_bytes(msg.sender.network_id(), request.protocol_id.as_str(), role_type, counters::REQUEST_LABEL, counters::INBOUND_LABEL, "err", data_len as u64);
                                 return Poll::Ready(None);
                             }
                         };
@@ -312,6 +316,7 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
                         let raw_sender = match mself.peers.get(&msg.sender) {
                             None => {
                                 warn!("app_int rpc_req no peer {} id={}", request.protocol_id, request.request_id);
+                                counters::rpc_message_bytes(msg.sender.network_id(), request.protocol_id.as_str(), role_type, counters::REQUEST_LABEL, counters::INBOUND_LABEL, "err", data_len as u64);
                                 return Poll::Pending;
                             }
                             Some(peer_stub) => {
@@ -322,7 +327,7 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
                         // TODO network2: reimplement timeout/cleanup
                         let network_context = mself.contexts.get(&msg.sender.network_id()).unwrap();
                         Handle::current().spawn(rpc_response_sender(response_reader, rpc_id, raw_sender, request_received_start, *network_context, request.protocol_id));
-                        counters::rpc_messages(msg.sender.network_id(), request.protocol_id.as_str(), network_context.role(), counters::REQUEST_LABEL, counters::INBOUND_LABEL, "delivered").inc();
+                        counters::rpc_message_bytes(msg.sender.network_id(), request.protocol_id.as_str(), role_type, counters::REQUEST_LABEL, counters::INBOUND_LABEL, "delivered", data_len as u64);
                         return Poll::Ready(Some(Event::RpcRequest(
                             msg.sender, app_msg, request.protocol_id, responder)))
                     }
