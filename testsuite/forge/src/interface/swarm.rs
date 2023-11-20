@@ -6,7 +6,10 @@ use crate::{
     AptosPublicInfo, ChainInfo, FullNode, NodeExt, Result, SwarmChaos, Validator, Version,
 };
 use anyhow::{anyhow, bail};
-use aptos_config::config::{NodeConfig, OverrideNodeConfig};
+use aptos_config::{
+    config::{NodeConfig, OverrideNodeConfig},
+    network_id::NetworkId,
+};
 use aptos_logger::info;
 use aptos_rest_client::Client as RestClient;
 use aptos_sdk::types::PeerId;
@@ -157,7 +160,7 @@ pub trait SwarmExt: Swarm {
 
         loop {
             let results = try_join_all(
-                validators.iter().map(|node| node.check_connectivity(validators.len() - 1))
+                validators.iter().map(|node| node.check_connectivity(NetworkId::Validator, validators.len() - 1))
                     .chain(full_nodes.iter().map(|node| node.check_connectivity()))).await;
             let wat = match results {
                 Ok(okays) => {
@@ -179,24 +182,6 @@ pub trait SwarmExt: Swarm {
 
             tokio::time::sleep(Duration::from_millis(500)).await;
         };
-        // while !try_join_all(
-        //     validators
-        //         .iter()
-        //         .map(|node| node.check_connectivity(validators.len() - 1))
-        //         .chain(full_nodes.iter().map(|node| node.check_connectivity())),
-        // )
-        // .await
-        // .map(|v| v.iter().all(|r| *r))
-        // .unwrap_or(false)
-        // {
-        //     if Instant::now() > deadline {
-        //         return Err(anyhow!("waiting for swarm connectivity timed out"));
-        //     }
-        //
-        //     tokio::time::sleep(Duration::from_millis(500)).await;
-        // }
-        // info!("Swarm connectivity check passed unreachable?");
-        // Ok(())
     }
 
     /// Perform a safety check, ensuring that no forks have occurred in the network.
@@ -517,7 +502,7 @@ pub async fn get_highest_synced_epoch(clients: &[(String, RestClient)]) -> Resul
 }
 
 /// Returns the highest synced version and epoch of the given clients
-async fn get_highest_synced_version_and_epoch(
+pub async fn get_highest_synced_version_and_epoch(
     clients: &[(String, RestClient)],
 ) -> Result<(u64, u64)> {
     let mut latest_version_and_epoch = (0, 0);
