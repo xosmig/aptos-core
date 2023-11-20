@@ -709,11 +709,13 @@ impl<TMessage: Message> NetworkSender<TMessage> {
             Err(_) => {
                 // lock fail, wtf
                 // TODO: better error for lock fail?
+                counters::rpc_message_bytes(self.network_id, protocol.as_str(), self.role_type, counters::REQUEST_LABEL, counters::OUTBOUND_LABEL, "wat", data_len);
                 return Err(RpcError::TimedOut);
             }
         };
         let sub_timeout = match deadline.checked_duration_since(tokio::time::Instant::now()) {
             None => {
+                counters::rpc_message_bytes(self.network_id, protocol.as_str(), self.role_type, counters::REQUEST_LABEL, counters::OUTBOUND_LABEL, "timeout", data_len);
                 return Err(RpcError::TimedOut);
             }
             Some(sub) => {sub}
@@ -722,24 +724,23 @@ impl<TMessage: Message> NetworkSender<TMessage> {
             Ok(receiver_result) => match receiver_result {
                 Ok(content_result) => match content_result {
                     Ok(bytes) => {
+                        let data_len = bytes.len() as u64;
+                        counters::rpc_message_bytes(self.network_id, protocol.as_str(), self.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, counters::RECEIVED_LABEL, data_len);
                         let wat = protocol.from_bytes(bytes.as_ref())?;
-                        // info!("app_int rpc reply good {} bytes", bytes.len());
-                        // TODO: counter? separate from aptos_network_rpc_{messages,bytes} and aptos_network_outbound_rpc_request_latency_seconds? do we need to prove application-visible time?
                         Ok(wat)
                     }
                     Err(err) => {
-                        // TODO: counter?
-                        // warn!("app_int rpc reply err: {}", err);
+                        counters::rpc_messages(self.network_id, protocol.as_str(), self.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, counters::FAILED_LABEL).inc();
                         Err(err)
                     }
                 }
                 Err(_) => {
-                    // TODO: counter?
+                    counters::rpc_messages(self.network_id, protocol.as_str(), self.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, counters::FAILED_LABEL).inc();
                     Err(RpcError::UnexpectedResponseChannelCancel)
                 }
             }
             Err(_timeout) => {
-                // TODO: counter?
+                counters::rpc_messages(self.network_id, protocol.as_str(), self.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "timeout").inc();
                 Err(RpcError::TimedOut)
             }
         }
