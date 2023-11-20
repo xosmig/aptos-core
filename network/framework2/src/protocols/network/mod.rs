@@ -709,13 +709,13 @@ impl<TMessage: Message> NetworkSender<TMessage> {
             Err(_) => {
                 // lock fail, wtf
                 // TODO: better error for lock fail?
-                counters::rpc_message_bytes(self.network_id, protocol.as_str(), self.role_type, counters::REQUEST_LABEL, counters::OUTBOUND_LABEL, "wat", data_len);
+                counters::rpc_messages(self.network_id, protocol.as_str(), self.role_type, counters::REQUEST_LABEL, counters::OUTBOUND_LABEL, "wat").inc();
                 return Err(RpcError::TimedOut);
             }
         };
         let sub_timeout = match deadline.checked_duration_since(tokio::time::Instant::now()) {
             None => {
-                counters::rpc_message_bytes(self.network_id, protocol.as_str(), self.role_type, counters::REQUEST_LABEL, counters::OUTBOUND_LABEL, "timeout", data_len);
+                counters::rpc_messages(self.network_id, protocol.as_str(), self.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "timeout").inc();
                 return Err(RpcError::TimedOut);
             }
             Some(sub) => {sub}
