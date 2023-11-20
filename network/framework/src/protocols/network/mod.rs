@@ -388,7 +388,7 @@ impl<TMessage: Message + Unpin> FusedStream for NetworkEvents<TMessage> {
 /// keys.
 #[derive(Debug)]
 pub struct NetworkSender<TMessage> {
-    // TODO: rebuild NetworkSender around single-level network::framework2
+    // TODO: rebuild NetworkSender around single-level network::framework
     // peer_mgr_reqs_tx: PeerManagerRequestSender,
     // connection_reqs_tx: ConnectionRequestSender,
     // TODO: we don't actually need a "NetworkSender" per network id; leftover structure from pre-2023 networking code

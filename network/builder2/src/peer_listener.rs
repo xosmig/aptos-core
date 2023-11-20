@@ -20,7 +20,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 /// PeerManager might be more correctly "peer listener" in the new framework?
-/// TODO: move into network/framework2
+/// TODO: move into network/framework
 pub struct PeerListener<TTransport, TSocket>
     where
         TTransport: Transport,
@@ -37,7 +37,7 @@ pub struct PeerListener<TTransport, TSocket>
     _ph2 : PhantomData<TSocket>,
 }
 
-// TODO: move into network/framework2
+// TODO: move into network/framework
 impl<TTransport, TSocket> PeerListener<TTransport, TSocket>
     where
         TTransport: Transport<Output = Connection<TSocket>> + Send + 'static,

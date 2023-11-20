@@ -128,7 +128,7 @@ members = [
     "network/benchmark",
     "network/builder2",
     "network/discovery",
-    "network/framework2",
+    "network/framework",
     "network/memsocket",
     "network/netcore",
     "peer-monitoring-service/client",
@@ -362,7 +362,7 @@ aptos-network-benchmark = { path = "network/benchmark" }
 aptos-network2-builder = { path = "network/builder2" }
 aptos-network-checker = { path = "crates/aptos-network-checker" }
 aptos-network-discovery = { path = "network/discovery" }
-aptos-network2 = { path = "network/framework2" }
+aptos-network2 = { path = "network/framework" }
 aptos-nft-metadata-crawler-parser = { path = "ecosystem/nft-metadata-crawler-parser" }
 aptos-node = { path = "aptos-node" }
 aptos-node-checker = { path = "ecosystem/node-checker" }
