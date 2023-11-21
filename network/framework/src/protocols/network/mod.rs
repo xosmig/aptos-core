@@ -725,7 +725,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                 Ok(content_result) => match content_result {
                     Ok(bytes) => {
                         let data_len = bytes.len() as u64;
-                        counters::rpc_message_bytes(self.network_id, protocol.as_str(), self.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, counters::RECEIVED_LABEL, data_len);
+                        counters::rpc_message_bytes(self.network_id, protocol.as_str(), self.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "delivered", data_len);
                         let wat = protocol.from_bytes(bytes.as_ref())?;
                         Ok(wat)
                     }

@@ -359,7 +359,7 @@ async fn complete_rpc(rpc_state: OpenRpcRequestState, nmsg: NetworkMessage) {
         let data_len = blob.len() as u64;
         match rpc_state.sender.send(Ok(blob.into())) {
             Ok(_) => {
-                counters::rpc_message_bytes(rpc_state.network_id, rpc_state.protocol_id.as_str(), rpc_state.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "delivered", data_len);
+                counters::rpc_message_bytes(rpc_state.network_id, rpc_state.protocol_id.as_str(), rpc_state.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, counters::RECEIVED_LABEL, data_len);
                 counters::outbound_rpc_request_latency(rpc_state.role_type, rpc_state.network_id, rpc_state.protocol_id).observe(dt.as_secs_f64());
             }
             Err(_) => {
