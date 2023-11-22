@@ -22,6 +22,9 @@ use std::{
     pin::Pin,
     task::{Context, Poll},
 };
+use tokio::runtime::Handle;
+use tokio_stream::wrappers::ReceiverStream;
+use aptos_network2::protocols::network::network_event_prefetch;
 
 /// A simple wrapper for each network request
 pub struct NetworkRequest {
@@ -38,14 +41,10 @@ pub struct StorageServiceNetworkEvents {
 }
 
 impl StorageServiceNetworkEvents {
-    pub fn new(network_events: NetworkEvents<StorageServiceMessage>) -> Self {
-        // Transform the event streams to also include the network ID
-        // let network_events: Vec<_> = network_service_events
-        //     .into_network_and_events()
-        //     .into_iter()
-        //     .map(|(network_id, events)| events.map(move |event| (network_id, event)))
-        //     .collect();
-        // let network_events = select_all(network_events).fuse();
+    pub fn new(network_events: NetworkEvents<StorageServiceMessage>, handle: &Handle) -> Self {
+        let (event_tx, event_rx) = tokio::sync::mpsc::channel(10); // TODO: configurable prefetch size other than 10?
+        handle.spawn(network_event_prefetch(network_events, event_tx));
+        let network_events = ReceiverStream::new(event_rx);
 
         // Transform each event to a network request
         let network_request_stream = network_events

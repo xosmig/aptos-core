@@ -41,13 +41,14 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 use tokio::{runtime::Handle, time::interval};
-use tokio_stream::wrappers::IntervalStream;
+use tokio_stream::wrappers::{IntervalStream, ReceiverStream};
+use aptos_network2::protocols::network::network_event_prefetch;
 
 /// Coordinator that handles inbound network events and outbound txn broadcasts.
 pub(crate) async fn coordinator<NetworkClient, TransactionValidator, ConfigProvider>(
     mut smp: SharedMempool<NetworkClient, TransactionValidator>,
     executor: Handle,
-    mut network_events: NetworkEvents<MempoolSyncMsg>,
+    network_events: NetworkEvents<MempoolSyncMsg>,
     mut client_events: MempoolEventsReceiver,
     mut quorum_store_requests: mpsc::Receiver<QuorumStoreRequest>,
     mut mempool_listener: MempoolNotificationListener,
@@ -72,6 +73,10 @@ pub(crate) async fn coordinator<NetworkClient, TransactionValidator, ConfigProvi
     // worker tasks that can process incoming transactions.
     let workers_available = smp.config.shared_mempool_max_concurrent_inbound_syncs;
     let bounded_executor = BoundedExecutor::new(workers_available, executor.clone());
+
+    let (event_tx, event_rx) = tokio::sync::mpsc::channel(10); // TODO: configurable prefetch size other than 10?
+    executor.spawn(network_event_prefetch(network_events, event_tx));
+    let mut network_events = ReceiverStream::new(event_rx).fuse();
 
     let initial_reconfig = mempool_reconfig_events
         .next()

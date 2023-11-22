@@ -226,7 +226,7 @@ fn setup_state_sync_storage_service(
         storage_reader,
         TimeService::real(),
         peers_and_metadata,
-        StorageServiceNetworkEvents::new(network_events),
+        StorageServiceNetworkEvents::new(network_events, storage_service_runtime.handle()),
         storage_service_listener,
     );
     storage_service_runtime.spawn(service.start());

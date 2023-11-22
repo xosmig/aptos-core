@@ -561,7 +561,6 @@ impl NetworkTask {
         let (rpc_tx, rpc_rx) =
             aptos_channel::new(QueueStyle::FIFO, 10, Some(&counters::RPC_CHANNEL_MSGS));
 
-        // let network_events = prefetch_network_events(network_events, 10, handle);
         let (event_tx, event_rx) = tokio::sync::mpsc::channel(10); // TODO: configurable prefetch size other than 10?
         handle.spawn(network_event_prefetch(network_events, event_tx));
         let network_events = ReceiverStream::new(event_rx);
