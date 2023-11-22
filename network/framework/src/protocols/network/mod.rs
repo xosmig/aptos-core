@@ -11,7 +11,7 @@ use aptos_types::{network_address::NetworkAddress, PeerId};
 use bytes::Bytes;
 use futures::{
     channel::oneshot,
-    stream::{FusedStream, Stream},
+    stream::{FusedStream, Stream, StreamExt},
     task::{Context, Poll},
 };
 use serde::{de::DeserializeOwned, Serialize};
@@ -268,8 +268,8 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
             info!("app_int poll still DONE");
             return Poll::Ready(None);
         }
-        // throw away up to 10 messages while looking for one to return
         let mself = self.get_mut();
+        // throw away up to 10 messages while looking for one to return
         for _ in 1..10 {
             let msg = match Pin::new(&mut mself.network_source).poll_next(cx) {
                 Poll::Ready(x) => match x {
@@ -380,6 +380,70 @@ impl<TMessage: Message + Unpin> FusedStream for NetworkEvents<TMessage> {
         self.done
     }
 }
+
+// pub struct NetworkEventPrefetchStream<TMessage> {
+//     //network_events: NetworkEvents<TMessage>,
+//     //event_tx: tokio::sync::mpsc::Sender<Event<TMessage>>,
+//     event_rx: tokio::sync::mpsc::Receiver<ßEvent<TMessage>>,
+//     done: bool,
+// }
+
+pub async fn network_event_prefetch<TMessage: Message + Unpin + Send>(
+    mut network_events: NetworkEvents<TMessage>,
+    event_tx: tokio::sync::mpsc::Sender<Event<TMessage>>,
+) {
+    loop {
+        let mut network_events = Pin::new(&mut network_events);
+        match network_events.next().await {
+            Some(msg) => {
+                let result = event_tx.send(msg).await;
+                if result.is_err() {
+                    return;
+                }
+            },
+            None => {return;},
+        };
+        // if let Some(msg) = network_events.next().await {
+        //     let result = event_tx.send(msg).await;
+        //     if result.is_err() {
+        //         return;
+        //     }
+        // } else {
+        //     return;
+        // }
+    }
+}
+
+// pub fn prefetch_network_events<TMessage: Message + Unpin + Send>(network_events: NetworkEvents<TMessage>, buffer: usize, handle: Handle) -> ReceiverStream<Event<TMessage>> {
+//     let (event_tx, event_rx) = tokio::sync::mpsc::channel(buffer);
+//     handle.spawn(network_event_prefetch(network_events, event_tx));
+//     ReceiverStream::new(event_rx)
+// }
+
+
+// impl<TMessage> NetworkEventPrefetchStream<TMessage> {
+//     pub fn new(network_events: NetworkEvents<TMessage>, buffer: usize, handle: Handle) -> Self {
+//         let (event_tx, event_rx) = tokio::sync::mpsc::channel(buffer);
+//         handle.spawn(network_event_prefetch(network_events, event_tx));
+//         Self {
+//             event_rx,
+//             done: false,
+//         }
+//     }
+// }
+//
+// impl<TMessage: Message + Unpin> Stream for NetworkEventPrefetchStream<TMessage> {
+//     type Item = Event<TMessage>;
+//
+//     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+//         if self.done {
+//             info!("app_int poll still DONE");
+//             return Poll::Ready(None);
+//         }
+//         let mself = self.get_mut();
+//     }
+// }
+
 
 /// `NetworkSender` is the generic interface from upper network applications to
 /// the lower network layer. It provides the full API for network applications,

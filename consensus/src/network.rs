@@ -52,7 +52,10 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use tokio::runtime::Handle;
 use tokio::time::timeout;
+use tokio_stream::wrappers::ReceiverStream;
+use aptos_network2::protocols::network::network_event_prefetch;
 
 pub trait TConsensusMsg: Sized + Serialize + DeserializeOwned {
     fn epoch(&self) -> u64;
@@ -542,6 +545,7 @@ impl NetworkTask {
     pub fn new(
         network_events: NetworkEvents<ConsensusMsg>,
         self_receiver: aptos_channels::Receiver<Event<ConsensusMsg>>,
+        handle: &Handle,
     ) -> (NetworkTask, NetworkReceivers) {
         let (consensus_messages_tx, consensus_messages) = aptos_channel::new(
             QueueStyle::FIFO,
@@ -557,6 +561,10 @@ impl NetworkTask {
         let (rpc_tx, rpc_rx) =
             aptos_channel::new(QueueStyle::FIFO, 10, Some(&counters::RPC_CHANNEL_MSGS));
 
+        // let network_events = prefetch_network_events(network_events, 10, handle);
+        let (event_tx, event_rx) = tokio::sync::mpsc::channel(10); // TODO: configurable prefetch size other than 10?
+        handle.spawn(network_event_prefetch(network_events, event_tx));
+        let network_events = ReceiverStream::new(event_rx);
         let all_events = Box::new(select(network_events, self_receiver));
 
         (

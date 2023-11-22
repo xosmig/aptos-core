@@ -79,7 +79,7 @@ pub fn start_consensus(
         aptos_time_service::TimeService::real(),
     );
 
-    let (network_task, network_receiver) = NetworkTask::new(network_events, self_receiver);
+    let (network_task, network_receiver) = NetworkTask::new(network_events, self_receiver, runtime.handle());
 
     runtime.spawn(network_task.start());
     runtime.spawn(epoch_mgr.start(timeout_receiver, network_receiver));
