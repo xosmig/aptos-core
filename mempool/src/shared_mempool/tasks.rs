@@ -434,8 +434,13 @@ fn log_txn_process_results(results: &[SubmissionStatusBundle], sender: Option<Pe
                 vm_status = vm_status,
                 sender = sender,
             );
+            let status = match vm_status {
+                DiscardedVMStatus::RESOURCE_DOES_NOT_EXIST => {"RDNE"}
+                DiscardedVMStatus::SEQUENCE_NUMBER_TOO_OLD => {"OLD"}
+                _ => {counters::VM_VALIDATION_LABEL}
+            };
             counters::shared_mempool_transactions_processed_inc(
-                counters::VM_VALIDATION_LABEL,
+                status,
                 &network,
             );
             continue;
