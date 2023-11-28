@@ -418,9 +418,11 @@ impl AptosDataClient {
         T: TryFrom<StorageServiceResponse, Error = E>,
         E: Into<Error>,
     {
+        let timer = start_request_timer(&metrics::REQUEST_LATENCIES_A, &request.get_label(), peer);
         let response = self
             .send_request_to_peer(peer, request.clone(), request_timeout_ms)
             .await?;
+        timer.observe_duration();
 
         let (context, storage_response) = response.into_parts();
 
@@ -471,6 +473,7 @@ impl AptosDataClient {
         );
         self.update_sent_request_metrics(peer, &request);
 
+        let timer = start_request_timer(&metrics::REQUEST_LATENCIES_B, &request.get_label(), peer);
         // Send the request and process the result
         let result = self
             .storage_service_client
@@ -480,6 +483,8 @@ impl AptosDataClient {
                 request.clone(),
             )
             .await;
+        timer.observe_duration();
+
         match result {
             Ok(response) => {
                 trace!(
