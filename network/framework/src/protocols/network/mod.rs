@@ -301,7 +301,7 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
                 }
             };
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64;
-            let queue_micros = msg.rx_at - now;
+            let queue_micros = now - msg.rx_at;
             counters::inbound_queue_delay(msg.sender.network_id().as_str(), msg.protocol_id_as_str(), queue_micros);
             match msg.message {
                     NetworkMessage::Error(err) => {
