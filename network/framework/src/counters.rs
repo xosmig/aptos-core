@@ -255,6 +255,7 @@ pub static PEER_SEND_FAILURES: Lazy<IntCounterVec> = Lazy::new(|| {
     .unwrap()
 });
 
+// this is measured in peer code
 pub static APTOS_NETWORK_OUTBOUND_RPC_REQUEST_LATENCY: Lazy<HistogramVec> = Lazy::new(|| {
     register_histogram_vec!(
         "aptos_network_outbound_rpc_request_latency_seconds",
@@ -269,6 +270,7 @@ pub static APTOS_NETWORK_OUTBOUND_RPC_REQUEST_LATENCY: Lazy<HistogramVec> = Lazy
     .unwrap()
 });
 
+// use in peer code
 pub fn outbound_rpc_request_latency(
     // network_context: &NetworkContext,
     role_type: RoleType,
@@ -278,6 +280,37 @@ pub fn outbound_rpc_request_latency(
     APTOS_NETWORK_OUTBOUND_RPC_REQUEST_LATENCY.with_label_values(&[
         // network_context.role().as_str(),
         role_type.as_str(),
+        network_id.as_str(),
+        // network_context.peer_id().short_str().as_str(),
+        protocol_id.as_str(),
+    ])
+}
+
+// this is measured in common library code on the application end of queues
+pub static APTOS_NETWORK_OUTBOUND_RPC_REQUEST_API_LATENCY: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "aptos_network_outbound_rpc_request_api_latency_seconds",
+        "Outbound RPC request latency in seconds",
+        &[
+            // "role_type",
+            "network_id",
+            // "peer_id",
+            "protocol_id",
+        ]
+    )
+        .unwrap()
+});
+
+// this is measured in common library code on the application end of queues
+pub fn outbound_rpc_request_api_latency(
+    // network_context: &NetworkContext,
+    // role_type: RoleType,
+    network_id: NetworkId,
+    protocol_id: ProtocolId,
+) -> Histogram {
+    APTOS_NETWORK_OUTBOUND_RPC_REQUEST_API_LATENCY.with_label_values(&[
+        // network_context.role().as_str(),
+        // role_type.as_str(),
         network_id.as_str(),
         // network_context.peer_id().short_str().as_str(),
         protocol_id.as_str(),

@@ -74,7 +74,6 @@ pub static REQUEST_LATENCIES_A: Lazy<HistogramVec> = Lazy::new(|| {
     register_histogram_vec!(histogram_opts, &["request_type", "network"]).unwrap()
 });
 
-
 /// Counter for tracking request latencies
 pub static REQUEST_LATENCIES_B: Lazy<HistogramVec> = Lazy::new(|| {
     let histogram_opts = histogram_opts!(
@@ -84,6 +83,16 @@ pub static REQUEST_LATENCIES_B: Lazy<HistogramVec> = Lazy::new(|| {
     );
     register_histogram_vec!(histogram_opts, &["request_type", "network"]).unwrap()
 });
+
+/// Counter for tracking request latencies
+// pub static REQUEST_LATENCIES_C: Lazy<HistogramVec> = Lazy::new(|| {
+//     let histogram_opts = histogram_opts!(
+//         "aptos_data_client_request_latencies_c",
+//         "Counters related to request latencies",
+//         REQUEST_LATENCY_BUCKETS_SECS.to_vec()
+//     );
+//     register_histogram_vec!(histogram_opts, &["request_type", "network"]).unwrap()
+// });
 
 /// Gauge for tracking the number of in-flight polls
 pub static IN_FLIGHT_POLLS: Lazy<IntGaugeVec> = Lazy::new(|| {

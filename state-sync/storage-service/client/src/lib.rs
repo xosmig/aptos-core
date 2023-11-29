@@ -15,6 +15,9 @@ use aptos_storage_service_types::{
 };
 use std::{collections::HashSet, sync::Arc, time::Duration};
 use thiserror::Error;
+use aptos_crypto::_once_cell::sync::Lazy;
+use aptos_metrics_core::{histogram_opts, register_histogram_vec, HistogramVec};
+
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -48,11 +51,15 @@ impl<NetworkClient: NetworkClientInterface<StorageServiceMessage>>
         timeout: Duration,
         request: StorageServiceRequest,
     ) -> Result<StorageServiceResponse, Error> {
+        let timer = REQUEST_LATENCIES_C.with_label_values(&[&request.get_label(), recipient.network_id().as_str()]).start_timer();
+        // let timer = start_request_timer(&metrics::REQUEST_LATENCIES_C, &request.get_label(), peer);
         let response = self
             .network_client
             .send_to_peer_rpc(StorageServiceMessage::Request(request), timeout, recipient)
             .await
             .map_err(|error| Error::NetworkError(error.to_string()))?;
+        timer.observe_duration();
+
         match response {
             StorageServiceMessage::Response(Ok(response)) => Ok(response),
             StorageServiceMessage::Response(Err(err)) => Err(Error::StorageServiceError(err)),
@@ -74,3 +81,18 @@ impl<NetworkClient: NetworkClientInterface<StorageServiceMessage>>
         self.network_client.get_peers_and_metadata()
     }
 }
+
+// Latency buckets for network latencies (seconds)
+const REQUEST_LATENCY_BUCKETS_SECS: &[f64] = &[
+    0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 7.5, 10.0, 15.0, 20.0, 30.0, 40.0,
+    60.0, 120.0, 180.0, 240.0, 300.0,
+];
+
+pub static REQUEST_LATENCIES_C: Lazy<HistogramVec> = Lazy::new(|| {
+    let histogram_opts = histogram_opts!(
+        "aptos_data_client_request_latencies_c",
+        "Counters related to request latencies",
+        REQUEST_LATENCY_BUCKETS_SECS.to_vec()
+    );
+    register_histogram_vec!(histogram_opts, &["request_type", "network"]).unwrap()
+});

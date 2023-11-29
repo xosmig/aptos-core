@@ -805,10 +805,16 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                 Ok(content_result) => match content_result {
                     Ok((bytes, rx_time)) => {
                         let data_len = bytes.len() as u64;
-                        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64;
-                        let delay_micros = now - rx_time;
+                        let endtime = tokio::time::Instant::now();
+                        //let finally = endtime.duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64;
+                        // time message spent waiting in queue
+                        let delay_micros = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64) - rx_time;
+                        // time since this send_rpc() started
+                        let rpc_micros = endtime.duration_since(now).as_micros() as u64;
                         counters::inbound_queue_delay(self.network_id.as_str(), protocol.as_str(), delay_micros);
                         counters::rpc_message_bytes(self.network_id, protocol.as_str(), self.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "delivered", data_len);
+                        counters::outbound_rpc_request_api_latency(self.network_id, protocol).observe((rpc_micros as f64) / 1_000_000.0);
+
                         let wat = protocol.from_bytes(bytes.as_ref())?;
                         Ok(wat)
                     }
