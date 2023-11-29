@@ -28,6 +28,7 @@ use aptos_config::network_id::{NetworkContext, NetworkId, PeerNetworkId};
 use crate::protocols::wire::messaging::v1::{DirectSendMsg, NetworkMessage, RequestId, RpcRequest, RpcResponse};
 use hex::ToHex;
 use aptos_config::config::RoleType;
+use aptos_infallible::duration_since_epoch;
 
 pub trait Message: DeserializeOwned + Serialize {}
 impl<T: DeserializeOwned + Serialize> Message for T {}
@@ -132,9 +133,21 @@ impl NetworkApplicationConfig {
 pub struct ReceivedMessage {
     pub message: NetworkMessage,
     pub sender: PeerNetworkId,
+
+    // unix microseconds
+    pub rx_at: u64,
 }
 
 impl ReceivedMessage {
+    pub fn new(message: NetworkMessage, sender: PeerNetworkId) -> Self {
+        let now = std::time::SystemTime::now();
+        let rx_at = now.duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64;
+        Self {
+            message,
+            sender,
+            rx_at,
+        }
+    }
     pub fn protocol_id(&self) -> Option<ProtocolId> {
         match &self.message {
             NetworkMessage::Error(_e) => {
@@ -287,6 +300,9 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
                     return Poll::Pending
                 }
             };
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64;
+            let queue_micros = msg.rx_at - now;
+            counters::inbound_queue_delay(msg.sender.network_id().as_str(), msg.protocol_id_as_str(), queue_micros);
             match msg.message {
                     NetworkMessage::Error(err) => {
                         // We just drop error responses! TODO: never send them
@@ -787,8 +803,11 @@ impl<TMessage: Message> NetworkSender<TMessage> {
         match tokio::time::timeout(sub_timeout, receiver).await {
             Ok(receiver_result) => match receiver_result {
                 Ok(content_result) => match content_result {
-                    Ok(bytes) => {
+                    Ok((bytes, rx_time)) => {
                         let data_len = bytes.len() as u64;
+                        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64;
+                        let delay_micros = now - rx_time;
+                        counters::inbound_queue_delay(self.network_id.as_str(), protocol.as_str(), delay_micros);
                         counters::rpc_message_bytes(self.network_id, protocol.as_str(), self.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "delivered", data_len);
                         let wat = protocol.from_bytes(bytes.as_ref())?;
                         Ok(wat)

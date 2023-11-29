@@ -617,3 +617,16 @@ pub fn bcs_encode_count(length: usize, dt: Duration) {
     NETWORK_BCS_ENCODE_BYTES.inc_by(length as u64);
     NETWORK_BCS_ENCODES.inc();
 }
+
+pub static APTOS_NETWORK_INBOUND_QUEUE_DELAY: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "aptos_network_inbound_queue_delay",
+        "Inbound delay between receipt and app handler",
+        &["network_id", "protocol_id"]
+    )
+        .unwrap()
+});
+
+pub fn inbound_queue_delay(network_id: &'static str, protocol_id: &'static str, micros: u64) {
+    APTOS_NETWORK_INBOUND_QUEUE_DELAY.with_label_values(&[network_id, protocol_id]).observe((micros as f64) / 1_000_000.0)
+}

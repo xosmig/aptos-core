@@ -351,13 +351,13 @@ async fn writer_task(
     info!("peer writer exited")
 }
 
-async fn complete_rpc(rpc_state: OpenRpcRequestState, nmsg: NetworkMessage) {
+async fn complete_rpc(rpc_state: OpenRpcRequestState, nmsg: NetworkMessage, rx_time: u64) {
     if let NetworkMessage::RpcResponse(response) = nmsg {
         let blob = response.raw_response;
         let now = tokio::time::Instant::now(); // TODO: use a TimeService
         let dt = now.duration_since(rpc_state.started);
         let data_len = blob.len() as u64;
-        match rpc_state.sender.send(Ok(blob.into())) {
+        match rpc_state.sender.send(Ok((blob.into(), rx_time))) {
             Ok(_) => {
                 counters::rpc_message_bytes(rpc_state.network_id, rpc_state.protocol_id.as_str(), rpc_state.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, counters::RECEIVED_LABEL, data_len);
                 counters::outbound_rpc_request_latency(rpc_state.role_type, rpc_state.network_id, rpc_state.protocol_id).observe(dt.as_secs_f64());
@@ -425,7 +425,7 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
                     unreachable!("read_thread apps[{}] => {} {:?}", protocol_id, app.protocol_id, &app.sender);
                 }
                 let data_len = nmsg.data_len() as u64;
-                match app.sender.try_send(ReceivedMessage{ message: nmsg, sender: self.remote_peer_network_id }) {
+                match app.sender.try_send(ReceivedMessage::new(nmsg, self.remote_peer_network_id)) {
                     Ok(_) => {
                         peer_read_message_bytes(&self.remote_peer_network_id.network_id(), &protocol_id, data_len);
                     }
@@ -457,7 +457,8 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
                         counters::rpc_message_bytes(self.remote_peer_network_id.network_id(), "unk", self.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "miss", data_len);
                     }
                     Some(rpc_state) => {
-                        self.handle.spawn(complete_rpc(rpc_state, nmsg));//response.raw_response));
+                        let rx_time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64;
+                        self.handle.spawn(complete_rpc(rpc_state, nmsg, rx_time));
                     }
                 }
             }

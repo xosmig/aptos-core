@@ -273,7 +273,7 @@ pub type NetworkEvents<Message> = crate::protocols::network::NetworkEvents<Messa
 pub struct OpenRpcRequestState {
     pub id: RequestId,
     // send on this to deliver a reply back to an open NetworkSender.send_rpc()
-    pub sender: oneshot::Sender<Result<Bytes, RpcError>>,
+    pub sender: oneshot::Sender<Result<(Bytes, u64), RpcError>>,
     pub protocol_id: ProtocolId,
     pub started: tokio::time::Instant, // for metrics
     pub deadline: tokio::time::Instant,
@@ -303,7 +303,7 @@ impl OutboundRpcMatcher {
     pub fn insert(
         &self,
         request_id: RequestId,
-        sender: oneshot::Sender<Result<Bytes, RpcError>>,
+        sender: oneshot::Sender<Result<(Bytes, u64), RpcError>>,
         protocol_id: ProtocolId,
         started: tokio::time::Instant,
         deadline: tokio::time::Instant,
