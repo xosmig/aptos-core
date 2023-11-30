@@ -3617,6 +3617,7 @@ dependencies = [
  "aptos-channels",
  "aptos-config",
  "aptos-crypto",
+ "aptos-logger",
  "aptos-metrics-core",
  "aptos-network2",
  "aptos-storage-service-types",

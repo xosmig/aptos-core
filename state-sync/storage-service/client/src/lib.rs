@@ -17,6 +17,7 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 use thiserror::Error;
 use aptos_crypto::_once_cell::sync::Lazy;
 use aptos_metrics_core::{histogram_opts, register_histogram_vec, HistogramVec};
+use aptos_logger::{info,sample::SampleRate,sample};
 
 
 #[derive(Debug, Error)]
@@ -51,14 +52,23 @@ impl<NetworkClient: NetworkClientInterface<StorageServiceMessage>>
         timeout: Duration,
         request: StorageServiceRequest,
     ) -> Result<StorageServiceResponse, Error> {
+        let start = std::time::Instant::now();
         let timer = REQUEST_LATENCIES_C.with_label_values(&[&request.get_label(), recipient.network_id().as_str()]).start_timer();
-        // let timer = start_request_timer(&metrics::REQUEST_LATENCIES_C, &request.get_label(), peer);
         let response = self
             .network_client
             .send_to_peer_rpc(StorageServiceMessage::Request(request), timeout, recipient)
             .await
             .map_err(|error| Error::NetworkError(error.to_string()))?;
         timer.observe_duration();
+        let dt = std::time::Instant::now().duration_since(start);
+        let millis = dt.as_millis();
+        if millis > 2000 {
+            info!("storage RPC took {:?}", dt);
+        } else if millis > 500 {
+            sample!(SampleRate::Frequency(10), info!("storage RPC took {:?}", dt));
+        } else if millis > 10 {
+            sample!(SampleRate::Duration(Duration::from_secs(1)), info!("storage RPC took {:?}", dt));
+        }
 
         match response {
             StorageServiceMessage::Response(Ok(response)) => Ok(response),
