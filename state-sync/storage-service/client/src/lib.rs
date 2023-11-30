@@ -66,7 +66,8 @@ impl<NetworkClient: NetworkClientInterface<StorageServiceMessage>>
         if millis > 1100 {
             // log with detail below
         } else if millis > 500 {
-            sample!(SampleRate::Frequency(10), info!("storage RPC took {:?} ms", millis));
+            // sample!(SampleRate::Frequency(10), info!("storage RPC took {:?} ms", millis));
+            info!("storage RPC took {:?} ms", millis);
         // } else if millis > 10 {
         //     sample!(SampleRate::Duration(Duration::from_secs(1)), info!("storage RPC took {:?}", dt));
         }
