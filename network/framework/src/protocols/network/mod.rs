@@ -733,6 +733,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
         timeout: Duration,
         high_prio: bool,
     ) -> Result<TMessage, RpcError> {
+        // Don't use `?` error return so that we can put a counter on every error condition
         // TODO: plumb through a TimeService to here
         let now = tokio::time::Instant::now();
         let deadline = now.add(timeout);
@@ -745,11 +746,18 @@ impl<TMessage: Message> NetworkSender<TMessage> {
             Ok(peers) => {
                 match peers.get(&peer_network_id) {
                     None => {
+                        counters::rpc_messages(self.network_id, protocol.as_str(), self.role_type, counters::REQUEST_LABEL, counters::OUTBOUND_LABEL, "peergone").inc();
                         return Err(RpcError::NotConnected(recipient));
                     }
                     Some(peer) => {
                         // TODO: figure out a way to multi-core protocol_id.to_bytes()
-                        let mdata: Vec<u8> = protocol.to_bytes(&req_msg)?;
+                        let mdata: Vec<u8> = match protocol.to_bytes(&req_msg) {
+                            Ok(x) => {x}
+                            Err(err) => {
+                                counters::rpc_messages(self.network_id, protocol.as_str(), self.role_type, counters::REQUEST_LABEL, counters::OUTBOUND_LABEL, "bcserr").inc();
+                                return Err(err.into());
+                            }
+                        };
                         let data_len = mdata.len() as u64;
                         let request_id = peer.rpc_counter.fetch_add(1, Ordering::SeqCst);
                         let msg = NetworkMessage::RpcRequest(RpcRequest {
@@ -806,7 +814,6 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                     Ok((bytes, rx_time)) => {
                         let data_len = bytes.len() as u64;
                         let endtime = tokio::time::Instant::now();
-                        //let finally = endtime.duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64;
                         // time message spent waiting in queue
                         let delay_micros = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64) - rx_time;
                         // time since this send_rpc() started
@@ -815,7 +822,13 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                         counters::rpc_message_bytes(self.network_id, protocol.as_str(), self.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "delivered", data_len);
                         counters::outbound_rpc_request_api_latency(self.network_id, protocol).observe((rpc_micros as f64) / 1_000_000.0);
 
-                        let wat = protocol.from_bytes(bytes.as_ref())?;
+                        let wat = match protocol.from_bytes(bytes.as_ref()) {
+                            Ok(x) => {x},
+                            Err(err) => {
+                                counters::rpc_messages(self.network_id, protocol.as_str(), self.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "bcserr").inc();
+                                return Err(err.into());
+                            },
+                        };
                         Ok(wat)
                     }
                     Err(err) => {
@@ -833,6 +846,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                 Err(RpcError::TimedOut)
             }
         }
+        // end of function where there should be no ? return
     }
 
     // /// Send a message to a single recipient.
