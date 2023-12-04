@@ -24,7 +24,7 @@ use aptos_framework::ReleaseBundle;
 use aptos_logger::{prelude::*, telemetry_log_writer::TelemetryLog, Level, LoggerFilterUpdater};
 use aptos_network2::application::ApplicationCollector;
 use aptos_state_sync_driver::driver_factory::StateSyncRuntimes;
-use aptos_types::{chain_id::ChainId, system_txn::pool::SystemTransactionPool};
+use aptos_types::{chain_id::ChainId, validator_txn::pool::ValidatorTransactionPool};
 use clap::Parser;
 use futures::channel::mpsc;
 use hex::{FromHex, FromHexError};
@@ -675,7 +675,7 @@ pub fn setup_environment_and_start_node(
             peers_and_metadata.clone(),
         );
 
-    let sys_txn_pool = Arc::new(SystemTransactionPool::new());
+    let validator_txn_pool = Arc::new(ValidatorTransactionPool::new());
 
     // Create the consensus runtime (this blocks on state sync first)
     let consensus_runtime = consensus_network_interfaces.map(|consensus_network_interfaces| {
@@ -692,7 +692,7 @@ pub fn setup_environment_and_start_node(
             consensus_network_interfaces,
             consensus_notifier,
             consensus_to_mempool_sender,
-            sys_txn_pool,
+            validator_txn_pool,
         );
         admin_service.set_consensus_dbs(consensus_db, quorum_store_db);
         runtime

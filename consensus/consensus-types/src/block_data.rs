@@ -15,7 +15,7 @@ use aptos_types::{
     aggregate_signature::AggregateSignature,
     block_info::BlockInfo,
     ledger_info::{LedgerInfo, LedgerInfoWithSignatures},
-    system_txn::SystemTransaction,
+    validator_txn::ValidatorTransaction,
 };
 use mirai_annotations::*;
 use serde::{Deserialize, Serialize};
@@ -135,9 +135,9 @@ impl BlockData {
         }
     }
 
-    pub fn sys_txns(&self) -> Option<&Vec<SystemTransaction>> {
+    pub fn validator_txns(&self) -> Option<&Vec<ValidatorTransaction>> {
         match &self.block_type {
-            BlockType::ProposalExt(proposal_ext) => proposal_ext.sys_txns(),
+            BlockType::ProposalExt(proposal_ext) => proposal_ext.validator_txns(),
             BlockType::Proposal { .. }
             | BlockType::NilBlock { .. }
             | BlockType::Genesis
@@ -232,6 +232,19 @@ impl BlockData {
         }
     }
 
+    #[cfg(any(test, feature = "fuzzing"))]
+    pub fn dummy_with_validator_txns(txns: Vec<ValidatorTransaction>) -> Self {
+        Self::new_proposal_ext(
+            txns,
+            Payload::empty(false),
+            Author::ONE,
+            vec![],
+            1,
+            1,
+            QuorumCert::dummy(),
+        )
+    }
+
     pub fn new_genesis(timestamp_usecs: u64, quorum_cert: QuorumCert) -> Self {
         assume!(quorum_cert.certified_block().epoch() < u64::max_value()); // unlikely to be false in this universe
         Self {
@@ -317,7 +330,7 @@ impl BlockData {
     }
 
     pub fn new_proposal_ext(
-        sys_txns: Vec<SystemTransaction>,
+        validator_txns: Vec<ValidatorTransaction>,
         payload: Payload,
         author: Author,
         failed_authors: Vec<(Round, Author)>,
@@ -331,7 +344,7 @@ impl BlockData {
             timestamp_usecs,
             quorum_cert,
             block_type: BlockType::ProposalExt(ProposalExt::V0 {
-                sys_txns,
+                validator_txns,
                 payload,
                 author,
                 failed_authors,
