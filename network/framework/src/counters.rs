@@ -643,7 +643,6 @@ pub fn network_peer_outbound_queue_time(
             role_type,
             network_id,
             protocol_id,
-            "size",
         ])
         .observe((micros as f64) / 1_000_000.0);
 }
