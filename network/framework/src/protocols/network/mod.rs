@@ -234,13 +234,11 @@ impl<TMessage: Message + Unpin> NetworkEvents<TMessage> {
 async fn rpc_response_sender(
     receiver: oneshot::Receiver<Result<Bytes, RpcError>>,
     rpc_id: RequestId,
-    peer_sender: tokio::sync::mpsc::Sender<NetworkMessage>,
+    peer_sender: tokio::sync::mpsc::Sender<(NetworkMessage,u64)>,
     request_received_start: tokio::time::Instant, // TODO: use TimeService
     network_context: NetworkContext, // for metrics
     protocol_id: ProtocolId, // for metrics
 ) {
-    // cancel happens in OutboundRpcMatcher.cleanup() and .cleanup_internal()
-    // cancel there closes the channel which gets here as an error
     let bytes = match receiver.await {
         Ok(iresult) => match iresult{
             Ok(bytes) => {bytes}
@@ -262,7 +260,8 @@ async fn rpc_response_sender(
         priority: 0,
         raw_response: bytes.into(),
     });
-    match peer_sender.send(msg).await {
+    let enqueue_micros = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64;
+    match peer_sender.send((msg,enqueue_micros)).await {
         Ok(_) => {
             counters::inbound_rpc_handler_latency(&network_context, protocol_id).observe(dt.as_secs_f64());
             counters::rpc_message_bytes(network_context.network_id(),protocol_id.as_str(),network_context.role(),counters::RESPONSE_LABEL,counters::OUTBOUND_LABEL,counters::SENT_LABEL, data_len as u64);
@@ -568,6 +567,8 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                         let msg = msg_src()?;
                         let protocol_id_str = msg.protocol_id_as_str();
                         let data_len = msg.data_len() as u64;
+                        let enqueue_micros = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64;
+                        let msg = (msg,enqueue_micros);
                         let send_result = if high_prio {
                             peer.sender_high_prio.try_send(msg)
                         } else {
@@ -630,7 +631,8 @@ impl<TMessage: Message> NetworkSender<TMessage> {
         let protocol_id_str = msg.protocol_id_as_str();
         let data_len = msg.data_len() as u64;
         // let handle = Handle::current();
-        match sender.send(msg).await {
+        let enqueue_micros = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64;
+        match sender.send((msg,enqueue_micros)).await {
             Ok(_) => {
                 counters::direct_send_message_bytes(self.network_id, protocol_id_str, self.role_type, counters::SENT_LABEL, data_len);
                 Ok(())
@@ -769,6 +771,8 @@ impl<TMessage: Message> NetworkSender<TMessage> {
 
                         let (sender, receiver) = oneshot::channel();
                         peer.open_outbound_rpc.insert(request_id, sender, protocol, now, deadline, self.network_id, self.role_type);
+                        let enqueue_micros = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64;
+                        let msg = (msg,enqueue_micros);
                         let send_result = if high_prio {
                             peer.sender_high_prio.try_send(msg)
                         } else {
@@ -803,7 +807,8 @@ impl<TMessage: Message> NetworkSender<TMessage> {
         };
         let sub_timeout = match deadline.checked_duration_since(tokio::time::Instant::now()) {
             None => {
-                counters::rpc_messages(self.network_id, protocol.as_str(), self.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "timeout").inc();
+                // we are already past deadline, just sending was too slow?
+                counters::rpc_messages(self.network_id, protocol.as_str(), self.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "timeout0").inc();
                 return Err(RpcError::TimedOut);
             }
             Some(sub) => {sub}
@@ -842,6 +847,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                 }
             }
             Err(_timeout) => {
+                // timeout waiting for a response
                 counters::rpc_messages(self.network_id, protocol.as_str(), self.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "timeout").inc();
                 Err(RpcError::TimedOut)
             }
@@ -973,8 +979,8 @@ impl Default for Closer {
 #[derive(Clone, Debug)]
 pub struct PeerStub {
     /// channel to Peer's write thread
-    pub sender: tokio::sync::mpsc::Sender<NetworkMessage>,
-    pub sender_high_prio: tokio::sync::mpsc::Sender<NetworkMessage>,
+    pub sender: tokio::sync::mpsc::Sender<(NetworkMessage,u64)>,
+    pub sender_high_prio: tokio::sync::mpsc::Sender<(NetworkMessage,u64)>,
     pub rpc_counter: Arc<AtomicU32>,
     pub close: Closer,
     open_outbound_rpc: OutboundRpcMatcher,
@@ -982,8 +988,8 @@ pub struct PeerStub {
 
 impl PeerStub {
     pub fn new(
-        sender: tokio::sync::mpsc::Sender<NetworkMessage>,
-        sender_high_prio: tokio::sync::mpsc::Sender<NetworkMessage>,
+        sender: tokio::sync::mpsc::Sender<(NetworkMessage,u64)>,
+        sender_high_prio: tokio::sync::mpsc::Sender<(NetworkMessage,u64)>,
         open_outbound_rpc: OutboundRpcMatcher,
         close: Closer,
     ) -> Self {

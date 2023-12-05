@@ -349,7 +349,8 @@ impl OutboundRpcMatcher {
             for k in to_delete.into_iter() {
                 let reqo = they.remove(&k);
                 if let Some(rpc_state) = reqo {
-                    counters::rpc_messages(rpc_state.network_id, rpc_state.protocol_id.as_str(), rpc_state.role_type, counters::RESPONSE_LABEL, counters::OUTBOUND_LABEL, "timeout").inc();
+                    // we were waiting for a reply and never got one
+                    counters::rpc_messages(rpc_state.network_id, rpc_state.protocol_id.as_str(), rpc_state.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "timeoutI").inc();
                 }
             }
         }

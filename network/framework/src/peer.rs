@@ -23,7 +23,7 @@ use crate::protocols::stream::{StreamFragment, StreamHeader, StreamMessage};
 use crate::transport::ConnectionMetadata;
 use once_cell::sync::Lazy;
 use crate::counters;
-use crate::counters::{network_application_inbound_traffic, network_application_outbound_traffic};
+use crate::counters::{network_application_inbound_traffic, network_application_outbound_traffic, network_peer_outbound_queue_time};
 
 pub fn start_peer<TSocket>(
     config: &NetworkConfig,
@@ -40,8 +40,8 @@ where
     TSocket: crate::transport::TSocket
 {
     let role_type = network_context.role();
-    let (sender, to_send) = tokio::sync::mpsc::channel::<NetworkMessage>(config.network_channel_size);
-    let (sender_high_prio, to_send_high_prio) = tokio::sync::mpsc::channel::<NetworkMessage>(config.network_channel_size);
+    let (sender, to_send) = tokio::sync::mpsc::channel::<(NetworkMessage,u64)>(config.network_channel_size);
+    let (sender_high_prio, to_send_high_prio) = tokio::sync::mpsc::channel::<(NetworkMessage,u64)>(config.network_channel_size);
     let open_outbound_rpc = OutboundRpcMatcher::new();
     let max_frame_size = config.max_frame_size;
     let (read_socket, write_socket) = socket.split();
@@ -81,8 +81,8 @@ struct WriterContext<WriteThing: AsyncWrite + Unpin + Send> {
     role_type: RoleType,
 
     /// messages from apps to send to the peer
-    to_send: Receiver<NetworkMessage>,
-    to_send_high_prio: Receiver<NetworkMessage>,
+    to_send: Receiver<(NetworkMessage,u64)>,
+    to_send_high_prio: Receiver<(NetworkMessage,u64)>,
     /// encoder wrapper around socket write half
     writer: MultiplexMessageSink<WriteThing>,
 }
@@ -90,8 +90,8 @@ struct WriterContext<WriteThing: AsyncWrite + Unpin + Send> {
 impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
     fn new(
         network_id: NetworkId,
-        to_send: Receiver<NetworkMessage>,
-        to_send_high_prio: Receiver<NetworkMessage>,
+        to_send: Receiver<(NetworkMessage,u64)>,
+        to_send_high_prio: Receiver<(NetworkMessage,u64)>,
         writer: MultiplexMessageSink<WriteThing>,
         max_frame_size: usize,
         role_type: RoleType,
@@ -164,9 +164,11 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
 
     fn try_high_prio_next_msg(&mut self) -> Option<MultiplexMessage> {
         match self.to_send_high_prio.try_recv() {
-            Ok(msg) => {
+            Ok((msg, enqueue_micros)) => {
                 // info!("writer_thread to_send_high_prio {} bytes prot={}", msg.data_len(), msg.protocol_id_as_str());
                 network_application_outbound_traffic(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), msg.data_len() as u64);
+                let queue_micros = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64) - enqueue_micros;
+                network_peer_outbound_queue_time(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), queue_micros);
                 if msg.data_len() > self.max_frame_size {
                     // finish prior large message before starting a new large message
                     self.next_large_msg = Some(msg);
@@ -188,9 +190,11 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
             return Some(mm);
         }
         match self.to_send.try_recv() {
-            Ok(msg) => {
+            Ok((msg,enqueue_micros)) => {
                 // info!("writer_thread to_send {} bytes prot={}", msg.data_len(), msg.protocol_id_as_str());
                 network_application_outbound_traffic(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), msg.data_len() as u64);
+                let queue_micros = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64) - enqueue_micros;
+                network_peer_outbound_queue_time(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), queue_micros);
                 if msg.data_len() > self.max_frame_size {
                     // finish prior large message before starting a new large message
                     self.next_large_msg = Some(msg);
@@ -239,7 +243,9 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                                 info!("writer_thread high prio closed");
                                 break;
                             },
-                            Some(msg) => {
+                            Some((msg, enqueue_micros)) => {
+                                let queue_micros = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64) - enqueue_micros;
+                                network_peer_outbound_queue_time(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), queue_micros);
                                 if msg.data_len() > self.max_frame_size {
                                     // start stream
                                     self.start_large(msg)
@@ -253,7 +259,9 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                                 info!("writer_thread source closed");
                                 break;
                             },
-                            Some(msg) => {
+                            Some((msg, enqueue_micros)) => {
+                                let queue_micros = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64) - enqueue_micros;
+                                network_peer_outbound_queue_time(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), queue_micros);
                                 if msg.data_len() > self.max_frame_size {
                                     // start stream
                                     self.start_large(msg)
@@ -339,8 +347,8 @@ pub fn peer_message_bytes_written(network_id: &NetworkId) -> IntCounter {
 
 async fn writer_task(
     network_id: NetworkId,
-    to_send: Receiver<NetworkMessage>,
-    to_send_high_prio: Receiver<NetworkMessage>,
+    to_send: Receiver<(NetworkMessage,u64)>,
+    to_send_high_prio: Receiver<(NetworkMessage,u64)>,
     writer: MultiplexMessageSink<impl AsyncWrite + Unpin + Send + 'static>,
     max_frame_size: usize,
     role_type: RoleType,

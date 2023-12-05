@@ -619,6 +619,35 @@ pub fn network_application_outbound_traffic(
         .observe(size as f64);
 }
 
+pub static NETWORK_PEER_OUTBOUND_QUEUE_TIME: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "aptos_network_peer_outbound_queue_time",
+        "Network Outbound Traffic peer-queue time",
+        &[
+            "role_type",
+            "network_id",
+            "protocol_id",
+        ]
+    )
+        .unwrap()
+});
+
+pub fn network_peer_outbound_queue_time(
+    role_type: &'static str,
+    network_id: &'static str,
+    protocol_id: &'static str,
+    micros: u64,
+) {
+    NETWORK_PEER_OUTBOUND_QUEUE_TIME
+        .with_label_values(&[
+            role_type,
+            network_id,
+            protocol_id,
+            "size",
+        ])
+        .observe((micros as f64) / 1_000_000.0);
+}
+
 /// Time it takes to perform message serialization and deserialization
 pub static NETWORK_APPLICATION_SERIALIZATION_METRIC: Lazy<HistogramVec> = Lazy::new(|| {
     register_histogram_vec!(
