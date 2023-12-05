@@ -23,7 +23,6 @@ use crate::protocols::stream::{StreamFragment, StreamHeader, StreamMessage};
 use crate::transport::ConnectionMetadata;
 use once_cell::sync::Lazy;
 use crate::counters;
-use crate::counters::{network_application_inbound_traffic, network_application_outbound_traffic, network_peer_outbound_queue_time};
 
 pub fn start_peer<TSocket>(
     config: &NetworkConfig,
@@ -128,6 +127,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
     }
 
     fn start_large(&mut self, msg: NetworkMessage) -> MultiplexMessage {
+        peer_message_large_msg_fragmented(&self.network_id, msg.protocol_id_as_str()).inc();
         self.stream_request_id += 1;
         self.send_large = false;
         self.large_fragment_id = 0;
@@ -166,9 +166,9 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
         match self.to_send_high_prio.try_recv() {
             Ok((msg, enqueue_micros)) => {
                 // info!("writer_thread to_send_high_prio {} bytes prot={}", msg.data_len(), msg.protocol_id_as_str());
-                network_application_outbound_traffic(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), msg.data_len() as u64);
+                counters::network_application_outbound_traffic(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), msg.data_len() as u64);
                 let queue_micros = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64) - enqueue_micros;
-                network_peer_outbound_queue_time(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), queue_micros);
+                counters::network_peer_outbound_queue_time(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), queue_micros);
                 if msg.data_len() > self.max_frame_size {
                     // finish prior large message before starting a new large message
                     self.next_large_msg = Some(msg);
@@ -192,9 +192,9 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
         match self.to_send.try_recv() {
             Ok((msg,enqueue_micros)) => {
                 // info!("writer_thread to_send {} bytes prot={}", msg.data_len(), msg.protocol_id_as_str());
-                network_application_outbound_traffic(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), msg.data_len() as u64);
+                counters::network_application_outbound_traffic(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), msg.data_len() as u64);
                 let queue_micros = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64) - enqueue_micros;
-                network_peer_outbound_queue_time(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), queue_micros);
+                counters::network_peer_outbound_queue_time(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), queue_micros);
                 if msg.data_len() > self.max_frame_size {
                     // finish prior large message before starting a new large message
                     self.next_large_msg = Some(msg);
@@ -245,7 +245,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                             },
                             Some((msg, enqueue_micros)) => {
                                 let queue_micros = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64) - enqueue_micros;
-                                network_peer_outbound_queue_time(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), queue_micros);
+                                counters::network_peer_outbound_queue_time(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), queue_micros);
                                 if msg.data_len() > self.max_frame_size {
                                     // start stream
                                     self.start_large(msg)
@@ -261,7 +261,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                             },
                             Some((msg, enqueue_micros)) => {
                                 let queue_micros = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64) - enqueue_micros;
-                                network_peer_outbound_queue_time(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), queue_micros);
+                                counters::network_peer_outbound_queue_time(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), queue_micros);
                                 if msg.data_len() > self.max_frame_size {
                                     // start stream
                                     self.start_large(msg)
@@ -343,6 +343,17 @@ pub static NETWORK_PEER_MESSAGE_BYTES_WRITTEN: Lazy<IntCounterVec> = Lazy::new(|
 );
 pub fn peer_message_bytes_written(network_id: &NetworkId) -> IntCounter {
     NETWORK_PEER_MESSAGE_BYTES_WRITTEN.with_label_values(&[network_id.as_str()])
+}
+
+pub static NETWORK_PEER_MESSAGES_FRAGMENTED: Lazy<IntCounterVec> = Lazy::new(||
+    register_int_counter_vec!(
+    "aptos_network_messages_fragmented",
+    "Number of large messages broken up into segments",
+    &["network_id","protocol_id"]
+).unwrap()
+);
+pub fn peer_message_large_msg_fragmented(network_id: &NetworkId, protocol_id: &'static str) -> IntCounter {
+    NETWORK_PEER_MESSAGES_FRAGMENTED.with_label_values(&[network_id.as_str(), protocol_id])
 }
 
 async fn writer_task(
@@ -446,7 +457,7 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
     }
 
     async fn handle_message(&self, nmsg: NetworkMessage) {
-        network_application_inbound_traffic(self.role_type.as_str(), self.remote_peer_network_id.network_id().as_str(), nmsg.protocol_id_as_str(), nmsg.data_len() as u64);
+        counters::network_application_inbound_traffic(self.role_type.as_str(), self.remote_peer_network_id.network_id().as_str(), nmsg.protocol_id_as_str(), nmsg.data_len() as u64);
         match &nmsg {
             NetworkMessage::Error(errm) => {
                 // TODO: counter
