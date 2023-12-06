@@ -497,13 +497,18 @@ pub static PENDING_DIRECT_SEND_NOTIFICATIONS: Lazy<IntGauge> = Lazy::new(|| {
 });
 
 /// Counter of pending requests in RPC
-pub static PENDING_RPC_REQUESTS: Lazy<IntGauge> = Lazy::new(|| {
-    register_int_gauge!(
+pub static PENDING_RPC_REQUESTS: Lazy<IntGaugeVec> = Lazy::new(|| {
+    register_int_gauge_vec!(
         "aptos_network_pending_rpc_requests",
-        "Number of pending rpc requests"
+        "Number of pending rpc requests",
+        &["protocol_id"],
     )
     .unwrap()
 });
+
+pub fn pending_rpc_requests(protocol_id: &'static str) -> IntGauge {
+    PENDING_RPC_REQUESTS.with_label_values(&[protocol_id])
+}
 
 /// Counter of pending RPC notifications to Network Provider
 pub static PENDING_RPC_NOTIFICATIONS: Lazy<IntGauge> = Lazy::new(|| {
