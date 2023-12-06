@@ -17,7 +17,7 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 use thiserror::Error;
 use aptos_crypto::_once_cell::sync::Lazy;
 use aptos_metrics_core::{histogram_opts, register_histogram_vec, HistogramVec};
-use aptos_logger::{info,sample::SampleRate,sample};
+use aptos_logger::{info,sample::SampleRate,sample,warn};
 
 
 #[derive(Debug, Error)]
@@ -55,14 +55,23 @@ impl<NetworkClient: NetworkClientInterface<StorageServiceMessage>>
         let start = std::time::Instant::now();
         let request_label = request.data_request.get_label();
         let timer = REQUEST_LATENCIES_C.with_label_values(&[&request.get_label(), recipient.network_id().as_str()]).start_timer();
-        let response = self
+        let nr = self
             .network_client
             .send_to_peer_rpc(StorageServiceMessage::Request(request), timeout, recipient)
-            .await
-            .map_err(|error| Error::NetworkError(error.to_string()))?;
-        timer.observe_duration();
+            .await;
         let dt = std::time::Instant::now().duration_since(start);
         let millis = dt.as_millis();
+        let response = match nr {
+            Ok(x) => {x}
+            Err(error) => {
+                if millis > 1100 {
+                    warn!("storage RPC took {:?} ms; {:?} -> {:?}", millis, request_label, error);
+                }
+                timer.stop_and_discard();
+                return Err(Error::NetworkError(error.to_string()));
+            }
+        };
+        timer.observe_duration();
         if millis > 1100 {
             // log with detail below
         } else if millis > 500 {
@@ -81,13 +90,13 @@ impl<NetworkClient: NetworkClientInterface<StorageServiceMessage>>
             },
             StorageServiceMessage::Response(Err(err)) => {
                 if millis > 1100 {
-                    info!("storage RPC took {:?} ms; {:?} -> {:?}", millis, request_label, err);
+                    warn!("storage RPC took {:?} ms; {:?} -> {:?}", millis, request_label, err);
                 }
                 Err(Error::StorageServiceError(err))
             },
             StorageServiceMessage::Request(request) => {
                 if millis > 1100 {
-                    info!("storage RPC took {:?} ms; {:?} -> WAT", millis, request_label);
+                    warn!("storage RPC took {:?} ms; {:?} -> WAT", millis, request_label);
                 }
                 Err(Error::NetworkError(format!(
                     "Got storage service request instead of response! Request: {:?}",
