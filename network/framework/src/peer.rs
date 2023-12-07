@@ -467,6 +467,13 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
                 let protocol_id = request.protocol_id;
                 let data_len = request.raw_request.len() as u64;
                 counters::rpc_message_bytes(self.remote_peer_network_id.network_id(), protocol_id.as_str(), self.role_type, counters::REQUEST_LABEL, counters::INBOUND_LABEL, counters::RECEIVED_LABEL, data_len);
+                if protocol_id == ProtocolId::StorageServiceRpc {
+                    info!(
+                        req_id = request.request_id,
+                        peer = self.remote_peer_network_id.peer_id(),
+                        protocol_id = protocol_id.as_str(),
+                        "RPCT req in");
+                }
                 self.forward(protocol_id, nmsg).await;
             }
             NetworkMessage::RpcResponse(response) => {
@@ -474,9 +481,21 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
                     None => {
                         let data_len = response.raw_response.len() as u64;
                         counters::rpc_message_bytes(self.remote_peer_network_id.network_id(), "unk", self.role_type, counters::RESPONSE_LABEL, counters::INBOUND_LABEL, "miss", data_len);
+                        info!(
+                            req_id = response.request_id,
+                            peer = self.remote_peer_network_id.peer_id(),
+                            protocol_id = "DED",
+                            "RPCT rsp in");
                     }
                     Some(rpc_state) => {
                         let rx_time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64;
+                        if rpc_state.protocol_id == ProtocolId::StorageServiceRpc {
+                            info!(
+                                req_id = response.request_id,
+                                peer = self.remote_peer_network_id.peer_id(),
+                                protocol_id = rpc_state.protocol_id.as_str(),
+                                "RPCT rsp in");
+                        }
                         self.handle.spawn(complete_rpc(rpc_state, nmsg, rx_time));
                     }
                 }
