@@ -491,8 +491,8 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
                         let rx_time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64;
                         if rpc_state.protocol_id == ProtocolId::StorageServiceRpc {
                             info!(
-                                req_id = response.request_id,
                                 peer = self.remote_peer_network_id.peer_id(),
+                                req_id = response.request_id,
                                 protocol_id = rpc_state.protocol_id.as_str(),
                                 "RPCT rsp in");
                         }

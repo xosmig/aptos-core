@@ -29,6 +29,7 @@ use crate::protocols::wire::messaging::v1::{DirectSendMsg, NetworkMessage, Reque
 use hex::ToHex;
 use aptos_config::config::RoleType;
 use aptos_infallible::duration_since_epoch;
+use rand;
 
 pub trait Message: DeserializeOwned + Serialize {}
 impl<T: DeserializeOwned + Serialize> Message for T {}
@@ -1014,7 +1015,7 @@ impl PeerStub {
         Self {
             sender,
             sender_high_prio,
-            rpc_counter: Arc::new(AtomicU32::new(0)),
+            rpc_counter: Arc::new(AtomicU32::new(rand::random())),
             close,
             open_outbound_rpc,
         }
