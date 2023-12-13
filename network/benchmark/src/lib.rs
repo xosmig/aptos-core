@@ -525,7 +525,7 @@ pub async fn rpc_sender(
                     })
                 }
                 let wrapper = NetbenchMessage::DataSend(msg);
-                let result = network_client.send_to_peer_rpc(wrapper, Duration::from_secs(10), PeerNetworkId::new(network_id, peer_id));
+                let result = network_client.send_to_peer_rpc(wrapper, Duration::from_secs(5), PeerNetworkId::new(network_id, peer_id));
                 rpc_messages("sent");
                 open_rpcs.push(result);
 

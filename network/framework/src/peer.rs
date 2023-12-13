@@ -171,8 +171,12 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                 counters::network_peer_outbound_queue_time(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), queue_micros);
                 if msg.data_len() > self.max_frame_size {
                     // finish prior large message before starting a new large message
-                    self.next_large_msg = Some(msg);
-                    Some(self.next_large())
+                    if self.large_message.is_some() {
+                        self.next_large_msg = Some(msg);
+                        Some(self.next_large())
+                    } else {
+                        Some(self.start_large(msg))
+                    }
                 } else {
                     // send small message now, large chunk next
                     self.send_large = true;
@@ -191,14 +195,17 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
         }
         match self.to_send.try_recv() {
             Ok((msg,enqueue_micros)) => {
-                // info!("writer_thread to_send {} bytes prot={}", msg.data_len(), msg.protocol_id_as_str());
                 counters::network_application_outbound_traffic(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), msg.data_len() as u64);
                 let queue_micros = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64) - enqueue_micros;
                 counters::network_peer_outbound_queue_time(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), queue_micros);
                 if msg.data_len() > self.max_frame_size {
                     // finish prior large message before starting a new large message
-                    self.next_large_msg = Some(msg);
-                    Some(self.next_large())
+                    if self.large_message.is_some() {
+                        self.next_large_msg = Some(msg);
+                        Some(self.next_large())
+                    } else {
+                        Some(self.start_large(msg))
+                    }
                 } else {
                     // send small message now, large chunk next
                     self.send_large = true;
@@ -208,7 +215,11 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
             Err(err) => match err {
                 TryRecvError::Empty => {
                     // ok, no next small msg, continue with chunks of large message
-                    Some(self.next_large())
+                    if self.large_message.is_some() {
+                        Some(self.next_large())
+                    } else {
+                        None
+                    }
                 }
                 TryRecvError::Disconnected => {
                     info!("writer_thread source closed");
@@ -225,7 +236,10 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                     self.next_large()
                 } else {
                     match self.try_next_msg().await {
-                        None => {break}
+                        None => {
+                            error!("try_next_msg None where it should be Some");
+                            break;
+                        }
                         Some(mm) => {mm}
                     }
                 }
@@ -244,6 +258,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                                 break;
                             },
                             Some((msg, enqueue_micros)) => {
+                                counters::network_application_outbound_traffic(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), msg.data_len() as u64);
                                 let queue_micros = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64) - enqueue_micros;
                                 counters::network_peer_outbound_queue_time(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), queue_micros);
                                 if msg.data_len() > self.max_frame_size {
@@ -260,6 +275,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                                 break;
                             },
                             Some((msg, enqueue_micros)) => {
+                                counters::network_application_outbound_traffic(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), msg.data_len() as u64);
                                 let queue_micros = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64) - enqueue_micros;
                                 counters::network_peer_outbound_queue_time(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), queue_micros);
                                 if msg.data_len() > self.max_frame_size {
