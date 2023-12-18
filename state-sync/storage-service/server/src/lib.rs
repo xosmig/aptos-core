@@ -60,7 +60,7 @@ const CACHED_SUMMARY_UPDATE_CHANNEL_SIZE: usize = 1;
 /// service requests from clients.
 pub struct StorageServiceServer<T> {
     bounded_executor: BoundedExecutor,
-    network_requests: StorageServiceNetworkEvents,
+    network_requests: StorageServiceNetworkEvents, // TODO: change this to use network framework NetworkEvents<StorageServiceMessage> directly
     storage: T,
     storage_service_config: StorageServiceConfig,
     time_service: TimeService,
@@ -396,6 +396,7 @@ impl<T: StorageReaderInterface + Send + Sync> StorageServiceServer<T> {
         self.spawn_continuous_storage_summary_tasks().await;
 
         // Handle the storage requests as they arrive
+        // TODO: change this to use network framework NetworkEvents<StorageServiceMessage> directly
         while let Some(network_request) = self.network_requests.next().await {
             // Log the request
             let peer_network_id = network_request.peer_network_id;
@@ -407,6 +408,7 @@ impl<T: StorageReaderInterface + Send + Sync> StorageServiceServer<T> {
                     "Received storage request. Peer: {:?}, protocol: {:?}.",
                     peer_network_id, protocol_id,
                 )));
+            // TODO: increment a counter here
 
             // All handler methods are currently CPU-bound and synchronous
             // I/O-bound, so we want to spawn on the blocking thread pool to

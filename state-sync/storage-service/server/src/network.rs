@@ -36,6 +36,8 @@ pub struct NetworkRequest {
 
 /// A stream of requests from network. Each request also comes with a callback to
 /// send the response.
+///
+/// TODO: StorageServiceNetworkEvents is a Stream over NetworkRequest, but NetworkRequest doesn't add anything to RpcRequest. Drop this and just use the underlying NetworkEvents<StorageServiceMessage> (Stream over StorageServiceMessage) directly.
 pub struct StorageServiceNetworkEvents {
     network_request_stream: BoxStream<'static, NetworkRequest>,
 }
@@ -60,10 +62,10 @@ impl StorageServiceNetworkEvents {
 
     /// Filters out everything except Rpc requests
     fn event_to_request(
-        // network_id: NetworkId,
         event: Event<StorageServiceMessage>,
     ) -> Option<NetworkRequest> {
         match event {
+            // TODO: NetworkRequest used to be different than RpcRequest, but they're now really the same, eliminate internal `NetworkRequest` and just use the RpcRequest
             Event::RpcRequest(
                 peer_network_id,
                 StorageServiceMessage::Request(storage_service_request),
@@ -71,7 +73,6 @@ impl StorageServiceNetworkEvents {
                 response_tx,
             ) => {
                 let response_sender = ResponseSender::new(response_tx);
-                // let peer_network_id = PeerNetworkId::new(network_id, peer_id);
                 Some(NetworkRequest {
                     peer_network_id,
                     protocol_id,

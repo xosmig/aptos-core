@@ -204,7 +204,7 @@ impl<T: StorageReaderInterface> Handler<T> {
         response: aptos_storage_service_types::Result<StorageServiceResponse>,
         response_sender: ResponseSender,
     ) {
-        log_storage_response(request, &response);
+        //log_storage_response(request, &response);
         response_sender.send(response);
     }
 
@@ -238,14 +238,16 @@ impl<T: StorageReaderInterface> Handler<T> {
                     .request(&request)
                 );
             );
-        }
+            metrics::OPTIMISTIC_FETCH_EVENTS.with_label_values(&[peer_network_id.network_id().as_str(), "collision"]).inc();
+        } else {
 
-        // Update the optimistic fetch metrics
-        increment_counter(
-            &metrics::OPTIMISTIC_FETCH_EVENTS,
-            peer_network_id.network_id(),
-            OPTIMISTIC_FETCH_ADD.into(),
-        );
+            // Update the optimistic fetch metrics
+            increment_counter(
+                &metrics::OPTIMISTIC_FETCH_EVENTS,
+                peer_network_id.network_id(),
+                OPTIMISTIC_FETCH_ADD.into(),
+            );
+        }
     }
 
     /// Handles the given subscription request. If a failure
@@ -279,6 +281,10 @@ impl<T: StorageReaderInterface> Handler<T> {
                 // Otherwise, add the request to the existing stream.
                 let existing_stream_id = occupied_entry.get().subscription_stream_id();
                 if existing_stream_id != request_stream_id {
+                    metrics::SUBSCRIPTION_EVENTS.with_label_values(&[peer_network_id.network_id().as_str(), "collision"]).inc();
+                    // TODO: send subscription request failure on the previous request
+                    //let old_requests = occupied_entry.get_mut();
+                    //old_requests.error_close_requests(); // TODO: writeme
                     // Create a new subscription stream for the peer
                     let subscription_stream = SubscriptionStreamRequests::new(
                         subscription_request,
