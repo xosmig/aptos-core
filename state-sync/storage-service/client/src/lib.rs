@@ -64,9 +64,7 @@ impl<NetworkClient: NetworkClientInterface<StorageServiceMessage>>
         let response = match nr {
             Ok(x) => {x}
             Err(error) => {
-                if millis > 1100 {
-                    warn!("storage RPC took {:?} ms; {:?} -> {:?}", millis, request_label, error);
-                }
+                warn!("storage RPC took {:?} ms; {:?} nerr {:?}", millis, request_label, error);
                 timer.stop_and_discard();
                 return Err(Error::NetworkError(error.to_string()));
             }
@@ -90,13 +88,13 @@ impl<NetworkClient: NetworkClientInterface<StorageServiceMessage>>
             },
             StorageServiceMessage::Response(Err(err)) => {
                 if millis > 1100 {
-                    warn!("storage RPC took {:?} ms; {:?} -> {:?}", millis, request_label, err);
+                    warn!("storage RPC took {:?} ms; {:?} rerr {:?}", millis, request_label, err);
                 }
                 Err(Error::StorageServiceError(err))
             },
             StorageServiceMessage::Request(request) => {
                 if millis > 1100 {
-                    warn!("storage RPC took {:?} ms; {:?} -> WAT", millis, request_label);
+                    warn!("storage RPC took {:?} ms; {:?} reqreqerr {:?}", millis, request_label, request.data_request.get_label());
                 }
                 Err(Error::NetworkError(format!(
                     "Got storage service request instead of response! Request: {:?}",
