@@ -8,9 +8,10 @@ use tokio::runtime::Runtime;
 use aptos_config::config::{NetworkConfig, NodeConfig};
 use aptos_config::network_id::{NetworkContext, NetworkId};
 use aptos_consensus::network_interface::ConsensusMsg;
+use aptos_dkg_runtime::DKGMsg;
+use aptos_jwk_consensus::JWKConsensusMsg;
 use aptos_network2::protocols::wire::handshake::v1::ProtocolId;
 use aptos_network2_builder::NetworkBuilder;
-// use aptos_consensus::network_interface::{DIRECT_SEND, RPC};
 use aptos_logger::{debug, info};
 use aptos_network2::application::interface::NetworkClient;
 use aptos_network2::protocols::network::{NetworkEvents, NetworkSender, NetworkSource, NewNetworkEvents, NewNetworkSender, OutboundPeerConnections};
@@ -142,6 +143,40 @@ pub fn consensus_network_connections(
     let rpc_protocols: Vec<ProtocolId> = aptos_consensus::network_interface::RPC.into();
     let queue_size = setup.node_config.consensus.max_network_channel_size;
     let counter_label = "consensus";
+
+    Some(build_network_connections(setup, direct_send_protocols, rpc_protocols, queue_size, counter_label, apps))
+}
+
+pub fn dkg_network_connections(
+    apps: &mut ApplicationCollector,
+    setup: &AppSetupContext,
+) -> Option<ApplicationNetworkInterfaces<DKGMsg>> {
+    if !has_validator_network(&setup.node_config) {
+        info!("app_int not a validator, no dkg");
+        return None;
+    }
+
+    let direct_send_protocols: Vec<ProtocolId> = aptos_dkg_runtime::network_interface::DIRECT_SEND.into();
+    let rpc_protocols: Vec<ProtocolId> = aptos_dkg_runtime::network_interface::RPC.into();
+    let queue_size = setup.node_config.dkg.max_network_channel_size;
+    let counter_label = "dkg";
+
+    Some(build_network_connections(setup, direct_send_protocols, rpc_protocols, queue_size, counter_label, apps))
+}
+
+pub fn jwk_consensus_network_connections(
+    apps: &mut ApplicationCollector,
+    setup: &AppSetupContext,
+) -> Option<ApplicationNetworkInterfaces<JWKConsensusMsg>> {
+    if !has_validator_network(&setup.node_config) {
+        info!("app_int not a validator, no jwk");
+        return None;
+    }
+
+    let direct_send_protocols: Vec<ProtocolId> = aptos_jwk_consensus::network_interface::DIRECT_SEND.into();
+    let rpc_protocols: Vec<ProtocolId> = aptos_jwk_consensus::network_interface::RPC.into();
+    let queue_size = setup.node_config.jwk_consensus.max_network_channel_size;
+    let counter_label = "jwk";
 
     Some(build_network_connections(setup, direct_send_protocols, rpc_protocols, queue_size, counter_label, apps))
 }

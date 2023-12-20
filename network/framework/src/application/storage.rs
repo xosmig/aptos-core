@@ -11,7 +11,7 @@ use crate::{
     ProtocolId,
 };
 use aptos_config::{
-    config::PeerSet,
+    config::{Peer, PeerSet},
     network_id::{NetworkId, PeerNetworkId},
 };
 use aptos_infallible::RwLock;
@@ -226,6 +226,35 @@ impl PeersAndMetadata {
         })
     }
 
+    /// Returns the trusted peer state for the given peer (if one exists)
+    pub fn get_trusted_peer_state(
+        &self,
+        peer_network_id: &PeerNetworkId,
+    ) -> Result<Option<Peer>, Error> {
+        let network_id = peer_network_id.network_id();
+        match self.trusted_peers.get(&network_id) {
+            None => {
+                Ok(None)
+            }
+            Some(wat) => {
+                Ok(wat.read().get(&peer_network_id.peer_id()).cloned())
+            }
+        }
+    }
+
+    /// Updates the trusted peer set for the given network ID
+    pub fn set_trusted_peers(
+        &self,
+        network_id: &NetworkId,
+        trusted_peer_set: PeerSet,
+    ) -> Result<(), Error> {
+        let trusted_peers = self.trusted_peers.get(network_id).ok_or_else(|| Error::UnexpectedError(format!("unknown network: {:?}", network_id)))?;
+        let mut ps = trusted_peers.write();
+        ps.clear();
+        ps.clone_from(&trusted_peer_set);
+        Ok(())
+    }
+
     fn broadcast(&self, event: ConnectionNotification) {
         let mut listeners = self.subscribers.write();
         let mut to_del = vec![];
@@ -384,6 +413,24 @@ impl PeersAndMetadata {
         } else {
             Err(missing_metadata_error(&peer_network_id))
         }
+    }
+
+    #[cfg(test)]
+    #[cfg(disabled)]
+    /// Returns all internal maps (for testing purposes only)
+    /// TODO: fix for network2 branch?
+    pub(crate) fn get_all_internal_maps(
+        &self,
+    ) -> (
+        HashMap<NetworkId, HashMap<PeerId, PeerMetadata>>,
+        HashMap<NetworkId, Arc<ArcSwap<PeerSet>>>,
+        Arc<ArcSwap<HashMap<NetworkId, HashMap<PeerId, PeerMetadata>>>>,
+    ) {
+        let peers_and_metadata = self.peers_and_metadata.read().clone();
+        let trusted_peers = self.trusted_peers.clone();
+        let cached_peers_and_metadata = self.cached_peers_and_metadata.clone();
+
+        (peers_and_metadata, trusted_peers, cached_peers_and_metadata)
     }
 }
 

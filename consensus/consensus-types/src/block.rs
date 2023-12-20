@@ -209,6 +209,7 @@ impl Block {
         epoch: u64,
         round: Round,
         timestamp: u64,
+        validator_txns: Vec<ValidatorTransaction>,
         payload: Payload,
         author: Author,
         failed_authors: Vec<(Round, Author)>,
@@ -220,6 +221,7 @@ impl Block {
             epoch,
             round,
             timestamp,
+            validator_txns,
             payload,
             author,
             failed_authors,
@@ -408,33 +410,33 @@ impl Block {
         Ok(())
     }
 
+    pub fn transactions_to_execute_for_metadata(
+        validator_txns: Vec<ValidatorTransaction>,
+        txns: Vec<SignedTransaction>,
+        metadata: BlockMetadata,
+    ) -> Vec<Transaction> {
+        once(Transaction::BlockMetadata(metadata))
+            .chain(
+                validator_txns
+                    .into_iter()
+                    .map(Transaction::ValidatorTransaction),
+            )
+            .chain(txns.into_iter().map(Transaction::UserTransaction))
+            .collect()
+    }
+
+    /// List of input transactions for each block.
+    /// Prepends BlockMetadata and validator txns, and then all user txns.
+    ///
+    /// It doesn't add StateCheckpoint/BlockEpilogue transaction - that gets added during execution.
     pub fn transactions_to_execute(
         &self,
         validators: &[AccountAddress],
         validator_txns: Vec<ValidatorTransaction>,
-        user_txns: Vec<SignedTransaction>,
-        is_block_gas_limit: bool,
+        txns: Vec<SignedTransaction>,
     ) -> Vec<Transaction> {
-        let txns = once(Transaction::BlockMetadata(
-            self.new_block_metadata(validators),
-        ))
-        .chain(
-            validator_txns
-                .into_iter()
-                .map(Transaction::ValidatorTransaction),
-        )
-        .chain(user_txns.into_iter().map(Transaction::UserTransaction));
-
-        if is_block_gas_limit {
-            // After the per-block gas limit change, StateCheckpoint txn
-            // is inserted after block execution
-            txns.collect()
-        } else {
-            // Before the per-block gas limit change, StateCheckpoint txn
-            // is inserted here for compatibility.
-            txns.chain(once(Transaction::StateCheckpoint(self.id)))
-                .collect()
-        }
+        let metadata = self.new_block_metadata(validators);
+        Self::transactions_to_execute_for_metadata(validator_txns, txns, metadata)
     }
 
     fn previous_bitvec(&self) -> BitVec {
@@ -445,7 +447,7 @@ impl Block {
         }
     }
 
-    fn new_block_metadata(&self, validators: &[AccountAddress]) -> BlockMetadata {
+    pub fn new_block_metadata(&self, validators: &[AccountAddress]) -> BlockMetadata {
         BlockMetadata::new(
             self.id(),
             self.epoch(),

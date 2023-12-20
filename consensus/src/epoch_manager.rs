@@ -10,12 +10,6 @@ use crate::{
     counters,
     dag::{DagBootstrapper, DagCommitSigner, StorageAdapter},
     error::{error_kind, DbError},
-    experimental::{
-        buffer_manager::{OrderedBlocks, ResetRequest},
-        decoupled_execution_utils::prepare_phases_and_buffer_manager,
-        ordering_state_computer::{DagStateSyncComputer, OrderingStateComputer},
-        signing_phase::CommitSignerProvider,
-    },
     liveness::{
         cached_proposer_election::CachedProposerElection,
         leader_reputation::{
@@ -38,9 +32,18 @@ use crate::{
         IncomingDAGRequest, IncomingRpcRequest, NetworkReceivers, NetworkSender,
     },
     network_interface::{ConsensusMsg, ConsensusNetworkClient},
-    payload_client::QuorumStoreClient,
+    payload_client::{
+        mixed::MixedPayloadClient, user::quorum_store_client::QuorumStoreClient,
+        validator::ValidatorTxnPayloadClient, PayloadClient,
+    },
     payload_manager::PayloadManager,
     persistent_liveness_storage::{LedgerRecoveryData, PersistentLivenessStorage, RecoveryData},
+    pipeline::{
+        buffer_manager::{OrderedBlocks, ResetRequest, ResetSignal},
+        decoupled_execution_utils::prepare_phases_and_buffer_manager,
+        ordering_state_computer::{DagStateSyncComputer, OrderingStateComputer},
+        signing_phase::CommitSignerProvider,
+    },
     quorum_store::{
         quorum_store_builder::{DirectMempoolInnerBuilder, InnerBuilder, QuorumStoreBuilder},
         quorum_store_coordinator::CoordinatorCommand,
@@ -48,7 +51,7 @@ use crate::{
     },
     recovery_manager::RecoveryManager,
     round_manager::{RoundManager, UnverifiedEvent, VerifiedEvent},
-    state_replication::{PayloadClient, StateComputer},
+    state_replication::StateComputer,
     transaction_deduper::create_transaction_deduper,
     transaction_shuffler::create_transaction_shuffler,
     util::time_service::TimeService,
@@ -82,8 +85,8 @@ use aptos_types::{
         OnChainExecutionConfig, ProposerElectionType, ValidatorSet,
     },
     validator_signer::ValidatorSigner,
-    validator_txn::pool::ValidatorTransactionPoolClient,
 };
+use aptos_validator_transaction_pool as vtxn_pool;
 use fail::fail_point;
 use futures::{
     channel::{
@@ -132,7 +135,7 @@ pub struct EpochManager<P: OnChainConfigProvider> {
     commit_state_computer: Arc<dyn StateComputer>,
     storage: Arc<dyn PersistentLivenessStorage>,
     safety_rules_manager: SafetyRulesManager,
-    validator_txn_pool_client: Arc<dyn ValidatorTransactionPoolClient>,
+    validator_txn_pool_client: Arc<dyn ValidatorTxnPayloadClient>,
     reconfig_events: ReconfigNotificationListener<P>,
     // channels to buffer manager
     buffer_manager_msg_tx: Option<aptos_channel::Sender<AccountAddress, IncomingCommitRequest>>,
@@ -159,6 +162,7 @@ pub struct EpochManager<P: OnChainConfigProvider> {
     dag_rpc_tx: Option<aptos_channel::Sender<AccountAddress, IncomingDAGRequest>>,
     dag_shutdown_tx: Option<oneshot::Sender<oneshot::Sender<()>>>,
     dag_config: DagConsensusConfig,
+    payload_manager: Arc<PayloadManager>,
 }
 
 impl<P: OnChainConfigProvider> EpochManager<P> {
@@ -175,7 +179,7 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
         reconfig_events: ReconfigNotificationListener<P>,
         bounded_executor: BoundedExecutor,
         aptos_time_service: aptos_time_service::TimeService,
-        validator_txn_pool_client: Arc<dyn ValidatorTransactionPoolClient>,
+        validator_txn_pool_client: vtxn_pool::ReadClient,
     ) -> Self {
         let author = node_config.validator_network.as_ref().unwrap().peer_id();
         let config = node_config.consensus.clone();
@@ -197,7 +201,7 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
             commit_state_computer,
             storage,
             safety_rules_manager,
-            validator_txn_pool_client,
+            validator_txn_pool_client: Arc::new(validator_txn_pool_client),
             reconfig_events,
             buffer_manager_msg_tx: None,
             buffer_manager_reset_tx: None,
@@ -216,6 +220,7 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
             dag_shutdown_tx: None,
             aptos_time_service,
             dag_config,
+            payload_manager: Arc::new(PayloadManager::DirectMempool),
         }
     }
 
@@ -597,14 +602,14 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
             block_rx,
             reset_rx,
             epoch_state,
+            self.bounded_executor.clone(),
         );
-        let bounded_executor = self.bounded_executor.clone();
 
         tokio::spawn(execution_schedule_phase.start());
         tokio::spawn(execution_wait_phase.start());
         tokio::spawn(signing_phase.start());
         tokio::spawn(persisting_phase.start());
-        tokio::spawn(buffer_manager.start(bounded_executor));
+        tokio::spawn(buffer_manager.start());
 
         (block_tx, reset_tx)
     }
@@ -640,7 +645,7 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
             let (ack_tx, ack_rx) = oneshot::channel();
             tx.send(ResetRequest {
                 tx: ack_tx,
-                stop: true,
+                signal: ResetSignal::Stop,
             })
             .await
             .expect("[EpochManager] Fail to drop buffer manager");
@@ -688,6 +693,7 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
             ledger_data.committed_round(),
             self.config
                 .max_blocks_per_sending_request(onchain_consensus_config.quorum_store_enabled()),
+            self.payload_manager.clone(),
         );
         tokio::spawn(recovery_manager.start(recovery_manager_rx, close_rx));
     }
@@ -736,6 +742,7 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
 
         let (payload_manager, quorum_store_msg_tx) = quorum_store_builder.init_payload_manager();
         self.quorum_store_msg_tx = quorum_store_msg_tx;
+        self.payload_manager = payload_manager.clone();
 
         let payload_client = QuorumStoreClient::new(
             consensus_to_quorum_store_tx,
@@ -891,8 +898,7 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
             pipeline_backpressure_config,
             chain_health_backoff_config,
             self.quorum_store_enabled,
-            self.validator_txn_pool_client.clone(),
-            onchain_consensus_config.should_propose_validator_txns(),
+            onchain_consensus_config.validator_txn_enabled(),
         );
         let (round_manager_tx, round_manager_rx) = aptos_channel::new(
             QueueStyle::LIFO,
@@ -1016,13 +1022,21 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
         self.set_epoch_start_metrics(epoch_state);
         self.quorum_store_enabled = self.enable_quorum_store(consensus_config);
         let network_sender = self.create_network_sender(epoch_state);
-        let (payload_manager, payload_client, quorum_store_builder) = self
+        let (payload_manager, quorum_store_client, quorum_store_builder) = self
             .init_payload_provider(epoch_state, network_sender.clone(), consensus_config)
             .await;
-
+        let mixed_payload_client = MixedPayloadClient::new(
+            consensus_config.validator_txn_enabled(),
+            self.validator_txn_pool_client.clone(),
+            Arc::new(quorum_store_client),
+        );
         self.init_commit_state_computer(epoch_state, payload_manager.clone(), execution_config);
         self.start_quorum_store(quorum_store_builder);
-        (network_sender, Arc::new(payload_client), payload_manager)
+        (
+            network_sender,
+            Arc::new(mixed_payload_client),
+            payload_manager,
+        )
     }
 
     async fn start_new_epoch_with_joltean(
@@ -1116,6 +1130,8 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
             state_computer,
             block_tx,
             onchain_consensus_config.quorum_store_enabled(),
+            onchain_consensus_config.validator_txn_enabled(),
+            self.bounded_executor.clone(),
         );
 
         let (dag_rpc_tx, dag_rpc_rx) = aptos_channel::new(QueueStyle::FIFO, 10, None);
@@ -1164,6 +1180,7 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
             let round_manager_tx = self.round_manager_tx.clone();
             let my_peer_id = self.author;
             let max_num_batches = self.config.quorum_store.receiver_max_num_batches;
+            let payload_manager = self.payload_manager.clone();
             self.bounded_executor
                 .spawn(async move {
                     match monitor!(
@@ -1183,6 +1200,7 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
                                 buffered_proposal_tx,
                                 peer_id,
                                 verified_event,
+                                payload_manager,
                             );
                         },
                         Err(e) => {
@@ -1304,6 +1322,7 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
         buffered_proposal_tx: Option<aptos_channel::Sender<Author, VerifiedEvent>>,
         peer_id: AccountAddress,
         event: VerifiedEvent,
+        payload_manager: Arc<PayloadManager>,
     ) {
         if let VerifiedEvent::ProposalMsg(proposal) = &event {
             observe_block(
@@ -1319,6 +1338,12 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
                     .context("quorum store sender")
             },
             proposal_event @ VerifiedEvent::ProposalMsg(_) => {
+                if let VerifiedEvent::ProposalMsg(p) = &proposal_event {
+                    if let Some(payload) = p.proposal().payload() {
+                        payload_manager
+                            .prefetch_payload_data(payload, p.proposal().timestamp_usecs());
+                    }
+                }
                 Self::forward_event_to(buffered_proposal_tx, peer_id, proposal_event)
                     .context("proposal precheck sender")
             },
@@ -1379,6 +1404,7 @@ impl<P: OnChainConfigProvider> EpochManager<P> {
                     Err(anyhow::anyhow!("Buffer manager not started"))
                 }
             },
+            IncomingRpcRequest::RandGenRequest(_) => Ok(()),
         }
     }
 

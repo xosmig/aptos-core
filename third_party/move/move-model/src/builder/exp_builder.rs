@@ -577,17 +577,24 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
     /// them into the environment. Returns a vector for representing them in the target AST.
     pub fn analyze_and_add_type_params<'a, I>(&mut self, type_params: I) -> Vec<TypeParameter>
     where
-        I: IntoIterator<Item = (&'a Name, &'a EA::AbilitySet)>,
+        I: IntoIterator<Item = (&'a Name, &'a EA::AbilitySet, bool)>,
     {
         type_params
             .into_iter()
             .enumerate()
-            .map(|(i, (n, a))| {
+            .map(|(i, (n, a, is_phantom))| {
                 let ty = Type::new_param(i);
                 let sym = self.symbol_pool().make(n.value.as_str());
                 let abilities = self.parent.translate_abilities(a);
                 self.define_type_param(&self.to_loc(&n.loc), sym, ty, true /*report_errors*/);
-                TypeParameter(sym, TypeParameterKind::new(abilities))
+                TypeParameter(
+                    sym,
+                    if is_phantom {
+                        TypeParameterKind::new_phantom(abilities)
+                    } else {
+                        TypeParameterKind::new(abilities)
+                    },
+                )
             })
             .collect_vec()
     }
@@ -1447,15 +1454,21 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
         locals
     }
 
-    /// Post processes any placeholders which have been generated while translating expressions
+    /// This method:
+    /// 1) Post processes any placeholders which have been generated while translating expressions
     /// with this builder. This rewrites the given result expression and fills in placeholders
     /// with the final expressions.
-    pub fn post_process_placeholders(&mut self, result_exp: Exp) -> Exp {
-        if self.placeholder_map.is_empty() {
-            // Shortcut case of no placeholders
-            result_exp
-        } else {
-            ExpData::rewrite(result_exp, &mut |e| {
+    /// 2) Instantiates types for all all struct patterns in the block expression
+    /// This step is necessary because struct pattern may contain uninstantiated variable types
+    pub fn post_process_body(&mut self, result_exp: Exp) -> Exp {
+        let subs = self.subs.clone();
+        ExpData::rewrite_exp_and_pattern(
+            result_exp,
+            &mut |e| {
+                if self.placeholder_map.is_empty() {
+                    // Shortcut case of no placeholders
+                    return Err(e);
+                }
                 let exp_data: ExpData = e.into();
                 if let ExpData::Call(id, Operation::NoOp, args) = exp_data {
                     if let Some(info) = self.placeholder_map.get(&id) {
@@ -1511,8 +1524,22 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
                 } else {
                     Err(exp_data.into_exp())
                 }
-            })
-        }
+            },
+            &mut |pat, _entering_scope| match pat {
+                Pattern::Struct(sid, std, patterns) => {
+                    let mut new_inst = vec![];
+                    for ty in &std.inst {
+                        let nty = subs.specialize(ty);
+                        new_inst.push(nty);
+                    }
+                    let mut new_std = std.clone();
+                    new_std.inst = new_inst;
+                    let new_pat = Pattern::Struct(*sid, new_std.clone(), patterns.clone());
+                    Some(new_pat)
+                },
+                _ => None,
+            },
+        )
     }
 
     /// Translates a specification block embedded in an expression context, represented by
@@ -2572,8 +2599,10 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
             }
             let mut success = true;
             for (i, arg_ty) in arg_types.iter().enumerate() {
-                let arg_ty = if cand.get_operation().allows_ref_param_for_value() {
-                    // Drop reference type if there is any.
+                let arg_ty = if cand.get_operation().allows_ref_param_for_value()
+                    && self.mode != ExpTranslationMode::Impl
+                {
+                    // Drop reference when translating specifications for eq/neq operation.
                     if let Type::Reference(_, target_ty) = arg_ty {
                         target_ty.as_ref().clone()
                     } else {

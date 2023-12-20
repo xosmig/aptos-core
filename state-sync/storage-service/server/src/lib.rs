@@ -398,18 +398,7 @@ impl<T: StorageReaderInterface + Send + Sync> StorageServiceServer<T> {
         // Handle the storage requests as they arrive
         // TODO: change this to use network framework NetworkEvents<StorageServiceMessage> directly
         while let Some(network_request) = self.network_requests.next().await {
-            // Log the request
-            let peer_network_id = network_request.peer_network_id;
-            let protocol_id = network_request.protocol_id;
-            let storage_service_request = network_request.storage_service_request;
-            trace!(LogSchema::new(LogEntry::ReceivedStorageRequest)
-                .request(&storage_service_request)
-                .message(&format!(
-                    "Received storage request. Peer: {:?}, protocol: {:?}.",
-                    peer_network_id, protocol_id,
-                )));
-            // TODO: increment a counter here
-
+            // TODO: increment a counter here?
             // All handler methods are currently CPU-bound and synchronous
             // I/O-bound, so we want to spawn on the blocking thread pool to
             // avoid starving other async tasks on the same runtime.
@@ -434,8 +423,9 @@ impl<T: StorageReaderInterface + Send + Sync> StorageServiceServer<T> {
                     )
                     .process_request_and_respond(
                         config,
-                        peer_network_id,
-                        storage_service_request,
+                        network_request.peer_network_id,
+                        network_request.protocol_id,
+                        network_request.storage_service_request,
                         network_request.response_sender,
                     );
                 })

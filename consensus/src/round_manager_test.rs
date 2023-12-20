@@ -4,7 +4,6 @@
 
 use crate::{
     block_storage::{BlockReader, BlockStore},
-    experimental::buffer_manager::OrderedBlocks,
     liveness::{
         proposal_generator::{
             ChainHealthBackoffConfig, PipelineBackpressureConfig, ProposalGenerator,
@@ -19,6 +18,7 @@ use crate::{
     network_tests::{NetworkPlayground, TwinId},
     payload_manager::PayloadManager,
     persistent_liveness_storage::RecoveryData,
+    pipeline::buffer_manager::OrderedBlocks,
     round_manager::RoundManager,
     test_utils::{
         consensus_runtime, timed_block_on, MockPayloadManager, MockStateComputer, MockStorage,
@@ -38,7 +38,7 @@ use aptos_consensus_types::{
     },
     block_retrieval::{BlockRetrievalRequest, BlockRetrievalStatus},
     common::{Author, Payload, Round},
-    experimental::commit_decision::CommitDecision,
+    pipeline::commit_decision::CommitDecision,
     proposal_msg::ProposalMsg,
     sync_info::SyncInfo,
     timeout_2chain::{TwoChainTimeout, TwoChainTimeoutWithPartialSignatures},
@@ -66,7 +66,7 @@ use aptos_types::{
     on_chain_config::{ConsensusConfigV1Ext, ConsensusExtraFeature, OnChainConsensusConfig},
     transaction::SignedTransaction,
     validator_signer::ValidatorSigner,
-    validator_txn::{pool::ValidatorTransactionPool, ValidatorTransaction},
+    validator_txn::ValidatorTransaction,
     validator_verifier::{generate_validator_verifier, random_validator_verifier},
     waypoint::Waypoint,
 };
@@ -272,8 +272,7 @@ impl NodeSetup {
             PipelineBackpressureConfig::new_no_backoff(),
             ChainHealthBackoffConfig::new_no_backoff(),
             false,
-            Arc::new(ValidatorTransactionPool::new()),
-            onchain_consensus_config.should_propose_validator_txns(),
+            onchain_consensus_config.validator_txn_enabled(),
         );
 
         let round_state = Self::create_round_state(time_service);
@@ -2007,7 +2006,7 @@ fn no_vote_on_proposal_ext_when_feature_disabled() {
     let genesis_qc = certificate_for_genesis();
 
     let invalid_block = Block::new_proposal_ext(
-        vec![ValidatorTransaction::dummy(vec![0xFF]); 5],
+        vec![ValidatorTransaction::dummy1(vec![0xFF]); 5],
         Payload::empty(false),
         1,
         1,
@@ -2052,10 +2051,9 @@ fn no_vote_on_proposal_ext_when_receiving_limit_exceeded() {
     let mut playground = NetworkPlayground::new(runtime.handle().clone());
 
     let mut onchain_config_inner = ConsensusConfigV1Ext::default_if_missing();
-    onchain_config_inner.update_extra_features(
-        vec![ConsensusExtraFeature::ProposalWithValidatorTransactions],
-        vec![],
-    );
+    onchain_config_inner
+        .extra_features
+        .update_extra_features(vec![ConsensusExtraFeature::ValidatorTransaction], vec![]);
 
     let local_config = ConsensusConfig {
         max_receiving_block_txns_quorum_store_override: 10,
@@ -2075,7 +2073,7 @@ fn no_vote_on_proposal_ext_when_receiving_limit_exceeded() {
     let genesis_qc = certificate_for_genesis();
 
     let block_too_many_txns = Block::new_proposal_ext(
-        vec![ValidatorTransaction::dummy(vec![0xFF; 20]); 11],
+        vec![ValidatorTransaction::dummy1(vec![0xFF; 20]); 11],
         Payload::empty(false),
         1,
         1,
@@ -2086,7 +2084,7 @@ fn no_vote_on_proposal_ext_when_receiving_limit_exceeded() {
     .unwrap();
 
     let block_too_large = Block::new_proposal_ext(
-        vec![ValidatorTransaction::dummy(vec![0xFF; 30]); 10],
+        vec![ValidatorTransaction::dummy1(vec![0xFF; 30]); 10],
         Payload::empty(false),
         1,
         1,
@@ -2097,7 +2095,7 @@ fn no_vote_on_proposal_ext_when_receiving_limit_exceeded() {
     .unwrap();
 
     let valid_block = Block::new_proposal_ext(
-        vec![ValidatorTransaction::dummy(vec![0xFF; 25]); 10], // 64 bytes in total
+        vec![ValidatorTransaction::dummy1(vec![0xFF; 16]); 10], // small enough txns
         Payload::empty(false),
         1,
         1,

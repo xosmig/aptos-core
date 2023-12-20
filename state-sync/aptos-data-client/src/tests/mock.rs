@@ -7,10 +7,11 @@ use crate::{
     global_summary::GlobalDataSummary,
     interface::{AptosDataClientInterface, Response, SubscriptionRequestMetadata},
     poller::DataSummaryPoller,
+    priority::PeerPriority,
 };
 use aptos_channels::{aptos_channel, message_queues::QueueStyle};
 use aptos_config::{
-    config::{AptosDataClientConfig, BaseConfig},
+    config::{AptosDataClientConfig, BaseConfig, RoleType},
     network_id::{NetworkId, PeerNetworkId},
 };
 use aptos_netcore::transport::ConnectionOrigin;
@@ -49,11 +50,13 @@ use aptos_network2::protocols::wire::messaging::v1::NetworkMessage;
 
 /// A simple mock network for testing the data client
 pub struct MockNetwork {
+    base_config: BaseConfig,                   // The base config of the node
+    networks: Vec<NetworkId>,                  // The networks that the node is connected to
+    peers_and_metadata: Arc<PeersAndMetadata>, // The peers and metadata struct
     // peer_mgr_reqs_rxs:
-    //     HashMap<NetworkId, aptos_channel::Receiver<(PeerId, ProtocolId), PeerManagerRequest>>,
+    //     HashMap<NetworkId, aptos_channel::Receiver<(PeerId, ProtocolId), PeerManagerRequest>>, // The peer manager request receivers
     peer_senders: Arc<OutboundPeerConnections>,
     peer_receivers: HashMap<PeerNetworkId, tokio::sync::mpsc::Receiver<NetworkMessage>>,
-    peers_and_metadata: Arc<PeersAndMetadata>,
 }
 
 impl MockNetwork {
@@ -111,7 +114,7 @@ impl MockNetwork {
         let data_client_config = data_client_config.unwrap_or_default();
         let (client, poller) = AptosDataClient::new(
             data_client_config,
-            base_config,
+            base_config.clone(),
             mock_time.clone(),
             create_mock_db_reader(),
             storage_service_client,
@@ -120,6 +123,8 @@ impl MockNetwork {
 
         // Create the mock network
         let mock_network = Self {
+            base_config,
+            networks,
             peer_mgr_reqs_rxs,
             peers_and_metadata,
         };
@@ -128,14 +133,41 @@ impl MockNetwork {
     }
 
     /// Add a new peer to the network peer DB
-    pub fn add_peer(&mut self, priority: bool) -> PeerNetworkId {
-        // Get the network id
-        let network_id = if priority {
-            NetworkId::Validator
-        } else {
-            NetworkId::Public
+    pub fn add_peer(&mut self, peer_priority: PeerPriority) -> PeerNetworkId {
+        // Determine the network ID and connection direction
+        // based on the given peer priority and the node role.
+        let (network_id, outbound_connection) = match self.base_config.role {
+            RoleType::Validator => {
+                // Validators prioritize other validators, then VFNs, then PFNs
+                match peer_priority {
+                    PeerPriority::HighPriority => (NetworkId::Validator, true),
+                    PeerPriority::MediumPriority => (NetworkId::Vfn, false),
+                    PeerPriority::LowPriority => (NetworkId::Public, false),
+                }
+            },
+            RoleType::FullNode => {
+                if self.networks.contains(&NetworkId::Vfn) {
+                    // VFNs prioritize validators, then other VFNs, then PFNs
+                    match peer_priority {
+                        PeerPriority::HighPriority => (NetworkId::Vfn, true),
+                        PeerPriority::MediumPriority => (NetworkId::Public, true), // Outbound connection to VFN
+                        PeerPriority::LowPriority => (NetworkId::Public, false), // Inbound connection from PFN
+                    }
+                } else {
+                    // PFNs prioritize VFNs, then other PFNs
+                    match peer_priority {
+                        PeerPriority::HighPriority => (NetworkId::Public, true), // Outbound connection to VFN
+                        PeerPriority::MediumPriority => {
+                            unimplemented!("Medium priority peers are not yet supported for PFNs!")
+                        },
+                        PeerPriority::LowPriority => (NetworkId::Public, false), // Inbound connection from PFN
+                    }
+                }
+            },
         };
-        self.add_peer_with_network_id(network_id, false)
+
+        // Create and add the new peer
+        self.add_peer_with_network_id(network_id, outbound_connection)
     }
 
     /// Add a new peer to the network peer DB with the specified network

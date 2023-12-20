@@ -8,6 +8,7 @@
 //! After transformation, this also runs copy inference transformation, which inserts
 //! copies as needed, and reports errors for invalid copies.
 
+use super::ability_checker::check_copy;
 use codespan_reporting::diagnostic::Severity;
 use itertools::Itertools;
 use move_binary_format::file_format::CodeOffset;
@@ -52,10 +53,31 @@ pub struct LiveVarInfoAtCodeOffset {
     pub after: BTreeMap<TempIndex, LiveVarInfo>,
 }
 
+impl LiveVarInfoAtCodeOffset {
+    /// Returns the temporaries that are alive before the program point and dead after.
+    pub fn released_temps(&self) -> impl Iterator<Item = TempIndex> + '_ {
+        // TODO: make this linear
+        self.before
+            .keys()
+            .filter(|t| !self.after.contains_key(t))
+            .cloned()
+    }
+
+    /// Creates a set of the temporaries alive before this program point.
+    pub fn before_set(&self) -> BTreeSet<TempIndex> {
+        self.before.keys().cloned().collect()
+    }
+
+    /// Creates a set of the temporaries alive after this program point.
+    pub fn after_set(&self) -> BTreeSet<TempIndex> {
+        self.after.keys().cloned().collect()
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd)]
 pub struct LiveVarInfo {
     /// The usage of a given temporary after this program point, inclusive of locations where
-    /// the usage happens.
+    /// the usage happens. This set contains at least one element.
     pub usages: BTreeSet<Loc>,
 }
 
@@ -166,12 +188,8 @@ impl<'a> TransferFunctions for LiveVarAnalysis<'a> {
         use Bytecode::*;
         match instr {
             Assign(id, dst, src, _) => {
-                // Only if dst is used afterwards account for usage. Otherwise this is dead
-                // code.
-                if state.livevars.contains_key(dst) {
-                    state.livevars.remove(dst);
-                    state.livevars.insert(*src, self.livevar_info(id));
-                }
+                state.livevars.remove(dst);
+                state.livevars.insert(*src, self.livevar_info(id));
             },
             Load(_, dst, _) => {
                 state.livevars.remove(dst);
@@ -246,7 +264,11 @@ impl<'a> CopyTransformation<'a> {
         match bc {
             Assign(id, dst, src, kind) => match kind {
                 AssignKind::Inferred => {
-                    if self.check_implicit_copy(alive, id, false, src) {
+                    // TODO(#11223): Until we have info about whether a var may have had a reference
+                    // taken, be very conservative here and assume var is live.  Remove this hack
+                    // after fixing that bug.
+                    let force_copy_hack = !self.target().get_local_type(src).is_mutable_reference();
+                    if force_copy_hack || self.check_implicit_copy(alive, id, false, src) {
                         self.data.code.push(Assign(id, dst, src, AssignKind::Copy))
                     } else {
                         self.data.code.push(Assign(id, dst, src, AssignKind::Move))
@@ -306,36 +328,25 @@ impl<'a> CopyTransformation<'a> {
         &self,
         alive: &LiveVarInfoAtCodeOffset,
         id: AttrId,
-        is_updated: bool,
+        _is_updated: bool,
         temp: TempIndex,
     ) -> bool {
-        if let Some(info) = alive.after.get(&temp) {
+        // Notice we do allow copy of &mut. Those copies are checked for validity in
+        // reference safety.
+        let needed = alive.after.contains_key(&temp);
+        if needed {
             let target = self.target();
-            if target.get_local_type(temp).is_mutable_reference() {
-                if !is_updated {
-                    // If this is a &mut which is not updated (e.g. a function call argument)
-                    // produce an error. &mut arguments play a special role, they are used
-                    // and updated at the same time. Therefore subsequent usage without copy is
-                    // fine, as it conceptually refers to a new instance for the same variable.
-                    self.error_with_hints(
-                        &target.get_bytecode_loc(id),
-                        format!(
-                            "implicit copy of mutable reference in {} which is used later",
-                            target.get_local_name_for_error_message(temp)
-                        ),
-                        "implicitly copied here",
-                        self.make_hints_from_usage(info),
-                    );
-                }
-                // Don't copy &mut
-                false
-            } else {
-                // TODO(#10723): insert ability check here
-                true
-            }
-        } else {
-            false
+            check_copy(
+                &target,
+                target.get_local_type(temp),
+                &target.get_bytecode_loc(id),
+                &format!(
+                    "cannot copy {} implicitly",
+                    target.get_local_name_for_error_message(temp)
+                ),
+            );
         }
+        needed
     }
 
     fn make_hints_from_usage(
@@ -345,6 +356,20 @@ impl<'a> CopyTransformation<'a> {
         info.usages
             .iter()
             .map(|loc| (loc.clone(), "used here".to_owned()))
+    }
+
+    /// Checks whether the given temp has copy ability
+    /// add diagnostics if not
+    fn check_copy_for_temp(&self, target: &FunctionTarget, temp: TempIndex, id: AttrId) {
+        check_copy(
+            target,
+            target.get_local_type(temp),
+            &target.get_bytecode_loc(id),
+            &format!(
+                "cannot copy {} implicitly",
+                target.get_local_name_for_error_message(temp)
+            ),
+        );
     }
 
     /// Checks whether an implicit copy is needed because the value is used again in
@@ -372,7 +397,7 @@ impl<'a> CopyTransformation<'a> {
                 );
                 false
             } else {
-                // TODO(#10723): insert ability check here
+                self.check_copy_for_temp(&target, temp, id);
                 true
             }
         } else {
@@ -393,8 +418,9 @@ impl<'a> CopyTransformation<'a> {
                 "copied here",
                 empty(),
             );
+        } else {
+            self.check_copy_for_temp(&target, temp, id)
         }
-        // TODO(#10723): insert ability check here
     }
 
     /// Checks whether an explicit move is allowed.

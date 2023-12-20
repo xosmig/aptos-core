@@ -4,7 +4,7 @@
 //! Scratchpad for on chain values during the execution.
 
 use crate::{
-    aptos_vm_impl::gas_config,
+    gas::get_gas_config_from_storage,
     move_vm_ext::{
         get_max_binary_format_version, get_max_identifier_size, AptosMoveResolver, AsExecutorView,
         AsResourceGroupView, ResourceGroupResolver,
@@ -17,7 +17,6 @@ use aptos_aggregator::{
     resolver::{TAggregatorV1View, TDelayedFieldView},
     types::{DelayedFieldID, DelayedFieldValue, DelayedFieldsSpeculativeError, PanicOr},
 };
-use aptos_state_view::{StateView, StateViewId};
 use aptos_table_natives::{TableHandle, TableResolver};
 use aptos_types::{
     access_path::AccessPath,
@@ -26,14 +25,15 @@ use aptos_types::{
     state_store::{
         state_key::StateKey,
         state_storage_usage::StateStorageUsage,
-        state_value::{StateValue, StateValueMetadataKind},
+        state_value::{StateValue, StateValueMetadata},
+        StateView, StateViewId,
     },
     write_set::WriteOp,
 };
 use aptos_vm_types::{
     resolver::{
-        ExecutorView, ResourceGroupView, StateStorageView, StateValueMetadataResolver,
-        TResourceGroupView, TResourceView,
+        ExecutorView, ResourceGroupSize, ResourceGroupView, StateStorageView,
+        StateValueMetadataResolver, TResourceGroupView,
     },
     resource_group_adapter::ResourceGroupAdapter,
 };
@@ -63,16 +63,6 @@ pub(crate) fn get_resource_group_from_metadata(
         .get(struct_tag.name.as_ident_str().as_str())?
         .iter()
         .find_map(|attr| attr.get_resource_group_member())
-}
-
-struct ConfigAdapter<'a, K, L>(&'a dyn TResourceView<Key = K, Layout = L>);
-
-impl<'a> ConfigStorage for ConfigAdapter<'a, StateKey, MoveTypeLayout> {
-    fn fetch_config(&self, access_path: AccessPath) -> Option<Bytes> {
-        self.0
-            .get_resource_bytes(&StateKey::access_path(access_path), None)
-            .ok()?
-    }
 }
 
 /// Adapter to convert a `ExecutorView` into a `AptosMoveResolver`.
@@ -160,6 +150,7 @@ impl<'e, E: ExecutorView> StorageAdapter<'e, E> {
                 self.resource_group_view
                     .resource_group_size(&key)
                     .map_err(common_error)?
+                    .get()
             } else {
                 0
             };
@@ -191,7 +182,7 @@ impl<'e, E: ExecutorView> ResourceGroupResolver for StorageAdapter<'e, E> {
         self.resource_group_view.release_group_cache()
     }
 
-    fn resource_group_size(&self, group_key: &StateKey) -> anyhow::Result<u64> {
+    fn resource_group_size(&self, group_key: &StateKey) -> anyhow::Result<ResourceGroupSize> {
         self.resource_group_view.resource_group_size(group_key)
     }
 
@@ -199,7 +190,7 @@ impl<'e, E: ExecutorView> ResourceGroupResolver for StorageAdapter<'e, E> {
         &self,
         group_key: &StateKey,
         resource_tag: &StructTag,
-    ) -> anyhow::Result<u64> {
+    ) -> anyhow::Result<usize> {
         self.resource_group_view
             .resource_size_in_group(group_key, resource_tag)
     }
@@ -353,9 +344,8 @@ pub trait AsMoveResolver<S> {
 
 impl<S: StateView> AsMoveResolver<S> for S {
     fn as_move_resolver(&self) -> StorageAdapter<S> {
-        let config_view = ConfigAdapter(self);
-        let (_, gas_feature_version) = gas_config(&config_view);
-        let features = Features::fetch_config(&config_view).unwrap_or_default();
+        let (_, gas_feature_version) = get_gas_config_from_storage(self);
+        let features = Features::fetch_config(self).unwrap_or_default();
         let max_binary_version =
             get_max_binary_format_version(&features, Some(gas_feature_version));
         let resource_group_adapter = ResourceGroupAdapter::new(
@@ -388,7 +378,7 @@ impl<'e, E: ExecutorView> StateValueMetadataResolver for StorageAdapter<'e, E> {
     fn get_module_state_value_metadata(
         &self,
         state_key: &StateKey,
-    ) -> anyhow::Result<Option<StateValueMetadataKind>> {
+    ) -> anyhow::Result<Option<StateValueMetadata>> {
         self.executor_view
             .get_module_state_value_metadata(state_key)
     }
@@ -396,7 +386,7 @@ impl<'e, E: ExecutorView> StateValueMetadataResolver for StorageAdapter<'e, E> {
     fn get_resource_state_value_metadata(
         &self,
         state_key: &StateKey,
-    ) -> anyhow::Result<Option<StateValueMetadataKind>> {
+    ) -> anyhow::Result<Option<StateValueMetadata>> {
         self.executor_view
             .get_resource_state_value_metadata(state_key)
     }

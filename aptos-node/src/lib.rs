@@ -15,16 +15,21 @@ pub mod utils;
 #[cfg(test)]
 mod tests;
 
+use crate::network2::ApplicationNetworkInterfaces;
 use anyhow::anyhow;
 use aptos_admin_service::AdminService;
 use aptos_api::bootstrap as bootstrap_api;
 use aptos_build_info::build_information;
+use aptos_channels::{aptos_channel, message_queues::QueueStyle};
 use aptos_config::config::{merge_node_config, NodeConfig, PersistableConfig};
+use aptos_dkg_runtime::start_dkg_runtime;
 use aptos_framework::ReleaseBundle;
+use aptos_jwk_consensus::start_jwk_consensus_runtime;
 use aptos_logger::{prelude::*, telemetry_log_writer::TelemetryLog, Level, LoggerFilterUpdater};
 use aptos_network2::application::ApplicationCollector;
 use aptos_state_sync_driver::driver_factory::StateSyncRuntimes;
-use aptos_types::{chain_id::ChainId, validator_txn::pool::ValidatorTransactionPool};
+use aptos_types::{chain_id::ChainId, validator_txn::Topic};
+use aptos_validator_transaction_pool as vtxn_pool;
 use clap::Parser;
 use futures::channel::mpsc;
 use hex::{FromHex, FromHexError};
@@ -189,8 +194,11 @@ pub struct AptosHandle {
     _api_runtime: Option<Runtime>,
     _backup_runtime: Option<Runtime>,
     _consensus_runtime: Option<Runtime>,
+    _dkg_runtime: Option<Runtime>,
     _indexer_grpc_runtime: Option<Runtime>,
     _indexer_runtime: Option<Runtime>,
+    _indexer_table_info_runtime: Option<Runtime>,
+    _jwk_consensus_runtime: Option<Runtime>,
     _mempool_runtime: Runtime,
     _network_runtimes: Vec<Runtime>,
     _peer_monitoring_service_runtime: Runtime,
@@ -563,7 +571,7 @@ pub fn setup_environment_and_start_node(
     let admin_service = services::start_admin_service(&node_config);
 
     // Set up the storage database and any RocksDB checkpoints
-    let (aptos_db, db_rw, backup_service, genesis_waypoint) =
+    let (db_rw, backup_service, genesis_waypoint) =
         storage::initialize_database_and_checkpoints(&mut node_config)?;
 
     admin_service.set_aptos_db(db_rw.clone().into());
@@ -624,6 +632,8 @@ pub fn setup_environment_and_start_node(
     let storage_service_network_interfaces = network2::storage_service_network_connections(&mut apps, &app_setup);
     let mempool_network_interfaces = network2::mempool_network_connections(&mut apps, &app_setup);
     let consensus_network_interfaces = network2::consensus_network_connections(&mut apps, &app_setup);
+    let dkg_network_interfaces = network2::dkg_network_connections(&mut apps, &app_setup);
+    let jwk_consensus_network_interfaces = network2::jwk_consensus_network_connections(&mut apps, &app_setup);
     let netbench_network_interfaces = network2::netbench_network_connections(&mut apps, &app_setup);
 
     for (protocol_id, ac) in apps.iter() {
@@ -660,8 +670,13 @@ pub fn setup_environment_and_start_node(
     );
 
     // Bootstrap the API and indexer
-    let (mempool_client_receiver, api_runtime, indexer_runtime, indexer_grpc_runtime) =
-        services::bootstrap_api_and_indexer(&node_config, aptos_db, chain_id)?;
+    let (
+        mempool_client_receiver,
+        api_runtime,
+        indexer_table_info_runtime,
+        indexer_runtime,
+        indexer_grpc_runtime,
+    ) = services::bootstrap_api_and_indexer(&node_config, db_rw.clone(), chain_id)?;
 
     // Create mempool and get the consensus to mempool sender
     let (mempool_runtime, consensus_to_mempool_sender) =
@@ -674,8 +689,44 @@ pub fn setup_environment_and_start_node(
             mempool_client_receiver,
             peers_and_metadata.clone(),
         );
+    let (dkg_txn_pulled_tx, dkg_txn_pulled_rx) = aptos_channel::new(QueueStyle::FIFO, 1, None);
+    let (vtxn_read_client, mut txn_write_clients) = vtxn_pool::new(vec![
+        (Topic::DKG, Some(dkg_txn_pulled_tx)),
+        (Topic::JWK_CONSENSUS, None),
+    ]);
+    let vtxn_pool_writer_for_jwk = txn_write_clients.pop().unwrap();
+    let vtxn_pool_writer_for_dkg = txn_write_clients.pop().unwrap();
 
-    let validator_txn_pool = Arc::new(ValidatorTransactionPool::new());
+    let dkg_runtime = if let Some(obj) = dkg_network_interfaces {
+        let ApplicationNetworkInterfaces {
+            network_client,
+            network_events,
+        } = obj;
+        let dkg_runtime = start_dkg_runtime(
+            network_client,
+            network_events,
+            vtxn_pool_writer_for_dkg,
+            dkg_txn_pulled_rx,
+        );
+        Some(dkg_runtime)
+    } else {
+        None
+    };
+
+    let jwk_consensus_runtime = if let Some(obj) = jwk_consensus_network_interfaces {
+        let ApplicationNetworkInterfaces {
+            network_client,
+            network_events,
+        } = obj;
+        let jwk_consensus_runtime = start_jwk_consensus_runtime(
+            network_client,
+            network_events,
+            vtxn_pool_writer_for_jwk,
+        );
+        Some(jwk_consensus_runtime)
+    } else {
+        None
+    };
 
     // Create the consensus runtime (this blocks on state sync first)
     let consensus_runtime = consensus_network_interfaces.map(|consensus_network_interfaces| {
@@ -692,7 +743,7 @@ pub fn setup_environment_and_start_node(
             consensus_network_interfaces,
             consensus_notifier,
             consensus_to_mempool_sender,
-            validator_txn_pool,
+            vtxn_read_client,
         );
         admin_service.set_consensus_dbs(consensus_db, quorum_store_db);
         runtime
@@ -715,8 +766,11 @@ pub fn setup_environment_and_start_node(
         _api_runtime: api_runtime,
         _backup_runtime: backup_service,
         _consensus_runtime: consensus_runtime,
+        _dkg_runtime: dkg_runtime,
         _indexer_grpc_runtime: indexer_grpc_runtime,
         _indexer_runtime: indexer_runtime,
+        _indexer_table_info_runtime: indexer_table_info_runtime,
+        _jwk_consensus_runtime: jwk_consensus_runtime,
         _mempool_runtime: mempool_runtime,
         _network_runtimes: network_runtimes,
         _peer_monitoring_service_runtime: peer_monitoring_service_runtime,

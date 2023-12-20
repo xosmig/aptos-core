@@ -16,6 +16,7 @@ use crate::{
             SpecOrBuiltinFunEntry,
         },
     },
+    constant_folder::ConstantFolder,
     exp_rewriter::{ExpRewriter, ExpRewriterFunctions, RewriteTarget},
     intrinsics::process_intrinsic_declaration,
     model::{
@@ -428,7 +429,7 @@ impl<'env, 'translator> ModuleBuilder<'env, 'translator> {
         if self.parent.const_table.contains_key(&qsym) {
             self.parent.env.error(
                 &self.parent.to_loc(&name.loc()),
-                &format!("duplicate declaration of `{}`", &name.value()),
+                &format!("duplicate declaration of const `{}`", &name.value()),
             )
         }
         let mut et = ExpTranslator::new(self);
@@ -458,7 +459,7 @@ impl<'env, 'translator> ModuleBuilder<'env, 'translator> {
         let type_params = et.analyze_and_add_type_params(
             def.type_parameters
                 .iter()
-                .map(|s| (&s.name, &s.constraints)),
+                .map(|s| (&s.name, &s.constraints, s.is_phantom)),
         );
         et.parent.parent.define_struct(
             et.to_loc(&def.loc),
@@ -484,8 +485,12 @@ impl<'env, 'translator> ModuleBuilder<'env, 'translator> {
         let attributes = self.translate_attributes(&def.attributes);
         let mut et = ExpTranslator::new(self);
         et.enter_scope();
-        let type_params = et
-            .analyze_and_add_type_params(def.signature.type_parameters.iter().map(|(n, a)| (n, a)));
+        let type_params = et.analyze_and_add_type_params(
+            def.signature
+                .type_parameters
+                .iter()
+                .map(|(n, a)| (n, a, false)),
+        );
         et.enter_scope();
         let params = et.analyze_and_add_params(&def.signature.parameters, true);
         let result_type = et.translate_type(&def.signature.return_type);
@@ -742,8 +747,9 @@ impl<'env, 'translator> ModuleBuilder<'env, 'translator> {
         for_move_fun: bool,
     ) -> (Vec<TypeParameter>, Vec<Parameter>, Type) {
         let et = &mut ExpTranslator::new(self);
-        let type_params =
-            et.analyze_and_add_type_params(signature.type_parameters.iter().map(|(n, a)| (n, a)));
+        let type_params = et.analyze_and_add_type_params(
+            signature.type_parameters.iter().map(|(n, a)| (n, a, false)),
+        );
         et.enter_scope();
         let params = et.analyze_and_add_params(&signature.parameters, for_move_fun);
         let result_type = et.translate_type(&signature.return_type);
@@ -763,7 +769,8 @@ impl<'env, 'translator> ModuleBuilder<'env, 'translator> {
         let name = self.symbol_pool().make(name.value.as_str());
         let (type_params, type_) = {
             let et = &mut ExpTranslator::new(self);
-            let type_params = et.analyze_and_add_type_params(type_params);
+            let type_params =
+                et.analyze_and_add_type_params(type_params.into_iter().map(|(n, a)| (n, a, false)));
             let type_ = et.translate_type(type_);
             (type_params, type_)
         };
@@ -804,7 +811,8 @@ impl<'env, 'translator> ModuleBuilder<'env, 'translator> {
         let qsym = self.qualified_by_module_from_name(name);
         let mut et = ExpTranslator::new(self);
         et.enter_scope();
-        let type_params = et.analyze_and_add_type_params(type_params);
+        let type_params =
+            et.analyze_and_add_type_params(type_params.into_iter().map(|(n, a)| (n, a, false)));
         // Extract local variables.
         let mut vars = vec![];
         for member in &block.value.members {
@@ -1136,8 +1144,6 @@ impl<'env, 'translator> ModuleBuilder<'env, 'translator> {
         };
         let name = qsym.symbol;
         let const_name = ConstantName(self.symbol_pool().string(name).to_string().into());
-        let mut et = ExpTranslator::new(self);
-        et.set_translate_move_fun();
         let value = if let Some(BytecodeModule {
             compiled_module,
             source_map,
@@ -1153,23 +1159,47 @@ impl<'env, 'translator> ModuleBuilder<'env, 'translator> {
                 &compiled_module.constant_pool()[*const_idx as usize],
             )
             .unwrap();
+            let mut et = ExpTranslator::new(self);
+            et.set_translate_move_fun();
             et.translate_from_move_value(&loc, &ty, &move_value)
         } else {
             // Type check the constant.
-            let exp = et.translate_exp(&def.value, &ty);
-            if !exp.is_valid_for_constant() {
-                et.error(
-                    &et.get_node_loc(exp.node_id()),
-                    "not a valid constant expression",
+            let mut et = ExpTranslator::new(self);
+            et.set_translate_move_fun();
+            let exp = et.translate_exp(&def.value, &ty).into_exp();
+            et.finalize_types();
+            let mut reasons: Vec<(Loc, String)> = Vec::new();
+            let mut ok = true;
+            if !exp.is_valid_for_constant(self.parent.env, &mut reasons) {
+                self.parent.env.diag_with_labels(
+                    Severity::Error,
+                    &self.parent.env.get_node_loc(exp.node_id()),
+                    "Not a valid constant expression.",
+                    reasons,
                 );
-                Value::Bool(false)
-            } else if let ExpData::Value(_, value) = exp {
-                value
+                ok = false;
+            }
+            if !ty.is_valid_for_constant() {
+                let reasons = vec![(loc, Type::describe_valid_for_constant().to_owned())];
+                self.parent.env.diag_with_labels(
+                    Severity::Error,
+                    &self.parent.env.get_node_loc(exp.node_id()),
+                    "Invalid type for constant",
+                    reasons,
+                );
+                ok = false;
+            }
+            if ok {
+                let mut folder = ConstantFolder::new(self.parent.env);
+                let rewritten = folder.rewrite_exp(exp);
+                if let ExpData::Value(_, value) = rewritten.as_ref() {
+                    value.clone()
+                } else {
+                    // The constant folder failed, but it already
+                    // generated error diagnostics as needed.
+                    Value::Bool(false)
+                }
             } else {
-                et.error(
-                    &et.get_node_loc(exp.node_id()),
-                    "constant expression must be a literal",
-                );
                 Value::Bool(false)
             }
         };
@@ -1184,25 +1214,78 @@ impl<'env, 'translator> ModuleBuilder<'env, 'translator> {
 /// ## Struct Definition Analysis
 
 impl<'env, 'translator> ModuleBuilder<'env, 'translator> {
+    /// Same as ModelBuilder::infer_abilities_may_have
+    fn infer_abilities_may_have(&self, ty: &Type) -> AbilitySet {
+        self.parent.infer_abilities_may_have(ty)
+    }
+
+    /// Checks whether a struct's field type `field_ty` has the abilities required by the declared abilities `struct_abilities` of the struct.
+    fn ability_check_field(
+        &self,
+        struct_abilities: AbilitySet,
+        struct_name: &QualifiedSymbol,
+        field_ty: &Type,
+        field_ty_loc: &Loc,
+    ) {
+        let field_abilities = self.infer_abilities_may_have(field_ty);
+        for ability in field_missing_abilities(struct_abilities, field_abilities) {
+            match ability {
+                Ability::Copy => self.parent.error(
+                    field_ty_loc,
+                    &format!(
+                        "field must have copy ability because {} is declared with copy ability",
+                        struct_name.display_simple(self.parent.env)
+                    ),
+                ),
+                Ability::Drop => self.parent.error(
+                    field_ty_loc,
+                    &format!(
+                        "field must have drop ability because {} is declared with drop ability",
+                        struct_name.display_simple(self.parent.env)
+                    ),
+                ),
+                Ability::Store => {
+                    let mut abilities = Vec::new();
+                    if struct_abilities.has_store() {
+                        abilities.push("store");
+                    }
+                    if struct_abilities.has_key() {
+                        abilities.push("key");
+                    }
+                    self.parent.error(
+                        field_ty_loc,
+                        &format!(
+                            "field must have store ability because {} is declared with {}",
+                            struct_name.display_simple(self.parent.env),
+                            abilities.join(" + ")
+                        ),
+                    );
+                },
+                Ability::Key => panic!("ICE check_field: field missing key ability"),
+            }
+        }
+    }
+
     fn def_ana_struct(&mut self, name: &PA::StructName, def: &EA::StructDefinition) {
         let qsym = self.qualified_by_module_from_name(&name.0);
-        let type_params = self
-            .parent
-            .struct_table
-            .get(&qsym)
-            .expect("struct invalid")
-            .type_params
-            .clone();
+        let struct_entry = self.parent.struct_table.get(&qsym).expect("struct invalid");
+        let struct_abilities = struct_entry.abilities;
+        let type_params = struct_entry.type_params.clone();
         let mut et = ExpTranslator::new(self);
         let loc = et.to_loc(&name.0.loc);
         et.define_type_params(&loc, &type_params, false);
         let fields = match &def.fields {
             EA::StructFields::Defined(fields) => {
                 let mut field_map = BTreeMap::new();
+                let mut field_ty_and_locs = Vec::new(); // fix borrowing issues
                 for (name_loc, field_name_, (idx, ty)) in fields {
                     let field_loc = et.to_loc(&name_loc);
                     let field_sym = et.symbol_pool().make(field_name_);
                     let field_ty = et.translate_type(ty);
+                    let field_ty_loc = et.to_loc(&ty.loc);
+                    // store the `field_ty` and `field_ty_loc` to process with `ability_check_field`
+                    // outside of this loop to avoid borrow issues
+                    field_ty_and_locs.push((field_ty.clone(), field_ty_loc));
                     field_map.insert(field_sym, (field_loc, *idx, field_ty));
                 }
                 if field_map.is_empty() {
@@ -1213,6 +1296,9 @@ impl<'env, 'translator> ModuleBuilder<'env, 'translator> {
                     let field_ty = Type::new_prim(PrimitiveType::Bool);
                     field_map.insert(field_sym, (loc.clone(), 0, field_ty));
                 }
+                for (field_ty, field_ty_loc) in field_ty_and_locs {
+                    self.ability_check_field(struct_abilities, &qsym, &field_ty, &field_ty_loc);
+                }
                 Some(field_map)
             },
             EA::StructFields::Native(_) => None,
@@ -1222,6 +1308,8 @@ impl<'env, 'translator> ModuleBuilder<'env, 'translator> {
             .get_mut(&qsym)
             .expect("struct invalid")
             .fields = fields;
+        self.parent
+            .ability_check_struct_def(self.parent.struct_table.get(&qsym).expect("struct invalid"));
     }
 
     /// The name of a dummy field the legacy Move compilers adds to zero-arity structs.
@@ -1280,7 +1368,7 @@ impl<'env, 'translator> ModuleBuilder<'env, 'translator> {
                 };
                 let mut result = et.translate_seq(&loc, seq, &result_type);
                 et.finalize_types();
-                result = et.post_process_placeholders(result.into_exp()).into();
+                result = et.post_process_body(result.into_exp()).into();
                 (result, access_specifiers)
             };
 
@@ -3213,7 +3301,7 @@ impl<'env, 'translator> ModuleBuilder<'env, 'translator> {
                             .value
                             .type_parameters
                             .iter()
-                            .map(|(n, _)| (n, &ability_set)),
+                            .map(|(n, _)| (n, &ability_set, false)),
                     );
                     et.get_type_params()
                 };
@@ -3730,4 +3818,23 @@ pub(crate) fn extract_schema_access<'a>(exp: &'a EA::Exp, res: &mut Vec<&'a EA::
         },
         _ => {},
     }
+}
+
+/// Returns the abilities that a struct's field should have but does not, based on constraints placed by the containing struct.
+fn field_missing_abilities(
+    struct_abilities: AbilitySet,
+    field_abilities: AbilitySet,
+) -> AbilitySet {
+    let mut missing_abilities = AbilitySet::EMPTY;
+    if struct_abilities.has_copy() && !field_abilities.has_copy() {
+        missing_abilities = missing_abilities.add(Ability::Copy);
+    }
+    if struct_abilities.has_drop() && !field_abilities.has_drop() {
+        missing_abilities = missing_abilities.add(Ability::Drop);
+    }
+    if (struct_abilities.has_store() || struct_abilities.has_key()) && !field_abilities.has_store()
+    {
+        missing_abilities = missing_abilities.add(Ability::Store)
+    }
+    missing_abilities
 }

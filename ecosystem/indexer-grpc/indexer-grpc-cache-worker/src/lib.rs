@@ -19,6 +19,20 @@ pub struct IndexerGrpcCacheWorkerConfig {
     pub redis_main_instance_address: RedisUrl,
 }
 
+impl IndexerGrpcCacheWorkerConfig {
+    pub fn new(
+        fullnode_grpc_address: Url,
+        file_store_config: IndexerGrpcFileStoreConfig,
+        redis_main_instance_address: RedisUrl,
+    ) -> Self {
+        Self {
+            fullnode_grpc_address,
+            file_store_config,
+            redis_main_instance_address,
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl RunnableConfig for IndexerGrpcCacheWorkerConfig {
     async fn run(&self) -> Result<()> {
