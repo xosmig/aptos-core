@@ -138,15 +138,16 @@ impl<T: StorageReaderInterface> Handler<T> {
                 );
 
                 // Periodically log the validation failure
-                sample!(
-                        SampleRate::Duration(Duration::from_secs(INVALID_REQUEST_LOG_FREQUENCY_SECS)),
+                // TODO: turn sample back on
+                // sample!(
+                //         SampleRate::Duration(Duration::from_secs(INVALID_REQUEST_LOG_FREQUENCY_SECS)),
                         error!(LogSchema::new(LogEntry::StorageServiceError)
                             .error(&error)
                             .peer_network_id(peer_network_id)
                             .request(&request)
                             .optimistic_fetch_related(optimistic_fetch_related)
                     );
-                );
+                // );
 
                 // Return an appropriate response to the client
                 match error {
