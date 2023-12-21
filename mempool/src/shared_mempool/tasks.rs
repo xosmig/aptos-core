@@ -62,6 +62,7 @@ pub(crate) async fn execute_broadcast<NetworkClient, TransactionValidator>(
             .execute_broadcast(peer, backoff, smp)
             .await
         {
+            counters::network_send_fail_inc("eb");
             match err {
                 BroadcastError::NetworkError(peer, error) => warn!(LogSchema::event_log(
                     LogEntry::BroadcastTransaction,
