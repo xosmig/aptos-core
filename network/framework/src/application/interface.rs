@@ -124,8 +124,8 @@ impl<Message: NetworkMessageTrait + Clone> NetworkClient<Message> {
 
     /// Identify the supported protocols from the specified peer's connection
     fn get_supported_protocols(&self, peer: &PeerNetworkId) -> Result<ProtocolIdSet, Error> {
-        let peers_and_metadata = self.get_peers_and_metadata();
-        peers_and_metadata
+        //let peers_and_metadata = self.get_peers_and_metadata();
+        self.peers_and_metadata
             .get_metadata_for_peer(*peer)
             .map(|peer_metadata| peer_metadata.get_supported_protocols())
     }
