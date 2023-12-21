@@ -296,6 +296,11 @@ impl PeersAndMetadata {
         peer_network_id: PeerNetworkId,
         connection_metadata: ConnectionMetadata,
     ) -> Result<(), Error> {
+        info!(
+            peer = peer_network_id.to_string(),
+            op = "icm",
+            "pamtrace"
+        );
         let mut writer = self.peers_and_metadata.write();
         let peer_metadata_for_network = writer.get_mut(&peer_network_id.network_id()).unwrap();
         self.generation.fetch_add(1 , Ordering::SeqCst);
@@ -321,6 +326,11 @@ impl PeersAndMetadata {
         peer_network_id: PeerNetworkId,
         connection_state: ConnectionState,
     ) -> Result<(), Error> {
+        info!(
+            peer = peer_network_id.to_string(),
+            op = "ucs",
+            "pamtrace"
+        );
         let mut writer = self.peers_and_metadata.write();
         let peer_metadata_for_network = writer.get_mut(&peer_network_id.network_id()).unwrap();
 
@@ -360,6 +370,11 @@ impl PeersAndMetadata {
         peer_network_id: PeerNetworkId,
         peer_monitoring_metadata: PeerMonitoringMetadata,
     ) -> Result<(), Error> {
+        info!(
+            peer = peer_network_id.to_string(),
+            op = "upmm",
+            "pamtrace"
+        );
         let mut writer = self.peers_and_metadata.write();
         let peer_metadata_for_network = writer.get_mut(&peer_network_id.network_id()).unwrap();
 
@@ -383,6 +398,11 @@ impl PeersAndMetadata {
         peer_network_id: PeerNetworkId,
         connection_id: ConnectionId,
     ) -> Result<PeerMetadata, Error> {
+        info!(
+            peer = peer_network_id.to_string(),
+            op = "rpm",
+            "pamtrace"
+        );
         let mut writer = self.peers_and_metadata.write();
         let peer_metadata_for_network = writer.get_mut(&peer_network_id.network_id()).unwrap();
 
