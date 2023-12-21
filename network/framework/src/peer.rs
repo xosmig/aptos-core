@@ -230,6 +230,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
     }
 
     async fn run(mut self, mut closed: Closer) {
+        let mut close_reason = "unk";
         loop {
             let mm = if self.large_message.is_some() {
                 if self.send_large || self.next_large_msg.is_some() {
@@ -237,6 +238,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                 } else {
                     match self.try_next_msg().await {
                         None => {
+                            close_reason = "try_next_msg None";
                             error!("try_next_msg None where it should be Some");
                             break;
                         }
@@ -254,6 +256,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                     tokio::select! {
                         high_prio = self.to_send_high_prio.recv() => match high_prio {
                             None => {
+                                close_reason = "writer_thread high prio closed";
                                 info!("writer_thread high prio closed");
                                 break;
                             },
@@ -271,6 +274,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                         },
                         send_result = self.to_send.recv() => match send_result {
                             None => {
+                                close_reason = "writer_thread source closed";
                                 info!("writer_thread source closed");
                                 break;
                             },
@@ -288,6 +292,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                         },
                         // TODO: why does select on close.wait() work below but I did this workaround here?
                         wait_result = closed.done.wait_for(|x| *x) => {
+                            close_reason = "closed done";
                             info!("writer_thread wait result {:?}", wait_result);
                             break;
                         },
@@ -299,6 +304,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                     op = "writer_thread got DisconnectCommand",
                     "peerclose"
                 );
+                close_reason = "got DisconnectCommand";
                 break;
             }
             let data_len = mm.data_len();
@@ -310,11 +316,13 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                     }
                     Err(err) => {
                         // TODO: counter net write err
+                        close_reason = "send error";
                         warn!("writer_thread error sending message to peer: {:?}", err);
                         break;
                     }
                 },
                 _ = closed.wait() => {
+                    close_reason = "closed wait";
                     info!(
                         op = "writer_thread peer writer got closed",
                         "peerclose"
@@ -324,6 +332,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
             }
         }
         info!(
+            reason = close_reason,
             op = "writer_thread closing",
             "peerclose"
         );
@@ -593,11 +602,17 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
 
     async fn run(mut self, mut closed: Closer) {
         info!("read_thread start");
+        let mut close_reason = "unk";
         loop {
             let rrmm = tokio::select! {
                 rrmm = self.reader.next() => {rrmm},
                 _ = closed.done.wait_for(|x| *x) => {
-                    info!("read_thread {} got closed", self.remote_peer_network_id);
+                    info!(
+                        op = "ReadContext::run ext",
+                        reason = "closed done",
+                        peer = self.remote_peer_network_id,
+                        "peerclose"
+                    );
                     return;
                 },
             };
@@ -614,10 +629,13 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
                     }
                     Err(err) => {
                         info!("read_thread {} err {}", self.remote_peer_network_id, err);
+                        close_reason = "reader next err";
+                        // this is not a close reason?
                     }
                 }
                 None => {
                     info!("read_thread {} None", self.remote_peer_network_id);
+                    close_reason = "reader next none";
                     break;
                 }
             };
@@ -625,6 +643,7 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
 
         info!(
             op = "ReadContext::run ext",
+            reason = close_reason,
             "peerclose"
         );
         closed.close().await;
@@ -655,6 +674,7 @@ async fn peer_cleanup_task(
     closed.wait().await;
     info!(
         peer = remote_peer_network_id,
+        op = "cleanup",
         "peerclose"
     );
     peer_senders.remove(&remote_peer_network_id);
