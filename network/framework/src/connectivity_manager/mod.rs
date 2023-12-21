@@ -501,9 +501,9 @@ where
                 // is stale! Close...
                 info!(
                     NetworkSchema::new(&self.network_context).remote_peer(&peer_network_id.peer_id()),
-                    "{} Closing stale connection to peer {}",
-                    self.network_context,
-                    peer_network_id
+                    net = self.network_context,
+                    peer = peer_network_id,
+                    "peerclose"
                 );
 
                 match self.peer_senders.get_generational(self.peer_senders_generation) {

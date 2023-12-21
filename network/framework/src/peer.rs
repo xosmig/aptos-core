@@ -295,7 +295,10 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                 }
             };
             if let MultiplexMessage::Message(NetworkMessage::Error(ErrorCode::DisconnectCommand)) = &mm {
-                info!("writer_thread got DisconnectCommand");
+                info!(
+                    op = "writer_thread got DisconnectCommand",
+                    "peerclose"
+                );
                 break;
             }
             let data_len = mm.data_len();
@@ -312,13 +315,19 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                     }
                 },
                 _ = closed.wait() => {
-                    info!("writer_thread peer writer got closed");
+                    info!(
+                        op = "writer_thread peer writer got closed",
+                        "peerclose"
+                    );
                     break;
                 }
             }
         }
+        info!(
+            op = "writer_thread closing",
+            "peerclose"
+        );
         closed.close().await;
-        info!("writer_thread closing");
     }
 
     // fn split_message(&self, msg: &mut NetworkMessage) -> Vec<u8> {
@@ -614,6 +623,10 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
             };
         }
 
+        info!(
+            op = "ReadContext::run ext",
+            "peerclose"
+        );
         closed.close().await;
     }
 }
@@ -640,7 +653,10 @@ async fn peer_cleanup_task(
     peer_senders: Arc<OutboundPeerConnections>,
 ) {
     closed.wait().await;
-    info!("peer {} closed, cleanup", remote_peer_network_id);
+    info!(
+        peer = remote_peer_network_id,
+        "peerclose"
+    );
     peer_senders.remove(&remote_peer_network_id);
     _ = peers_and_metadata.remove_peer_metadata(remote_peer_network_id, connection_metadata.connection_id);
 }
