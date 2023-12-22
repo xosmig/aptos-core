@@ -95,7 +95,7 @@ fn build_network_connections<T: MessageTrait>(
     counter_label: &str,
     apps: &mut ApplicationCollector,
 ) -> ApplicationNetworkInterfaces<T> {
-    // TODO: pack a map {ProtocolId: Receiver, ...} and allow app code to unpack that out of NetworkSource
+    // If we were to pack a BTreeMap<ProtocolId, Receiver> we could allow application code to handle each ProtocolId with different code more efficiently rather than at this step multiplexing multiple ProtocolId messages over one channel and then possible de-multiplexing them on the app side; but it currently doesn't matter because Consensus is the only service that uses multiple ProtocolId simultaneously and it only uses them for encoding variation (json, BCS, or compressed BCS).
     let mut receivers = vec![];
 
     let network_ids = extract_network_ids(&setup.node_config);
@@ -294,7 +294,6 @@ pub fn setup_networks(
 
     for network_config in network_configs.into_iter() {
         // Create a network runtime for the config
-        // TODO network2: each 'network' probably doesn't need a runtime?
         let runtime = create_network_runtime(&network_config);
 
         // Entering gives us a runtime to instantiate all the pieces of the builder

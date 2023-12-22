@@ -19,8 +19,6 @@ use futures::{AsyncRead, AsyncWrite, AsyncWriteExt, StreamExt};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-/// PeerManager might be more correctly "peer listener" in the new framework?
-/// TODO: move into network/framework
 pub struct PeerListener<TTransport, TSocket>
     where
         TTransport: Transport,
@@ -37,7 +35,6 @@ pub struct PeerListener<TTransport, TSocket>
     _ph2 : PhantomData<TSocket>,
 }
 
-// TODO: move into network/framework
 impl<TTransport, TSocket> PeerListener<TTransport, TSocket>
     where
         TTransport: Transport<Output = Connection<TSocket>> + Send + 'static,
@@ -188,7 +185,7 @@ impl<TTransport, TSocket> PeerListener<TTransport, TSocket>
         }
 
         if already_connected {
-            // TODO network2: old code at network/framework/src/peer_manager/mod.rs PeerManager::add_peer() line 615 had provision for sometimes keeping the new connection, but this simplifies and always _drops_ the new connection
+            // old code at network/framework/src/peer_manager/mod.rs PeerManager::add_peer() line 615 had provision for sometimes keeping the new connection, but this simplifies and always _drops_ the new connection
             info!(
                 NetworkSchema::new(&self.network_context)
                 .connection_metadata_with_address(&conn.metadata),

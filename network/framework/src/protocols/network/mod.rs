@@ -28,7 +28,6 @@ use aptos_config::network_id::{NetworkContext, NetworkId, PeerNetworkId};
 use crate::protocols::wire::messaging::v1::{DirectSendMsg, NetworkMessage, RequestId, RpcRequest, RpcResponse};
 use hex::ToHex;
 use aptos_config::config::RoleType;
-use aptos_infallible::duration_since_epoch;
 use rand;
 
 pub trait Message: DeserializeOwned + Serialize {}
@@ -129,7 +128,6 @@ impl NetworkApplicationConfig {
     }
 }
 
-// TODO network2: is this the final home of ReceivedMessage? better place to put it?
 #[derive(Debug,Clone,PartialEq)]
 pub struct ReceivedMessage {
     pub message: NetworkMessage,
@@ -158,7 +156,7 @@ impl ReceivedMessage {
                 Some(req.protocol_id)
             }
             NetworkMessage::RpcResponse(_response) => {
-                // TODO network2: legacy design of RpcResponse lacking ProtocolId requires global rpc counter (or at least per-peer) and requires reply matching globally or per-peer
+                // design of RpcResponse lacking ProtocolId requires global rpc counter (or at least per-peer) and requires reply matching globally or per-peer
                 None
             }
             NetworkMessage::DirectSendMsg(msg) => {
@@ -323,15 +321,17 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
                         let role_type = mself.contexts.get(&msg.sender.network_id()).unwrap().role();
                         // info!("app_int rpc_req {} id={}, {}b", request.protocol_id, request.request_id, request.raw_request.len());
                         let request_received_start = tokio::time::Instant::now();
-                        // TODO: figure out a way to multi-core protocol_id.from_bytes()
                         let data_len = request.raw_request.len();
+                        // Multi-core decoding protocol_id.from_bytes() is left as an exercise to the application code.
+                        // The easiest approach is pipelining and introducing a short queue of decoded items inside the app, a thread continuously reads from this Stream and stores decoded objects in the app queue, this disconnects decoding from handling, allowing the app to do request handling work while a decode is happening in another thread.
+                        // See network_event_prefetch below.
                         let app_msg = match request.protocol_id.from_bytes(request.raw_request.as_slice()) {
                             Ok(x) => { x },
                             Err(err) => {
                                 mself.done = true;
-                                // TODO network2: log error, count error, close connection
                                 warn!("app_int rpc_req {} id={}; err {}, {} {} -> {}; from {:?}", request.protocol_id, request.request_id, err, mself.label, request.raw_request.encode_hex_upper::<String>(), std::any::type_name::<TMessage>(), &mself.network_source);
                                 counters::rpc_message_bytes(msg.sender.network_id(), request.protocol_id.as_str(), role_type, counters::REQUEST_LABEL, counters::INBOUND_LABEL, "err", data_len as u64);
+                                // TODO: close connection?
                                 return Poll::Ready(None);
                             }
                         };
@@ -350,7 +350,6 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
                             }
                         };
                         // when this spawned task reads from the response oneshot channel it will send it to the network peer
-                        // TODO network2: reimplement timeout/cleanup
                         let network_context = mself.contexts.get(&msg.sender.network_id()).unwrap();
                         counters::pending_rpc_requests(request.protocol_id.as_str()).inc();
                         Handle::current().spawn(rpc_response_sender(response_reader, rpc_id, raw_sender, request_received_start, *network_context, request.protocol_id));
@@ -360,37 +359,16 @@ impl<TMessage: Message + Unpin> Stream for NetworkEvents<TMessage> {
                     }
                     NetworkMessage::RpcResponse(_) => {
                         unreachable!("NetworkMessage::RpcResponse should not arrive in NetworkEvents because it is handled by Peer and reconnected with oneshot there");
-                        // TODO network2: add rpc-response matching at the application level here
-                        // let request_state = mself.open_outbound_rpc.remove(&response.request_id);
-                        // let request_state = match request_state {
-                        //     None => {
-                        //         // timeout or garbage collection or something. drop response.
-                        //         // TODO network2 log/count dropped response
-                        //         // TODO: drop this one message, but go back to local loop
-                        //         return Poll::Pending;
-                        //     }
-                        //     Some(x) => { x }
-                        // };
-                        // let app_msg = match request_state.protocol_id.from_bytes(response.raw_response.as_slice()) {
-                        //     Ok(x) => { x },
-                        //     Err(_) => {
-                        //         mself.done = true;
-                        //         // TODO network2: log error, count error, close connection
-                        //         return Poll::Ready(None);
-                        //     }
-                        // };
-                        // request_state.sender.send(Ok(response.raw_response.into()));
-                        // // we processed a legit message, even if it didn't come back through the expected channel, yield
-                        // return Poll::Pending
                     }
                     NetworkMessage::DirectSendMsg(message) => {
-                        // info!("app_int dm");
-                        // TODO: figure out a way to multi-core protocol_id.from_bytes()
+                        // Multi-core decoding protocol_id.from_bytes() is left as an exercise to the application code.
+                        // The easiest approach is pipelining and introducing a short queue of decoded items inside the app, a thread continuously reads from this Stream and stores decoded objects in the app queue, this disconnects decoding from handling, allowing the app to do request handling work while a decode is happening in another thread.
+                        // See network_event_prefetch below.
                         let app_msg = match message.protocol_id.from_bytes(message.raw_msg.as_slice()) {
                             Ok(x) => { x },
                             Err(_) => {
                                 mself.done = true;
-                                // TODO network2: log error, count error, close connection
+                                // TODO: log error, count error, close connection
                                 return Poll::Ready(None);
                             }
                         };
@@ -408,13 +386,8 @@ impl<TMessage: Message + Unpin> FusedStream for NetworkEvents<TMessage> {
     }
 }
 
-// pub struct NetworkEventPrefetchStream<TMessage> {
-//     //network_events: NetworkEvents<TMessage>,
-//     //event_tx: tokio::sync::mpsc::Sender<Event<TMessage>>,
-//     event_rx: tokio::sync::mpsc::Receiver<ßEvent<TMessage>>,
-//     done: bool,
-// }
-
+/// network_event_prefetch when spawned as a new tokio task decouples BCS deserialization an object handling allowing for parallelization.
+/// NetworkEvents Stream .next() does the work of BCS decode in this thread, another thread listening on the Receiver<Event<TMessage>> does the application work.
 pub async fn network_event_prefetch<TMessage: Message + Unpin + Send>(
     mut network_events: NetworkEvents<TMessage>,
     event_tx: tokio::sync::mpsc::Sender<Event<TMessage>>,
@@ -430,46 +403,8 @@ pub async fn network_event_prefetch<TMessage: Message + Unpin + Send>(
             },
             None => {return;},
         };
-        // if let Some(msg) = network_events.next().await {
-        //     let result = event_tx.send(msg).await;
-        //     if result.is_err() {
-        //         return;
-        //     }
-        // } else {
-        //     return;
-        // }
     }
 }
-
-// pub fn prefetch_network_events<TMessage: Message + Unpin + Send>(network_events: NetworkEvents<TMessage>, buffer: usize, handle: Handle) -> ReceiverStream<Event<TMessage>> {
-//     let (event_tx, event_rx) = tokio::sync::mpsc::channel(buffer);
-//     handle.spawn(network_event_prefetch(network_events, event_tx));
-//     ReceiverStream::new(event_rx)
-// }
-
-
-// impl<TMessage> NetworkEventPrefetchStream<TMessage> {
-//     pub fn new(network_events: NetworkEvents<TMessage>, buffer: usize, handle: Handle) -> Self {
-//         let (event_tx, event_rx) = tokio::sync::mpsc::channel(buffer);
-//         handle.spawn(network_event_prefetch(network_events, event_tx));
-//         Self {
-//             event_rx,
-//             done: false,
-//         }
-//     }
-// }
-//
-// impl<TMessage: Message + Unpin> Stream for NetworkEventPrefetchStream<TMessage> {
-//     type Item = Event<TMessage>;
-//
-//     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-//         if self.done {
-//             info!("app_int poll still DONE");
-//             return Poll::Ready(None);
-//         }
-//         let mself = self.get_mut();
-//     }
-// }
 
 
 /// `NetworkSender` is the generic interface from upper network applications to
@@ -479,10 +414,6 @@ pub async fn network_event_prefetch<TMessage: Message + Unpin + Send>(
 /// keys.
 #[derive(Debug)]
 pub struct NetworkSender<TMessage> {
-    // TODO: rebuild NetworkSender around single-level network::framework
-    // peer_mgr_reqs_tx: PeerManagerRequestSender,
-    // connection_reqs_tx: ConnectionRequestSender,
-    // TODO: we don't actually need a "NetworkSender" per network id; leftover structure from pre-2023 networking code
     network_id: NetworkId,
     peer_senders: Arc<OutboundPeerConnections>,
 
@@ -571,7 +502,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
             Ok(peers) => {
                 match peers.get(peer_network_id) {
                     None => {
-                        // TODO? we _could_ know the protocol_id here
+                        // we _could_ know the protocol_id here, but it would be _work_ we'd just throw away.
                         counters::direct_send_message_bytes(self.network_id, "unk", self.role_type, "peergone", 0);
                         Err(NetworkError::NotConnected)
                     }
@@ -620,16 +551,15 @@ impl<TMessage: Message> NetworkSender<TMessage> {
             Ok(peers) => {
                 match peers.get(peer_network_id) {
                     None => {
-                        // TODO? we _could_ know the protocol_id here
+                        // we _could_ know the protocol_id here, but it would just be work thrown away.
                         counters::direct_send_message_bytes(self.network_id, "unk", self.role_type, "peergone", 0);
-                        // Err(NetworkErrorKind::NotConnected.into())
                         return Err(NetworkError::NotConnected);
                     }
                     Some(peer) => {
                         if high_prio {
                             peer.sender_high_prio.clone()
                         } else {
-                            peer.sender.clone() // TODO: is this inefficient? It's _nice_ in minimizing the lock window
+                            peer.sender.clone()
                         }
                     }
                 }
@@ -665,7 +595,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
     ) -> Result<(), NetworkError> {
         let peer_network_id = PeerNetworkId::new(self.network_id, recipient);
         let msg_src = || -> Result<NetworkMessage,NetworkError> {
-            // TODO: figure out a way to multi-core protocol_id.to_bytes()
+            // TODO: detach .send_to() into its own thread in app code that cares to continue on instead of waiting for protocol.to_bytes()
             let start = Instant::now();
             let mdata : Vec<u8> = protocol.to_bytes(&message)?;
             let dt = Instant::now().duration_since(start);
@@ -691,7 +621,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
     ) -> Result<(), NetworkError> {
         let peer_network_id = PeerNetworkId::new(self.network_id, recipient);
         let msg_src = || -> Result<NetworkMessage,NetworkError> {
-            // TODO: figure out a way to multi-core protocol_id.to_bytes()
+            // TODO: detach .send_async() into its own thread in app code that cares to continue on instead of waiting for protocol.to_bytes()
             let mdata = protocol.to_bytes(&message)?;
             Ok(NetworkMessage::DirectSendMsg(DirectSendMsg {
                 protocol_id: protocol,
@@ -710,7 +640,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
         protocol: ProtocolId,
         message: TMessage,
     ) -> Result<(), NetworkError> {
-        // TODO: figure out a way to multi-core protocol_id.to_bytes()
+        // TODO: detach .send_to_many() into its own thread in app code that cares to continue on instead of waiting for protocol.to_bytes()
         let mdata : Vec<u8> = protocol.to_bytes(&message)?;
         let msg_src = || -> Result<NetworkMessage,NetworkError> {
             Ok(NetworkMessage::DirectSendMsg(DirectSendMsg {
@@ -764,7 +694,7 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                         return Err(RpcError::NotConnected(recipient));
                     }
                     Some(peer) => {
-                        // TODO: figure out a way to multi-core protocol_id.to_bytes()
+                        // TODO: detach .send_rpc() into its own thread in app code that cares to continue on instead of waiting for protocol.to_bytes()
                         let mdata: Vec<u8> = match protocol.to_bytes(&req_msg) {
                             Ok(x) => {x}
                             Err(err) => {
@@ -818,10 +748,8 @@ impl<TMessage: Message> NetworkSender<TMessage> {
                 }
             }
             Err(_) => {
-                // lock fail, wtf
-                // TODO: better error for lock fail?
                 counters::rpc_messages(self.network_id, protocol.as_str(), self.role_type, counters::REQUEST_LABEL, counters::OUTBOUND_LABEL, "wat").inc();
-                return Err(RpcError::TimedOut);
+                return Err(RpcError::TimedOut); // TODO: better error for lock fail?
             }
         };
         let sub_timeout = match deadline.checked_duration_since(tokio::time::Instant::now()) {
@@ -873,28 +801,6 @@ impl<TMessage: Message> NetworkSender<TMessage> {
         }
         // end of function where there should be no ? return
     }
-
-    // /// Send a message to a single recipient.
-    // pub fn rpc_reply(
-    //     &self,
-    //     recipient: PeerId,
-    //     protocol: ProtocolId,
-    //     request_id: RequestId,
-    //     message: TMessage,
-    // ) -> Result<(), NetworkError> {
-    //     let peer_network_id = PeerNetworkId::new(self.network_id, recipient);
-    //     let msg_src = || -> Result<NetworkMessage,NetworkError> {
-    //         let mdata = protocol.to_bytes(&message)?.into();
-    //         Ok(NetworkMessage::RpcResponse(RpcResponse {
-    //             request_id: 0,
-    //             priority: 0,
-    //             raw_response: mdata,
-    //         }))
-    //     };
-    //     self.update_peers();
-    //     // TODO: since we've gone to the trouble to have an RPC reply ready to go, maybe send it blocking?
-    //     self.peer_try_send(&peer_network_id, msg_src, protocol_is_high_priority(protocol))
-    // }
 }
 
 /// Generalized functionality for any request across `DirectSend` and `Rpc`.

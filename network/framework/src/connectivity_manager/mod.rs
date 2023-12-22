@@ -101,8 +101,6 @@ pub struct ConnectivityManager<TBackoff> {
     peers_and_metadata: Arc<PeersAndMetadata>,
     peer_metadata_generation: u32,
     peer_metadata_cache: Vec<(PeerNetworkId,PeerMetadata)>,
-    /// PeerId and address of remote peers to which this peer is connected.
-    // connected: HashMap<PeerId, ConnectionMetadata>, // TODO: remove this and just use peers_and_metadata
     /// All information about peers from discovery sources.
     discovered_peers: DiscoveredPeerSet,
     /// Channel over which we receive requests from other actors.
@@ -655,9 +653,8 @@ where
     ) {
         // If we're attempting to dial a Peer we must not be connected to it. This ensures that
         // newly eligible, but not connected to peers, have their counter initialized properly.
-        //counters::peer_connected(&self.network_context, &peer_id, 0); // TODO: rebuild counters
+        counters::peer_connected(&self.network_context, &peer_id, 0);
 
-        // let connection_reqs_tx = self.connection_reqs_tx.clone();
         // The initial dial state; it has zero dial delay and uses the first
         // address.
         let init_dial_state = DialState::new(self.backoff_strategy.clone());

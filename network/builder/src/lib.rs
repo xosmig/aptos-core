@@ -3,7 +3,6 @@
 
 use std::sync::Arc;
 use std::time::Duration;
-// use futures::{AsyncWrite, AsyncWriteExt, StreamExt};
 use tokio::runtime::Handle;
 use aptos_config::config::{DiscoveryMethod, HANDSHAKE_VERSION, NetworkConfig, RoleType};
 use aptos_config::network_id::{NetworkContext, NetworkId};
@@ -13,7 +12,6 @@ use aptos_logger::info;
 #[cfg(any(test, feature = "testing", feature = "fuzzing"))]
 use aptos_netcore::transport::memory::MemoryTransport;
 use aptos_netcore::transport::tcp::{TCPBufferCfg, TcpSocket, TcpTransport};
-// use aptos_netcore::transport::Transport;
 use aptos_network2::application::ApplicationCollector;
 use aptos_network_discovery::DiscoveryChangeListener;
 use aptos_time_service::TimeService;
@@ -29,7 +27,6 @@ use tokio_retry::strategy::ExponentialBackoff;
 use peer_listener::PeerListener;
 
 mod peer_listener;
-// use peer::Peer;
 
 #[derive(Debug, PartialEq, PartialOrd)]
 enum State {

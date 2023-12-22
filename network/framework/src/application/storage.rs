@@ -7,6 +7,7 @@ use crate::{
         error::Error,
         metadata::{ConnectionState, PeerMetadata},
     },
+    counters,
     transport::{ConnectionId, ConnectionMetadata},
     ProtocolId,
 };
@@ -25,11 +26,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use aptos_config::config::{PeerRole, RoleType};
 use aptos_config::network_id::NetworkContext;
 use std::fmt;
-use once_cell::sync::Lazy;
 use tokio::sync::mpsc::error::TrySendError;
 use serde::Serialize;
 use aptos_logger::info;
-use aptos_metrics_core::{IntGauge,IntGaugeVec,register_int_gauge_vec};
 use aptos_netcore::transport::ConnectionOrigin;
 use aptos_types::account_address::AccountAddress;
 
@@ -267,7 +266,6 @@ impl PeersAndMetadata {
                         // meh, drop message, maybe counter?
                     }
                     TrySendError::Closed(_) => {
-                        // TODO: remove this entry
                         to_del.push(i);
                     }
                 }
@@ -344,12 +342,12 @@ impl PeersAndMetadata {
                 match connection_state {
                     ConnectionState::Connected => {
                         info!("PeersAndMetadata {} inc", peer_metadata.connection_metadata.origin);
-                        connections(&peer_network_id.network_id(), peer_metadata.connection_metadata.origin).inc();
+                        counters::connections(&peer_network_id.network_id(), peer_metadata.connection_metadata.origin).inc();
                     }
                     ConnectionState::Disconnecting | ConnectionState::Disconnected => {
                         if peer_metadata.connection_state == ConnectionState::Connected {
                             info!("PeersAndMetadata {} dec", peer_metadata.connection_metadata.origin);
-                            connections(&peer_network_id.network_id(), peer_metadata.connection_metadata.origin).dec();
+                            counters::connections(&peer_network_id.network_id(), peer_metadata.connection_metadata.origin).dec();
                         }
                     }
                 }
@@ -438,7 +436,7 @@ impl PeersAndMetadata {
     #[cfg(test)]
     #[cfg(disabled)]
     /// Returns all internal maps (for testing purposes only)
-    /// TODO: fix for network2 branch?
+    /// TODO: unused?
     pub(crate) fn get_all_internal_maps(
         &self,
     ) -> (
@@ -465,8 +463,8 @@ fn count_gauges<'a, T: Iterator<Item=(&'a NetworkId,&'a HashMap<AccountAddress,P
             }
         }
         // info!("PeersAndMetadata count_gauges {} in={} out={}", network_id, inbound, outbound);
-        connections(network_id, ConnectionOrigin::Inbound).set(inbound);
-        connections(network_id, ConnectionOrigin::Outbound).set(outbound);
+        counters::connections(network_id, ConnectionOrigin::Inbound).set(inbound);
+        counters::connections(network_id, ConnectionOrigin::Outbound).set(outbound);
     }
 }
 
@@ -532,34 +530,4 @@ pub fn peer_role_to_role_type(role: PeerRole) -> RoleType {
         PeerRole::Known => {RoleType::FullNode}
         PeerRole::Unknown => {RoleType::FullNode}
     }
-}
-
-// // Direction labels
-// pub const INBOUND_LABEL: &str = "inbound";
-// pub const OUTBOUND_LABEL: &str = "outbound";
-//
-// // Serialization labels
-// pub const SERIALIZATION_LABEL: &str = "serialization";
-// pub const DESERIALIZATION_LABEL: &str = "deserialization";
-
-// {role_type, network_id, peer_id} refer to SELF
-// for connections to other peers, see "aptos_network_peer_connected"
-pub static APTOS_CONNECTIONS: Lazy<IntGaugeVec> = Lazy::new(|| {
-    register_int_gauge_vec!(
-        "aptos_connections",
-        "Number of current connections and their direction",
-        // &["role_type", "network_id", "peer_id", "direction"]  // {role_type, network_id, peer_id} refer to SELF // TODO: rebuild? plumbing through who-am-i was annoying, hopefully the 'who is out there' is the real core value
-        &["network_id", "direction"]
-    )
-        .unwrap()
-});
-
-// pub fn connections(role: RoleType, network_id: &NetworkId, peer_id: &PeerId, origin: ConnectionOrigin) -> IntGauge {
-pub fn connections(network_id: &NetworkId, origin: ConnectionOrigin) -> IntGauge {
-    APTOS_CONNECTIONS.with_label_values(&[
-        // role.as_str(),
-        network_id.as_str(),
-        // peer_id.short_str().as_str(),
-        origin.as_str(),
-    ])
 }

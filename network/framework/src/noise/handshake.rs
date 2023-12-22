@@ -108,7 +108,6 @@ impl NoiseUpgrader {
     pub fn new(
         network_context: NetworkContext,
         key: x25519::PrivateKey,
-        // auth_mode: HandshakeAuthMode, // TODO: pass in trusted peer source
         peers_and_metadata: Arc<PeersAndMetadata>,
         mutual_auth: bool,
     ) -> Self {

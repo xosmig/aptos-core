@@ -37,16 +37,25 @@ pub static APTOS_CONNECTIONS: Lazy<IntGaugeVec> = Lazy::new(|| {
     register_int_gauge_vec!(
         "aptos_connections",
         "Number of current connections and their direction",
-        &["role_type", "network_id", "peer_id", "direction"]
+        &[
+            // "role_type",
+            "network_id",
+            // "peer_id",
+            "direction"
+        ]
     )
     .unwrap()
 });
 
-pub fn connections(network_context: &NetworkContext, origin: ConnectionOrigin) -> IntGauge {
+pub fn connections(
+    // network_context: &NetworkContext,
+    network_id: &NetworkId,
+    origin: ConnectionOrigin
+) -> IntGauge {
     APTOS_CONNECTIONS.with_label_values(&[
-        network_context.role().as_str(),
-        network_context.network_id().as_str(),
-        network_context.peer_id().short_str().as_str(),
+        // network_context.role().as_str(),
+        network_id.as_str(),
+        // network_context.peer_id().short_str().as_str(),
         origin.as_str(),
     ])
 }

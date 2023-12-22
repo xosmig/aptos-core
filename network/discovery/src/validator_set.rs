@@ -129,7 +129,7 @@ pub(crate) fn extract_validator_set_updates(
                     .map_err(anyhow::Error::from)
             }
             .map_err(|err| {
-                // inc_by_with_context(&DISCOVERY_COUNTS, &network_context, "read_failure", 1); // TODO network2 redo counters
+                inc_by_with_context(&DISCOVERY_COUNTS, &network_context, "read_failure", 1);
 
                 warn!(
                     NetworkSchema::new(&network_context),

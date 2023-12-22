@@ -53,7 +53,6 @@ where
     handle.spawn(writer_task(network_id, to_send, to_send_high_prio, writer, max_frame_size, role_type, closed.clone()));
     handle.spawn(reader_task(reader, apps, remote_peer_network_id, open_outbound_rpc.clone(), handle.clone(), closed.clone(), role_type));
     let stub = PeerStub::new(sender, sender_high_prio, open_outbound_rpc, closed.clone());
-    // TODO: start_peer counter, (PeersAndMetadata keeps gauge, count event here)
     if let Err(err) = peers_and_metadata.insert_connection_metadata(remote_peer_network_id, connection_metadata.clone()) {
         error!("start_peer PeersAndMetadata could not insert metadata: {:?}", err);
     }
@@ -74,7 +73,7 @@ struct WriterContext<WriteThing: AsyncWrite + Unpin + Send> {
     send_large: bool,
     /// if we have a large message in flight and another arrives, stash it here
     next_large_msg: Option<NetworkMessage>,
-    /// TODO: pull this from node config
+    /// messages above this size get broken into a series of chunks interleaved with other messages
     max_frame_size: usize,
     /// RoleType for metrics
     role_type: RoleType,
@@ -300,6 +299,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                 }
             };
             if let MultiplexMessage::Message(NetworkMessage::Error(ErrorCode::DisconnectCommand)) = &mm {
+                // TODO: clean away "peerclose" logging
                 info!(
                     op = "writer_thread got DisconnectCommand",
                     "peerclose"
@@ -338,23 +338,6 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
         );
         closed.close().await;
     }
-
-    // fn split_message(&self, msg: &mut NetworkMessage) -> Vec<u8> {
-    //     match msg {
-    //         NetworkMessage::Error(_) => {
-    //             unreachable!("NetworkMessage::Error should always fit in a single frame")
-    //         },
-    //         NetworkMessage::RpcRequest(request) => {
-    //             request.raw_request.split_off(self.max_frame_size)
-    //         },
-    //         NetworkMessage::RpcResponse(response) => {
-    //             response.raw_response.split_off(self.max_frame_size)
-    //         },
-    //         NetworkMessage::DirectSendMsg(message) => {
-    //             message.raw_msg.split_off(self.max_frame_size)
-    //         },
-    //     }
-    // }
 }
 
 pub static NETWORK_PEER_MESSAGE_FRAMES_WRITTEN: Lazy<IntCounterVec> = Lazy::new(||
@@ -617,7 +600,6 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
                 },
             };
             match rrmm {
-                // TODO: counter for inbound frames/fragments?
                 Some(rmm) => match rmm {
                     Ok(msg) => match msg {
                         MultiplexMessage::Message(nmsg) => {
@@ -629,8 +611,7 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
                     }
                     Err(err) => {
                         info!("read_thread {} err {}", self.remote_peer_network_id, err);
-                        close_reason = "reader next err";
-                        // this is not a close reason?
+                        // Error, but not a close-worthy error?
                     }
                 }
                 None => {
