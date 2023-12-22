@@ -31,7 +31,6 @@ use crate::{
     application::storage::PeersAndMetadata,
     counters,
     logging::NetworkSchema,
-    // transport::ConnectionMetadata,
 };
 use aptos_config::{
     config::{Peer, PeerRole, PeerSet},
@@ -70,9 +69,7 @@ use aptos_config::config::NetworkConfig;
 use crate::application::ApplicationCollector;
 use crate::application::metadata::PeerMetadata;
 use crate::application::storage::ConnectionNotification;
-use crate::protocols::network::{OutboundPeerConnections, PeerStub};
-// use crate::protocols::wire::messaging::v1::ErrorCode::DisconnectCommand;
-// use crate::protocols::wire::messaging::v1::NetworkMessage;
+use crate::protocols::network::OutboundPeerConnections;
 use crate::transport::AptosNetTransportActual;
 
 #[cfg(test)]
@@ -124,16 +121,16 @@ pub struct ConnectivityManager<TBackoff> {
     outbound_connection_limit: Option<usize>,
     /// Random for shuffling which peers will be dialed
     rng: SmallRng,
-    /// Whether we are using mutual authentication or not
-    mutual_authentication: bool,
+    // /// Whether we are using mutual authentication or not
+    // mutual_authentication: bool,
     /// how to connect to new peers
     transport: AptosNetTransportActual,
     /// routing by ProtocolId to application code, for passing to created peers
     apps: Arc<ApplicationCollector>,
     /// for created peers
     peer_senders: Arc<OutboundPeerConnections>,
-    peer_senders_cache: HashMap<PeerNetworkId, PeerStub>,
-    peer_senders_generation: u32,
+    // peer_senders_cache: HashMap<PeerNetworkId, PeerStub>,
+    // peer_senders_generation: u32,
 }
 
 /// Different sources for peer addresses, ordered by priority (Onchain=highest,
@@ -332,7 +329,7 @@ where
         let connectivity_check_interval = Duration::from_millis(config.connectivity_check_interval_ms);
         let max_delay = Duration::from_millis(config.max_connection_delay_ms);
         let outbound_connection_limit = Some(config.max_outbound_connections);
-        let mutual_authentication = config.mutual_authentication;
+        // let mutual_authentication = config.mutual_authentication;
 
         // Verify that the trusted peers set exists and that it is empty
         let trusted_peers = peers_and_metadata
@@ -370,12 +367,12 @@ where
             event_id: 0,
             outbound_connection_limit,
             rng: SmallRng::from_entropy(),
-            mutual_authentication,
+            // mutual_authentication,
             transport,
             apps,
             peer_senders,
-            peer_senders_cache: HashMap::new(),
-            peer_senders_generation: 0,
+            // peer_senders_cache: HashMap::new(),
+            // peer_senders_generation: 0,
         };
 
         // set the initial config addresses and pubkeys

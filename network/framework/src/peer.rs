@@ -229,7 +229,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
     }
 
     async fn run(mut self, mut closed: Closer) {
-        let mut close_reason = "unk";
+        let close_reason;
         loop {
             let mm = if self.large_message.is_some() {
                 if self.send_large || self.next_large_msg.is_some() {
@@ -585,7 +585,7 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
 
     async fn run(mut self, mut closed: Closer) {
         info!("read_thread start");
-        let mut close_reason = "unk";
+        let close_reason;
         loop {
             let rrmm = tokio::select! {
                 rrmm = self.reader.next() => {rrmm},
