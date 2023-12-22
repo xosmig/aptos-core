@@ -14,7 +14,7 @@
 //! [AptosNet Handshake v1 Specification]: https://github.com/aptos-labs/aptos-core/blob/main/specifications/network/handshake-v1.md
 
 use anyhow::anyhow;
-use aptos_compression::metrics::CompressionClient;
+use aptos_compression::client::CompressionClient;
 use aptos_config::{config::MAX_APPLICATION_MESSAGE_SIZE, network_id::NetworkId};
 use aptos_types::chain_id::ChainId;
 #[cfg(any(test, feature = "fuzzing"))]
