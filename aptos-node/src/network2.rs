@@ -8,7 +8,7 @@ use tokio::runtime::Runtime;
 use aptos_config::config::{NetworkConfig, NodeConfig};
 use aptos_config::network_id::{NetworkContext, NetworkId};
 use aptos_consensus::network_interface::ConsensusMsg;
-use aptos_dkg_runtime::DKGMsg;
+use aptos_dkg_runtime::DKGMessage;
 use aptos_jwk_consensus::JWKConsensusMsg;
 use aptos_network2::protocols::wire::handshake::v1::ProtocolId;
 use aptos_network2_builder::NetworkBuilder;
@@ -150,7 +150,7 @@ pub fn consensus_network_connections(
 pub fn dkg_network_connections(
     apps: &mut ApplicationCollector,
     setup: &AppSetupContext,
-) -> Option<ApplicationNetworkInterfaces<DKGMsg>> {
+) -> Option<ApplicationNetworkInterfaces<DKGMessage>> {
     if !has_validator_network(&setup.node_config) {
         info!("app_int not a validator, no dkg");
         return None;

@@ -1,7 +1,7 @@
 spec aptos_framework::staking_config {
     /// <high-level-req>
     /// No.: 1
-    /// Property: The ability to initialize the staking config and staking rewards resources, as well as the ability to
+    /// Requirement: The ability to initialize the staking config and staking rewards resources, as well as the ability to
     /// update the staking config and staking rewards should only be available to the Aptos framework account.
     /// Criticality: Medium
     /// Implementation: The function initialize and initialize_rewards are used to initialize the StakingConfig and
@@ -12,7 +12,7 @@ spec aptos_framework::staking_config {
     /// Enforcement: Verified via [high-level-req-1.1](initialize), [high-level-req-1.2](initialize_rewards), [high-level-req-1.3](update_required_stake), [high-level-req-1.4](update_recurring_lockup_duration_secs), [high-level-req-1.5](update_rewards_rate), [high-level-req-1.6](update_rewards_config), and [high-level-req-1.7](update_voting_power_increase_limit).
     ///
     /// No.: 2
-    /// Property: The voting power increase, in a staking config resource, should always be greater than 0 and less or
+    /// Requirement: The voting power increase, in a staking config resource, should always be greater than 0 and less or
     /// equal to 50.
     /// Criticality: High
     /// Implementation: During the initialization and update of the staking config, the value of
@@ -20,35 +20,35 @@ spec aptos_framework::staking_config {
     /// Enforcement: Ensured via [high-level-req-2.1](initialize) and [high-level-req-2.2](update_voting_power_increase_limit). Formally verified via [high-level-req-2.3](StakingConfig).
     ///
     /// No.: 3
-    /// Property: The recurring lockup duration, in a staking config resource, should always be greater than 0.
+    /// Requirement: The recurring lockup duration, in a staking config resource, should always be greater than 0.
     /// Criticality: Medium
     /// Implementation: During the initialization and update of the staking config, the value of
     /// recurring_lockup_duration_secs is ensured to be greater than 0.
     /// Enforcement: Ensured via [high-level-req-3.1](initialize) and [high-level-req-3.2](update_recurring_lockup_duration_secs). Formally verified via [high-level-req-3.3](StakingConfig).
     ///
     /// No.: 4
-    /// Property: The calculation of rewards should not be possible if the last reward rate period just started.
+    /// Requirement: The calculation of rewards should not be possible if the last reward rate period just started.
     /// Criticality: High
     /// Implementation: The function calculate_and_save_latest_rewards_config ensures that
     /// last_rewards_rate_period_start_in_secs is greater or equal to the current timestamp.
     /// Enforcement: Formally verified in [high-level-req-4](StakingRewardsConfigEnabledRequirement).
     ///
     /// No.: 5
-    /// Property: The rewards rate should always be less than or equal to 100%.
+    /// Requirement: The rewards rate should always be less than or equal to 100%.
     /// Criticality: High
     /// Implementation: When initializing and updating the rewards rate, it is ensured that the rewards_rate is less or
     /// equal to MAX_REWARDS_RATE, otherwise rewards rate will be negative.
     /// Enforcement: Verified via [high-level-req-5](StakingConfig).
     ///
     /// No.: 6
-    /// Property: The reward rate's denominator should never be 0.
+    /// Requirement: The reward rate's denominator should never be 0.
     /// Criticality: High
     /// Implementation: While initializing and updating the rewards rate, rewards_rate_denominator is ensured to be
     /// greater than 0.
     /// Enforcement: Verified via [high-level-req-6](StakingConfig).
     ///
     /// No.: 7
-    /// Property: The reward rate's nominator and dominator ratio should always be less or equal to 1.
+    /// Requirement: The reward rate's nominator and dominator ratio should always be less or equal to 1.
     /// Criticality: High
     /// Implementation: When initializing and updating the rewards rate, it is ensured that rewards_rate is less or
     /// equal to rewards_rate_denominator.
@@ -108,12 +108,12 @@ spec aptos_framework::staking_config {
         let addr = signer::address_of(aptos_framework);
         /// [high-level-req-1.1]
         aborts_if addr != @aptos_framework;
-        aborts_if minimum_stake > maximum_stake || maximum_stake <= 0;
+        aborts_if minimum_stake > maximum_stake || maximum_stake == 0;
         /// [high-level-req-3.1]
-        aborts_if recurring_lockup_duration_secs <= 0;
-        aborts_if rewards_rate_denominator <= 0;
+        aborts_if recurring_lockup_duration_secs == 0;
+        aborts_if rewards_rate_denominator == 0;
         /// [high-level-req-2.1]
-        aborts_if voting_power_increase_limit <= 0 || voting_power_increase_limit > 50;
+        aborts_if voting_power_increase_limit == 0 || voting_power_increase_limit > 50;
         aborts_if rewards_rate > MAX_REWARDS_RATE;
         aborts_if rewards_rate > rewards_rate_denominator;
         aborts_if exists<StakingConfig>(addr);
@@ -179,7 +179,7 @@ spec aptos_framework::staking_config {
         let addr = signer::address_of(aptos_framework);
         /// [high-level-req-1.3]
         aborts_if addr != @aptos_framework;
-        aborts_if minimum_stake > maximum_stake || maximum_stake <= 0;
+        aborts_if minimum_stake > maximum_stake || maximum_stake == 0;
         aborts_if !exists<StakingConfig>(@aptos_framework);
         ensures global<StakingConfig>(@aptos_framework).minimum_stake == minimum_stake &&
             global<StakingConfig>(@aptos_framework).maximum_stake == maximum_stake;
@@ -197,7 +197,7 @@ spec aptos_framework::staking_config {
         /// [high-level-req-1.4]
         aborts_if addr != @aptos_framework;
         /// [high-level-req-3.2]
-        aborts_if new_recurring_lockup_duration_secs <= 0;
+        aborts_if new_recurring_lockup_duration_secs == 0;
         aborts_if !exists<StakingConfig>(@aptos_framework);
         ensures global<StakingConfig>(@aptos_framework).recurring_lockup_duration_secs == new_recurring_lockup_duration_secs;
     }
@@ -217,7 +217,7 @@ spec aptos_framework::staking_config {
         let addr = signer::address_of(aptos_framework);
         /// [high-level-req-1.5]
         aborts_if addr != @aptos_framework;
-        aborts_if new_rewards_rate_denominator <= 0;
+        aborts_if new_rewards_rate_denominator == 0;
         aborts_if !exists<StakingConfig>(@aptos_framework);
         aborts_if new_rewards_rate > MAX_REWARDS_RATE;
         aborts_if new_rewards_rate > new_rewards_rate_denominator;
@@ -262,14 +262,14 @@ spec aptos_framework::staking_config {
         /// [high-level-req-1.7]
         aborts_if addr != @aptos_framework;
         /// [high-level-req-2.2]
-        aborts_if new_voting_power_increase_limit <= 0 || new_voting_power_increase_limit > 50;
+        aborts_if new_voting_power_increase_limit == 0 || new_voting_power_increase_limit > 50;
         aborts_if !exists<StakingConfig>(@aptos_framework);
         ensures global<StakingConfig>(@aptos_framework).voting_power_increase_limit == new_voting_power_increase_limit;
     }
 
     /// The maximum_stake must be greater than maximum_stake in the range of Specified stake and the maximum_stake greater than zero.
     spec validate_required_stake(minimum_stake: u64, maximum_stake: u64) {
-        aborts_if minimum_stake > maximum_stake || maximum_stake <= 0;
+        aborts_if minimum_stake > maximum_stake || maximum_stake == 0;
     }
 
     /// Abort at any condition in StakingRewardsConfigValidationAborts.
@@ -296,7 +296,7 @@ spec aptos_framework::staking_config {
             rewards_rate,
             fixed_point64::spec_create_from_u128((1u128)));
         aborts_if fixed_point64::spec_greater(min_rewards_rate, rewards_rate);
-        aborts_if rewards_rate_period_in_secs <= 0;
+        aborts_if rewards_rate_period_in_secs == 0;
         aborts_if fixed_point64::spec_ceil(rewards_rate_decrease_rate) > 1;
     }
 
