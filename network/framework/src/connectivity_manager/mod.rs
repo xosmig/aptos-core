@@ -31,6 +31,7 @@ use crate::{
     application::storage::PeersAndMetadata,
     counters,
     logging::NetworkSchema,
+    protocols::network::PeerStub,
 };
 use aptos_config::{
     config::{Peer, PeerRole, PeerSet},
@@ -129,8 +130,8 @@ pub struct ConnectivityManager<TBackoff> {
     apps: Arc<ApplicationCollector>,
     /// for created peers
     peer_senders: Arc<OutboundPeerConnections>,
-    // peer_senders_cache: HashMap<PeerNetworkId, PeerStub>,
-    // peer_senders_generation: u32,
+    peer_senders_cache: HashMap<PeerNetworkId, PeerStub>,
+    peer_senders_generation: u32,
 }
 
 /// Different sources for peer addresses, ordered by priority (Onchain=highest,
@@ -371,8 +372,8 @@ where
             transport,
             apps,
             peer_senders,
-            // peer_senders_cache: HashMap::new(),
-            // peer_senders_generation: 0,
+            peer_senders_cache: HashMap::new(),
+            peer_senders_generation: 0,
         };
 
         // set the initial config addresses and pubkeys
@@ -482,7 +483,7 @@ where
     /// this function will close our connection to it.
     async fn close_stale_connections(&mut self) {
         // TODO: stale peer closing is disabled for test, figure out what exactly 'stale' was supposed to mean and bring it back
-        #[cfg(disabled)]
+        //#[cfg(disabled)]
         if let Some(trusted_peers) = self.get_trusted_peers() {
             // Identify stale peer connections
             let trusted_peers = trusted_peers.read().clone();
@@ -490,7 +491,7 @@ where
                 if trusted_peers.contains_key(&peer_network_id.peer_id()) {
                     continue; // trusted is never stale
                 }
-                if !self.mutual_authentication
+                if !self.config.mutual_authentication
                     && metadata.connection_metadata.origin == ConnectionOrigin::Inbound
                     && (metadata.connection_metadata.role == PeerRole::ValidatorFullNode || metadata.connection_metadata.role == PeerRole::Unknown) {
                     continue; // not stale

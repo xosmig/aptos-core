@@ -69,8 +69,8 @@ impl AptosNetTransportActual {
                 let result = mock_dial_result.await.unwrap();
                 if result.is_ok() {
                     // peers_and_metadata.insert_connection_metadata()
-                    let (sender, _to_send) = tokio::sync::mpsc::channel::<NetworkMessage>(1);
-                    let (sender_high_prio, _to_send_high_prio) = tokio::sync::mpsc::channel::<NetworkMessage>(1);
+                    let (sender, _to_send) = tokio::sync::mpsc::channel::<(NetworkMessage,u64)>(1);
+                    let (sender_high_prio, _to_send_high_prio) = tokio::sync::mpsc::channel::<(NetworkMessage,u64)>(1);
                     let stub = PeerStub::new(
                         sender,
                         sender_high_prio,

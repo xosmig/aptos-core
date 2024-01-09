@@ -86,7 +86,7 @@ fn test_application_collector_simple() {
         request_id: 12,
         priority: 0,
         raw_request: vec![],
-    }), sender: sender.clone() };
+    }), sender: sender.clone(), rx_at: 0 };
     match apps.get(&ProtocolId::ConsensusRpcBcs) {
         None => {
             assert!(false, "missing consensus app");
@@ -109,7 +109,7 @@ fn test_application_collector_simple() {
         protocol_id: ProtocolId::MempoolDirectSend,
         priority: 0,
         raw_msg: vec![],
-    }), sender: sender.clone() };
+    }), sender: sender.clone(), rx_at: 0 };
     match apps.get(&ProtocolId::MempoolDirectSend) {
         None => {
             assert!(false, "missing mempool app");

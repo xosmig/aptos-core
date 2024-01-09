@@ -33,7 +33,7 @@ pub type InboundMessageSender = tokio::sync::mpsc::Sender<ReceivedMessage>;
 // pub type ConnectionUpdateSender = crate::peer_manager::conn_notifs_channel::Sender;
 
 /// A receiver to get outbound network messages to some peer
-pub type OutboundMessageReceiver = tokio::sync::mpsc::Receiver<NetworkMessage>;
+pub type OutboundMessageReceiver = tokio::sync::mpsc::Receiver<ReceivedMessage>;
 //     aptos_channels::aptos_channel::Receiver<(PeerId, ProtocolId), PeerManagerRequest>;
 
 /// A connection handle describing the network for a node.
@@ -54,7 +54,7 @@ impl InboundNetworkHandle {
     /// Push connection update, and update the local storage
     pub fn connect(
         &self,
-        role: RoleType,
+        _role: RoleType,// TODO: use in logging?
         self_peer_network_id: PeerNetworkId,
         conn_metadata: ConnectionMetadata,
     ) {
@@ -68,26 +68,26 @@ impl InboundNetworkHandle {
             )
             .unwrap();
 
-        let self_peer_id = self_peer_network_id.peer_id();
-        self.connection_update_sender
-            .push(
-                conn_metadata.remote_peer_id,
-                ConnectionNotification::NewPeer(
-                    conn_metadata,
-                    NetworkContext::new(role, network_id, self_peer_id),
-                ),
-            )
-            .unwrap();
+        // let self_peer_id = self_peer_network_id.peer_id();
+        // self.connection_update_sender
+        //     .push(
+        //         conn_metadata.remote_peer_id,
+        //         ConnectionNotification::NewPeer(
+        //             conn_metadata,
+        //             NetworkContext::new(role, network_id, self_peer_id),
+        //         ),
+        //     )
+        //     .unwrap();
     }
 
     /// Push disconnect update, and update the local storage
     pub fn disconnect(
         &self,
-        role: RoleType,
+        _role: RoleType, // TODO: use in logging?
         self_peer_network_id: PeerNetworkId,
         conn_metadata: ConnectionMetadata,
     ) {
-        let self_peer_id = self_peer_network_id.peer_id();
+        // let self_peer_id = self_peer_network_id.peer_id();
         let network_id = self_peer_network_id.network_id();
 
         // Set the state of the peer as disconnected
@@ -97,16 +97,16 @@ impl InboundNetworkHandle {
             .unwrap();
 
         // Push the notification of the lost peer
-        self.connection_update_sender
-            .push(
-                conn_metadata.remote_peer_id,
-                ConnectionNotification::LostPeer(
-                    conn_metadata,
-                    NetworkContext::new(role, network_id, self_peer_id),
-                    DisconnectReason::ConnectionLost,
-                ),
-            )
-            .unwrap();
+        // self.connection_update_sender
+        //     .push(
+        //         conn_metadata.remote_peer_id,
+        //         ConnectionNotification::LostPeer(
+        //             conn_metadata,
+        //             NetworkContext::new(role, network_id, self_peer_id),
+        //             DisconnectReason::ConnectionLost,
+        //         ),
+        //     )
+        //     .unwrap();
     }
 }
 
@@ -301,15 +301,16 @@ pub trait TestNode: ApplicationNode + Sync {
     /// Gets the next queued network message on `Node`'s network [`NetworkId`].  Doesn't propagate
     /// to downstream node.  If dropping a message use [`TestNode::drop_next_network_msg`]
     async fn get_next_network_msg(&mut self, network_id: NetworkId) -> (PeerId,NetworkMessage) {
-        self.get_outbound_handle(network_id)
-            .next()
+        let rm = self.get_outbound_handle(network_id)
+            .recv()
             .await
-            .expect("Expecting a message")
+            .expect("Expecting a message");
+        (rm.sender.peer_id(), rm.message)
     }
 
     /// Confirms no message is sent in the period of time
     async fn wait_for_no_msg(&mut self, network_id: NetworkId, timeout: Duration) {
-        let waiter = self.get_outbound_handle(network_id).next();
+        let waiter = self.get_outbound_handle(network_id).recv();
         if let Ok(msg) = tokio::time::timeout(timeout, waiter).await {
             panic!(
                 "A message was sent during wait {:?}:{:?} - {:?}",
@@ -326,65 +327,106 @@ pub trait TestNode: ApplicationNode + Sync {
         &mut self,
         network_id: NetworkId,
     ) -> (PeerId, ProtocolId, bytes::Bytes) {
-        let message = self.get_next_network_msg(network_id).await;
+        let (peer_id, message) = TestNode::get_next_network_msg(self, network_id).await;
         match message {
-            PeerManagerRequest::SendRpc(
-                peer_id,
-                OutboundRpcRequest {
-                    protocol_id,
-                    res_tx,
-                    data,
-                    ..
-                },
-            ) => {
-                // Forcefully close the oneshot channel, otherwise listening task will hang forever.
-                drop(res_tx);
-                (peer_id, protocol_id, data)
-            },
-            PeerManagerRequest::SendDirectSend(peer_id, message) => {
-                (peer_id, message.protocol_id, message.mdata)
-            },
+            // PeerManagerRequest::SendRpc(
+            //     peer_id,
+            //     OutboundRpcRequest {
+            //         protocol_id,
+            //         res_tx,
+            //         data,
+            //         ..
+            //     },
+            // ) => {
+            //     // Forcefully close the oneshot channel, otherwise listening task will hang forever.
+            //     drop(res_tx);
+            //     (peer_id, protocol_id, data)
+            // },
+            // PeerManagerRequest::SendDirectSend(peer_id, message) => {
+            //     (peer_id, message.protocol_id, message.mdata)
+            // },
+            NetworkMessage::Error(_err) => {
+                // TODO: panic?
+                (peer_id, ProtocolId::HealthCheckerRpc, bytes::Bytes::default())
+            }
+            NetworkMessage::RpcRequest(req) => {
+                (peer_id, req.protocol_id, req.raw_request.into())
+            }
+            NetworkMessage::RpcResponse(_response) => {
+                // TODO: panic?
+                (peer_id, ProtocolId::HealthCheckerRpc, bytes::Bytes::default())
+            }
+            NetworkMessage::DirectSendMsg(msg) => {
+                (peer_id, msg.protocol_id, msg.raw_msg.into())
+            }
         }
     }
 
     /// Sends the next queued network message on `Node`'s network (`NetworkId`)
     async fn send_next_network_msg(&mut self, network_id: NetworkId) {
-        let request = self.get_next_network_msg(network_id).await;
-
-        let (remote_peer_id, protocol_id, data, maybe_rpc_info) = match request {
-            PeerManagerRequest::SendRpc(peer_id, msg) => (
-                peer_id,
-                msg.protocol_id,
-                msg.data,
-                Some((msg.timeout, msg.res_tx)),
-            ),
-            PeerManagerRequest::SendDirectSend(peer_id, msg) => {
-                (peer_id, msg.protocol_id, msg.mdata, None)
-            },
-        };
-
+        let (remote_peer_id, request) = TestNode::get_next_network_msg(self, network_id).await;
         let sender_peer_network_id = self.peer_network_id(network_id);
         let receiver_peer_network_id = PeerNetworkId::new(network_id, remote_peer_id);
         let receiver_handle = self.get_inbound_handle_for_peer(receiver_peer_network_id);
-        let sender_peer_id = sender_peer_network_id.peer_id();
+        // let sender_peer_id = sender_peer_network_id.peer_id();
 
         // TODO: Add timeout functionality
-        let peer_manager_notif = if let Some((_timeout, res_tx)) = maybe_rpc_info {
-            PeerManagerNotification::RecvRpc(sender_peer_id, InboundRpcRequest {
-                protocol_id,
-                data,
-                res_tx,
-            })
-        } else {
-            PeerManagerNotification::RecvMessage(sender_peer_id, Message {
-                protocol_id,
-                mdata: data,
-            })
+        let fake_message = match request {
+            // PeerManagerRequest::SendRpc(peer_id, msg) => (
+            //     peer_id,
+            //     msg.protocol_id,
+            //     msg.data,
+            //     Some((msg.timeout, msg.res_tx)),
+            // ),
+            // PeerManagerRequest::SendDirectSend(peer_id, msg) => {
+            //     (peer_id, msg.protocol_id, msg.mdata, None)
+            // },
+            //NetworkMessage::Error(_) => {}
+            NetworkMessage::RpcRequest(req) => {
+                // (req.protocol_id, req.raw_request, None) // TODO: RPC has changed
+                ReceivedMessage{
+                    message: NetworkMessage::RpcRequest(req),
+                    sender: sender_peer_network_id,
+                    rx_at: 0,
+                }
+            }
+            //NetworkMessage::RpcResponse(_) => {}
+            NetworkMessage::DirectSendMsg(msg) => {
+                ReceivedMessage{
+                    message: NetworkMessage::DirectSendMsg(msg),
+                    sender: sender_peer_network_id,
+                    rx_at: 0,
+                }
+            }
+            _ => {
+                return;
+            }
         };
-        receiver_handle
-            .inbound_message_sender
-            .push((sender_peer_id, protocol_id), peer_manager_notif)
-            .unwrap();
+        receiver_handle.inbound_message_sender.send(fake_message).await.unwrap();
+
+        // let peer_manager_notif = if let Some((_timeout, res_tx)) = maybe_rpc_info {
+        //     PeerManagerNotification::RecvRpc(sender_peer_id, InboundRpcRequest {
+        //         protocol_id,
+        //         data,
+        //         res_tx,
+        //     })
+        // } else {
+        //     PeerManagerNotification::RecvMessage(sender_peer_id, Message {
+        //         protocol_id,
+        //         mdata: data,
+        //     })
+        // };
+        // let fake_message = ReceivedMessage{
+        //     message: NetworkMessage::,
+        //     sender: sender_peer_network_id,
+        //     rx_at: 0,
+        // };
+        //
+        // receiver_handle
+        //     .inbound_message_sender
+        //     .send().await
+        //     // .push((sender_peer_id, protocol_id), peer_manager_notif)
+        //     .unwrap();
     }
 }
 

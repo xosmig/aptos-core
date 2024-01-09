@@ -4,17 +4,17 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::Receiver;
-use crate::protocols::wire::messaging::v1::{ErrorCode, MultiplexMessage, MultiplexMessageSink, MultiplexMessageStream, NetworkMessage};
+use crate::protocols::wire::messaging::v1::{DirectSendMsg, ErrorCode, MultiplexMessage, MultiplexMessageSink, MultiplexMessageStream, NetworkMessage};
 use futures::io::{AsyncRead,AsyncReadExt,AsyncWrite};
 use futures::StreamExt;
 use futures::SinkExt;
 use futures::stream::Fuse;
-use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::mpsc::error::{SendError, TryRecvError};
 use aptos_config::config::{NetworkConfig, RoleType};
 use aptos_config::network_id::{NetworkContext, NetworkId, PeerNetworkId};
 use aptos_logger::{error, info, warn};
 use aptos_metrics_core::{IntCounter, IntCounterVec, register_int_counter_vec};
-use crate::application::ApplicationCollector;
+use crate::application::{ApplicationCollector, ApplicationConnections};
 use crate::application::interface::{OpenRpcRequestState, OutboundRpcMatcher};
 use crate::application::storage::PeersAndMetadata;
 use crate::ProtocolId;
@@ -22,6 +22,11 @@ use crate::protocols::network::{Closer, OutboundPeerConnections, PeerStub, Recei
 use crate::protocols::stream::{StreamFragment, StreamHeader, StreamMessage};
 use crate::transport::ConnectionMetadata;
 use once_cell::sync::Lazy;
+#[cfg(test)]
+use aptos_memsocket::MemorySocket;
+#[cfg(test)]
+use rand::{rngs::OsRng, Rng};
+use aptos_types::account_address::AccountAddress;
 use crate::counters;
 
 pub fn start_peer<TSocket>(
@@ -701,4 +706,90 @@ pub fn app_inbound_drop(network_id: &NetworkId, protocol_id: &ProtocolId, data_l
     let values = [network_id.as_str(), protocol_id.as_str()];
     NETWORK_APP_INBOUND_DROP_MESSAGES.with_label_values(&values).inc();
     NETWORK_APP_INBOUND_DROP_BYTES.with_label_values(&values).inc_by(data_len);
+}
+
+#[tokio::test]
+pub async fn test_stream_multiplexing() {
+    // much borrowed from start_peer()
+    let config = NetworkConfig::default();
+    let max_frame_size = 128; // smaller than real to force fragmentation of many messages to test fragmentation
+    // let (async_write, async_read) = async_pipe::pipe();
+    let (outbound, inbound) = MemorySocket::new_pair();
+    let reader = MultiplexMessageStream::new(inbound, max_frame_size).fuse();
+    let writer = MultiplexMessageSink::new(outbound, max_frame_size);
+    let role_type = RoleType::Validator;
+    let closed = Closer::new();
+    let network_id = NetworkId::Validator;
+    let (sender, to_send) = tokio::sync::mpsc::channel::<(NetworkMessage,u64)>(config.network_channel_size);
+    let (_sender_high_prio, to_send_high_prio) = tokio::sync::mpsc::channel::<(NetworkMessage,u64)>(config.network_channel_size);
+
+    let queue_size = 101;
+    let counter_label = "test";
+    let mut apps = ApplicationCollector::new();
+    let (app_con, mut receiver) = ApplicationConnections::build(ProtocolId::NetbenchDirectSend, queue_size, counter_label);
+    apps.add(app_con);
+    let apps = Arc::new(apps);
+    let remote_peer_network_id = PeerNetworkId::new(network_id, AccountAddress::random());
+    let open_outbound_rpc = OutboundRpcMatcher::new();
+
+    let handle = Handle::current();
+    handle.spawn(writer_task(network_id, to_send, to_send_high_prio, writer, max_frame_size, role_type, closed.clone()));
+    handle.spawn(reader_task(reader, apps, remote_peer_network_id, open_outbound_rpc.clone(), handle.clone(), closed.clone(), role_type));
+
+    let max_data_len = max_frame_size * 13;
+    let mut blob = Vec::<u8>::with_capacity(max_data_len);
+    let mut rng = OsRng;
+    for _ in 0..max_data_len {
+        blob.push(rng.gen());
+    }
+
+    let sender_blob = blob.clone();
+    let send_thread = async move {
+        for i in 0..100 {
+            let mut send_size = (i * 13) % max_data_len;
+            if send_size <= i {
+                send_size = i + 1;
+            }
+            let raw_msg = sender_blob.get(i..send_size).unwrap();
+            let raw_msg = Vec::<u8>::from(raw_msg);
+            let msg = NetworkMessage::DirectSendMsg(DirectSendMsg {
+                protocol_id: ProtocolId::NetbenchDirectSend,
+                priority: 0,
+                raw_msg,
+            });
+            println!("send {:?} size={:?} ...", i, send_size);
+            if let Err(err) = sender.send((msg, 0)).await {
+                panic!("send err: {:?}", err);
+            }
+            println!("sent {:?}", i);
+        }
+    };
+    handle.spawn(send_thread);
+
+    for i in 0..100 {
+        let mut send_size = (i * 0x1085) % max_data_len;
+        if send_size <= i {
+            send_size = i + 1;
+        }
+        let raw_msg = blob.get(i..send_size).unwrap();
+        let raw_msg = Vec::<u8>::from(raw_msg);
+        match receiver.recv().await {
+            None => {
+                panic!("recv end early at i={:?}", i)
+            }
+            Some(rmsg) => {
+                match rmsg.message {
+                    NetworkMessage::DirectSendMsg(msg) => {
+                        if raw_msg != msg.raw_msg {
+                            panic!("msg{:?} not equal", i);
+                        }
+                        println!("got {:?} ok", i);
+                    }
+                    _ => {
+                        panic!("bad message")
+                    }
+                }
+            }
+        }
+    }
 }
