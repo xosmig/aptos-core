@@ -566,8 +566,21 @@ impl BufferManager {
                         Ok(()) => {
                             let response =
                                 ConsensusMsg::CommitMessage(Box::new(CommitMessage::Ack(())));
-                            if let Ok(bytes) = protocol.to_bytes(&response) {
-                                let _ = response_sender.send(Ok(bytes.into()));
+                            match protocol.to_bytes(&response) {
+                                Ok(bytes) => {
+                                    if let Err(reply_err) = response_sender.send(Ok(bytes.into())) {
+                                        error!(
+                                            error = format!("{:?}", reply_err.err().unwrap()),
+                                            "CommitMessage::Vote reply error"
+                                        )
+                                    }
+                                }
+                                Err(bcs_err) => {
+                                    error!(
+                                        error = bcs_err.to_string(),
+                                        "CommitMessage::Vote bcs error"
+                                    )
+                                }
                             }
                             item.try_advance_to_aggregated(&self.epoch_state.verifier)
                         },
@@ -585,6 +598,10 @@ impl BufferManager {
                     if self.buffer.get(&current_cursor).is_aggregated() {
                         return Some(target_block_id);
                     }
+                } else {
+                    error!(
+                        "CommitMessage::Vote no cursor"
+                    )
                 }
             },
             CommitMessage::Decision(commit_proof) => {
@@ -606,11 +623,28 @@ impl BufferManager {
                     if aggregated {
                         let response =
                             ConsensusMsg::CommitMessage(Box::new(CommitMessage::Ack(())));
-                        if let Ok(bytes) = protocol.to_bytes(&response) {
-                            let _ = response_sender.send(Ok(bytes.into()));
+                        match protocol.to_bytes(&response) {
+                            Ok(bytes) => {
+                                if let Err(send_err) = response_sender.send(Ok(bytes.into())) {
+                                    error!(
+                                        error = format!("{:?}", send_err.err().unwrap()),
+                                        "CommitMessage::Decision send err"
+                                    )
+                                }
+                            }
+                            Err(bcs_err) => {
+                                error!(
+                                    error = bcs_err.to_string(),
+                                    "CommitMessage::Decision bcs err"
+                                )
+                            }
                         }
                         return Some(target_block_id);
+                    } else {
+                        error!("CommitMessage::Decision not aggregated")
                     }
+                } else {
+                    error!("CommitMessage::Decision no cursor")
                 }
             },
             CommitMessage::Ack(_) => {

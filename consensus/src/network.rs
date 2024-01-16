@@ -53,7 +53,9 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use futures_channel::oneshot::Canceled;
 use tokio::runtime::Handle;
+use tokio::time::error::Elapsed;
 use tokio::time::timeout;
 use tokio_stream::wrappers::ReceiverStream;
 use aptos_network2::protocols::network::network_event_prefetch;
@@ -266,12 +268,36 @@ impl NetworkSender {
             let protocol = RPC[0];
             let peer_network_id = PeerNetworkId::new(NetworkId::Validator, receiver); // This assumes that consensus traffic _only_ happens on the validator network
             let self_msg = Event::RpcRequest(peer_network_id, msg.clone(), RPC[0], tx);
+            let start = std::time::Instant::now();
             self.self_sender.clone().send(self_msg).await?;
-            if let Ok(Ok(Ok(bytes))) = timeout(timeout_duration, rx).await {
-                Ok(protocol.from_bytes(&bytes)?)
-            } else {
-                bail!("self rpc failed");
+            match timeout(timeout_duration, rx).await {
+                Ok(ok1) => match ok1 {
+                    Ok(ok2) => match ok2 {
+                        Ok(bytes) => {
+                            Ok(protocol.from_bytes(&bytes)?)
+                        }
+                        Err(e3) => {
+                            let dt = std::time::Instant::now().duration_since(start);
+                            bail!("self rpc failed ({:?}), rpc err {:?}", dt, e3);
+                        }
+                    }
+                    Err(e2) => {
+                        // the far side of the RPC was closed instead of reply, this is okay-ish and should not stack trace
+                        Err(anyhow!("cancelled"))
+                        // let dt = std::time::Instant::now().duration_since(start);
+                        // bail!("self rpc failed ({:?}), cancelled {:?}", dt, e2);
+                    }
+                }
+                Err(e1) => {
+                    let dt = std::time::Instant::now().duration_since(start);
+                    bail!("self rpc failed ({:?}), timeout {:?}", dt, e1);
+                }
             }
+            // if let Ok(Ok(Ok(bytes))) = timeout(timeout_duration, rx).await {
+            //     Ok(protocol.from_bytes(&bytes)?)
+            // } else {
+            //     bail!("self rpc failed");
+            // }
         } else {
             Ok(monitor!(
                 "send_rpc",
