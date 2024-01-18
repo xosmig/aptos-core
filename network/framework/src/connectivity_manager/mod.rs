@@ -483,7 +483,7 @@ where
     /// this function will close our connection to it.
     async fn close_stale_connections(&mut self) {
         // TODO: stale peer closing is disabled for test, figure out what exactly 'stale' was supposed to mean and bring it back
-        #[cfg(disabled)]
+        // #[cfg(disabled)]
         if let Some(trusted_peers) = self.get_trusted_peers() {
             // Identify stale peer connections
             let trusted_peers = trusted_peers.read().clone();
@@ -502,6 +502,8 @@ where
                     net = self.network_context,
                     peer = peer_network_id,
                     op = "stale",
+                    trusted = trusted_peers,
+                    metadata = metadata,
                     "peerclose"
                 );
 
@@ -512,6 +514,7 @@ where
                         self.peer_senders_generation = new_generation;
                     }
                 }
+                #[cfg(disabled)] // TODO: actually closing 'stale' is disabled until fixed
                 match self.peer_senders_cache.get(peer_network_id) {
                     None => {
                         // already gone, nothing to do
