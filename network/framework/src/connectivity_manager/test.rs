@@ -243,7 +243,7 @@ impl TestHarness {
         match self.peers_and_metadata.remove_peer_metadata(peer_network_id, pm.connection_metadata.connection_id) {
             Ok(_) => {}
             Err(err) => {
-                assert!(false, "could not remove peer: {:?}", err);
+                panic!("could not remove peer: {:?}", err);
             }
         }
         // TODO: this does not 'await delivery' of subscribers and their disconnect message
@@ -370,8 +370,7 @@ impl TestHarness {
     ) {
         let (peer_id, address) = match self.expect_one_dial_inner(result, timeout).await {
             None => {
-                assert!(false, "expect_one_dial timeout");
-                return;
+                panic!("expect_one_dial timeout");
             }
             Some((peer_id, address)) => {
                 (peer_id, address)

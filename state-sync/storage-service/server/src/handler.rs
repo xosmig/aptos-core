@@ -144,16 +144,15 @@ impl<T: StorageReaderInterface> Handler<T> {
                     );
 
                     // Periodically log the failure
-                    // TODO: turn sample back on
-                    // sample!(
-                    //         SampleRate::Duration(Duration::from_secs(ERROR_LOG_FREQUENCY_SECS)),
+                    sample!(
+                            SampleRate::Duration(Duration::from_secs(ERROR_LOG_FREQUENCY_SECS)),
                             error!(LogSchema::new(LogEntry::StorageServiceError)
                                 .error(&error)
                                 .peer_network_id(peer_network_id)
                                 .request(&request)
                                 .optimistic_fetch_related(optimistic_fetch_related)
                         );
-                    //);
+                    );
 
                     // Return the error
                     Err(error)
@@ -222,7 +221,7 @@ impl<T: StorageReaderInterface> Handler<T> {
         response: aptos_storage_service_types::Result<StorageServiceResponse>,
         response_sender: ResponseSender,
     ) {
-        //log_storage_response(request, &response);
+        log_storage_response(request, &response);
         response_sender.send(response);
     }
 

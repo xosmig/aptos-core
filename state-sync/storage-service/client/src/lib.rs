@@ -17,7 +17,7 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 use thiserror::Error;
 use aptos_crypto::_once_cell::sync::Lazy;
 use aptos_metrics_core::{histogram_opts, register_histogram_vec, HistogramVec};
-use aptos_logger::{info,sample::SampleRate,sample,warn};
+use aptos_logger::{info,warn};
 
 
 #[derive(Debug, Error)]

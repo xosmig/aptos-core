@@ -692,7 +692,7 @@ where
             // `cancel_rx`.
             let config_clone = config_clone;
             let mut transport_clone = transport_clone;
-            let addr = addr;
+            // let addr = addr;
             let dial_result = futures::select! {
                 _ = f_delay.fuse() => {
                     info!(

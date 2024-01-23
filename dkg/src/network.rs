@@ -17,7 +17,7 @@ use aptos_reliable_broadcast::RBNetworkSender;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{
-    stream::{select, select_all},
+    stream::select,
     SinkExt, Stream, StreamExt,
 };
 use futures_channel::oneshot;

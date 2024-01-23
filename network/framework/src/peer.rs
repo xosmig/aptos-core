@@ -4,17 +4,17 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::Receiver;
-use crate::protocols::wire::messaging::v1::{DirectSendMsg, ErrorCode, MultiplexMessage, MultiplexMessageSink, MultiplexMessageStream, NetworkMessage};
+use crate::protocols::wire::messaging::v1::{ErrorCode, MultiplexMessage, MultiplexMessageSink, MultiplexMessageStream, NetworkMessage};
 use futures::io::{AsyncRead,AsyncReadExt,AsyncWrite};
 use futures::StreamExt;
 use futures::SinkExt;
 use futures::stream::Fuse;
-use tokio::sync::mpsc::error::{SendError, TryRecvError};
+use tokio::sync::mpsc::error::TryRecvError;
 use aptos_config::config::{NetworkConfig, RoleType};
 use aptos_config::network_id::{NetworkContext, NetworkId, PeerNetworkId};
 use aptos_logger::{error, info, warn};
 use aptos_metrics_core::{IntCounter, IntCounterVec, register_int_counter_vec};
-use crate::application::{ApplicationCollector, ApplicationConnections};
+use crate::application::ApplicationCollector;
 use crate::application::interface::{OpenRpcRequestState, OutboundRpcMatcher};
 use crate::application::storage::PeersAndMetadata;
 use crate::ProtocolId;
@@ -26,7 +26,12 @@ use once_cell::sync::Lazy;
 use aptos_memsocket::MemorySocket;
 #[cfg(test)]
 use rand::{rngs::OsRng, Rng};
+#[cfg(test)]
+use crate::protocols::wire::messaging::v1::DirectSendMsg;
+#[cfg(test)]
 use aptos_types::account_address::AccountAddress;
+#[cfg(test)]
+use crate::application::ApplicationConnections;
 use crate::counters;
 
 pub fn start_peer<TSocket>(

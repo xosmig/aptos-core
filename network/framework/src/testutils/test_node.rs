@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    application::storage::{ConnectionNotification, DisconnectReason, PeersAndMetadata},
+    application::storage::PeersAndMetadata,
     application::metadata::ConnectionState,
     // application::{metadata::ConnectionState, storage::{PeersAndMetadata,DisconnectReason}},
     // peer_manager::{ConnectionNotification, PeerManagerNotification, PeerManagerRequest},
@@ -17,7 +17,7 @@ use crate::{
 };
 use aptos_config::{
     config::{PeerRole, RoleType},
-    network_id::{NetworkContext, NetworkId, PeerNetworkId},
+    network_id::{NetworkId, PeerNetworkId},
 };
 use aptos_netcore::transport::ConnectionOrigin;
 use aptos_types::PeerId;

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{PeerMonitorState, PeerMonitoringServiceClient, StreamExt};
-use aptos_channels::{aptos_channel, aptos_channel::Receiver, message_queues::QueueStyle};
+// use aptos_channels::{aptos_channel, aptos_channel::Receiver, message_queues::QueueStyle};
 use aptos_config::{
     config::PeerRole,
     network_id::{NetworkId, PeerNetworkId},
@@ -17,11 +17,11 @@ use aptos_network2::{
     },
     transport::ConnectionMetadata,
 };
-use aptos_peer_monitoring_service_server::network::{NetworkRequest, ResponseSender};
+use aptos_peer_monitoring_service_server::network::NetworkRequest;
 use aptos_peer_monitoring_service_types::PeerMonitoringServiceMessage;
 use aptos_time_service::TimeService;
-use aptos_types::account_address::{AccountAddress as PeerId, AccountAddress};
-use futures::FutureExt;
+use aptos_types::account_address::{AccountAddress as PeerId};
+// use futures::FutureExt;
 use std::{collections::HashMap, sync::Arc};
 use std::collections::BTreeMap;
 use futures::stream::SelectAll;
@@ -140,7 +140,12 @@ impl MockMonitoringServer {
 
     /// Get the next request sent from the client
     pub async fn next_request(&mut self, network_id: &NetworkId) -> Option<NetworkRequest> {
-        self.peer_receivers.get(network_id).map(|nchan| nchan.next().await )
+        match self.peer_receivers.get(network_id) {
+            Some(nchan) => {
+                nchan.next().await
+            }
+            None => None,
+        }
         //  if let Some(nchan) = self.peer_receivers.get(network_id) {
         //     nchan.next().await
         // } else {
@@ -184,24 +189,34 @@ impl MockMonitoringServer {
     /// Verifies that there are no pending requests on the network
     pub async fn verify_no_pending_requests(&mut self, network_id: &NetworkId) {
         // Get the request receiver
-        let peer_manager_request_receiver = self.get_request_receiver(network_id);
+        // let peer_manager_request_receiver = self.get_request_receiver(network_id);
+        let pending_request = match self.peer_receivers.get(network_id) {
+            Some(nchan) => {
+                match nchan.try_next() {
+                    Ok(xo) => match xo {
+                        Some(xr) => Some(xr),
+                        None => None,
+                    }
+                    Err(_) => {
+                        None
+                    }
+                }
+            }
+            None => { None }
+        };
 
-        // Verify that there is no request pending
-        let pending_request = peer_manager_request_receiver
-            .select_next_some()
-            .now_or_never();
         if let Some(pending_request) = pending_request {
             panic!("Unexpected pending request: {:?}", pending_request);
         }
     }
 
-    /// Gets the request receiver for the specified network
-    fn get_request_receiver(
-        &mut self,
-        network_id: &NetworkId,
-    ) -> &mut Receiver<(AccountAddress, ProtocolId), PeerManagerRequest> {
-        self.peer_manager_request_receivers
-            .get_mut(network_id)
-            .unwrap()
-    }
+    // /// Gets the request receiver for the specified network
+    // fn get_request_receiver(
+    //     &mut self,
+    //     network_id: &NetworkId,
+    // ) -> &mut Receiver<(AccountAddress, ProtocolId), PeerManagerRequest> {
+    //     self.peer_manager_request_receivers
+    //         .get_mut(network_id)
+    //         .unwrap()
+    // }
 }

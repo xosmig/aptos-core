@@ -4,11 +4,11 @@
 #![forbid(unsafe_code)]
 
 use crate::{
-    metrics, storage::StorageReader, tests::database_mock::MockDatabaseReader,
+    storage::StorageReader, tests::database_mock::MockDatabaseReader,
     PeerMonitoringServiceNetworkEvents, PeerMonitoringServiceServer, MAX_DISTANCE_FROM_VALIDATORS,
     PEER_MONITORING_SERVER_VERSION,
 };
-use aptos_channels::{aptos_channel, message_queues::QueueStyle};
+// use aptos_channels::{aptos_channel, message_queues::QueueStyle};
 use aptos_config::{
     config::{BaseConfig, NodeConfig, PeerMonitoringServiceConfig, PeerRole, RoleType},
     network_id::{NetworkId, PeerNetworkId},

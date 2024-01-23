@@ -86,10 +86,10 @@ fn test_application_collector_simple() {
         request_id: 12,
         priority: 0,
         raw_request: vec![],
-    }), sender: sender.clone(), rx_at: 0 };
+    }), sender, rx_at: 0 };
     match apps.get(&ProtocolId::ConsensusRpcBcs) {
         None => {
-            assert!(false, "missing consensus app");
+            panic!("missing consensus app");
         }
         Some(app) => {
             let tse = app.sender.try_send(msg1.clone());
@@ -101,7 +101,7 @@ fn test_application_collector_simple() {
             assert_eq!(msg, msg1);
         }
         Err(err) => {
-            assert!(false, "should have message: {:?}", err);
+            panic!("should have message: {:?}", err);
         }
     };
 
@@ -109,10 +109,10 @@ fn test_application_collector_simple() {
         protocol_id: ProtocolId::MempoolDirectSend,
         priority: 0,
         raw_msg: vec![],
-    }), sender: sender.clone(), rx_at: 0 };
+    }), sender, rx_at: 0 };
     match apps.get(&ProtocolId::MempoolDirectSend) {
         None => {
-            assert!(false, "missing mempool app");
+            panic!("missing mempool app");
         }
         Some(app) => {
             let tse = app.sender.try_send(msg2.clone());
@@ -124,7 +124,7 @@ fn test_application_collector_simple() {
             assert_eq!(msg, msg2);
         }
         Err(err) => {
-            assert!(false, "should have message: {:?}", err);
+            panic!("should have message: {:?}", err);
         }
     };
 
@@ -133,7 +133,7 @@ fn test_application_collector_simple() {
             // correct!
         }
         Some(app) => {
-            assert!(false, "found garbage discovery app: {:?}", app);
+            panic!("found garbage discovery app: {:?}", app);
         }
     };
 
