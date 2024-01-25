@@ -28,6 +28,8 @@ use maplit::btreemap;
 use rand::{rngs::StdRng, SeedableRng};
 use std::collections::HashMap;
 use tokio::runtime::Runtime;
+use aptos_network2::protocols::wire::messaging::v1::{DirectSendMsg, NetworkMessage};
+use aptos_types::transaction::WriteSetPayload::Direct;
 
 /// A struct holding a list of overriding configurations for mempool
 #[derive(Clone, Copy)]
@@ -363,10 +365,16 @@ impl TestHarness {
                             *self.peer_to_node_id.get(&lookup_peer_network_id).unwrap();
                         let receiver = self.mut_node(&receiver_id);
 
+
                         receiver.send_network_req(
                             network_id,
                             ProtocolId::MempoolDirectSend,
-                            PeerManagerNotification::RecvMessage(sender_peer_id, msg),
+                            NetworkMessage::DirectSendMsg(DirectSendMsg{
+                                protocol_id: ProtocolId::MempoolDirectSend,
+                                priority: 0,
+                                raw_msg: msg,
+                            }),
+                            // PeerManagerNotification::RecvMessage(sender_peer_id, msg),
                         );
                         receiver.wait_for_event(SharedMempoolNotification::NewTransactions);
 
@@ -436,7 +444,12 @@ impl TestHarness {
                         receiver.send_network_req(
                             network_id,
                             ProtocolId::MempoolDirectSend,
-                            PeerManagerNotification::RecvMessage(sender_peer_id, msg),
+                            NetworkMessage::DirectSendMsg(DirectSendMsg{
+                                protocol_id: ProtocolId::MempoolDirectSend,
+                                priority: 0,
+                                raw_msg: msg,
+                            }),
+                            // PeerManagerNotification::RecvMessage(sender_peer_id, msg),
                         );
                     },
                     request => panic!(

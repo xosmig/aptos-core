@@ -20,7 +20,7 @@ use aptos_netcore::transport::ConnectionOrigin;
 use aptos_network2::{
     application::{
         interface::{NetworkClient}, // NetworkServiceEvents
-        storage::PeersAndMetadata,
+        storage::{ConnectionNotification,PeersAndMetadata},
     },
     // peer_manager::{
     //     conn_notifs_channel, ConnectionNotification, ConnectionRequestSender,
@@ -50,7 +50,8 @@ use std::{
     sync::Arc,
 };
 use tokio::runtime::Runtime;
-use aptos_network2::protocols::network::{OutboundPeerConnections, PeerStub, ReceivedMessage};
+use tokio::sync::mpsc::error::TryRecvError;
+use aptos_network2::protocols::network::{NetworkSource, OutboundPeerConnections, PeerStub, ReceivedMessage};
 use aptos_network2::protocols::wire::messaging::v1::NetworkMessage;
 
 type MempoolNetworkHandle = (
@@ -350,12 +351,12 @@ impl NodeInfoTrait for Node {
 impl Node {
     /// Sets up a single node by starting up mempool and any network handles
     pub fn new(node: NodeInfo, config: NodeConfig) -> Node {
-        let (network_interfaces, network_client, network_service_events, peers_and_metadata) =
+        let (network_interfaces, network_client, network_events, peers_and_metadata) =
             setup_node_network_interfaces(&node);
         let (mempool, runtime, subscriber) = start_node_mempool(
             config,
             network_client,
-            network_service_events,
+            network_events,
             peers_and_metadata.clone(),
         );
 
@@ -438,12 +439,7 @@ impl Node {
     /// Checks that a node has no pending messages to send.
     pub fn check_no_network_messages_sent(&mut self, network_id: NetworkId) {
         self.check_no_subscriber_events();
-        assert!(self
-            .get_network_interface(network_id)
-            .network_reqs_rx
-            .select_next_some()
-            .now_or_never()
-            .is_none())
+        assert!(self.get_network_interface(network_id).network_reqs_rx.try_recv().is_err())
     }
 
     /// Retrieves a network interface for a specific `NetworkId` based on whether it's the primary network
@@ -496,7 +492,7 @@ impl NodeNetworkInterface {
         runtime.block_on(self.network_reqs_rx.recv()).unwrap()
     }
 
-    fn send_network_req(&mut self, protocol: ProtocolId, message: NetworkMessage) {
+    fn send_network_req(&mut self, protocol: ProtocolId, peer_network_id: &PeerNetworkId, message: NetworkMessage) {
         // let remote_peer_id = match &message {
         //     PeerManagerNotification::RecvRpc(peer_id, _) => *peer_id,
         //     PeerManagerNotification::RecvMessage(peer_id, _) => *peer_id,
@@ -507,7 +503,7 @@ impl NodeNetworkInterface {
                 self.peer_cache_generation = new_gen;
         }
         if let Some(stub)  = self.peer_cache.get(peer_network_id) {
-            _ = stub.sender.try_send(message);
+            _ = stub.sender.try_send((message,0));
             // TODO: panic on error?
         } // TODO: else panic on None destination?
             // .push((remote_peer_id, protocol), message)
@@ -535,7 +531,7 @@ fn setup_node_network_interfaces(
 ) -> (
     HashMap<NetworkId, NodeNetworkInterface>,
     NetworkClient<MempoolSyncMsg>,
-    NetworkServiceEvents<MempoolSyncMsg>,
+    NetworkEvents<MempoolSyncMsg>,
     Arc<PeersAndMetadata>,
 ) {
     // Create the peers and metadata
@@ -562,12 +558,14 @@ fn setup_node_network_interfaces(
         network_senders,
         peers_and_metadata.clone(),
     );
-    let network_service_events = NetworkServiceEvents::new(network_and_events);
+    let (rm_sender, rm_receiver) = tokio::sync::mpsc::channel(100);
+    let network_source = NetworkSource::new_single_source(rm_receiver);
+    let network_events = NetworkEvents::new(network_source);
 
     (
         network_interfaces,
         network_client,
-        network_service_events,
+        network_events,
         peers_and_metadata,
     )
 }
@@ -604,7 +602,7 @@ fn setup_node_network_interface(
 fn start_node_mempool(
     config: NodeConfig,
     network_client: NetworkClient<MempoolSyncMsg>,
-    network_service_events: NetworkServiceEvents<MempoolSyncMsg>,
+    network_events: NetworkEvents<MempoolSyncMsg>,
     peers_and_metadata: Arc<PeersAndMetadata>,
 ) -> (
     Arc<Mutex<CoreMempool>>,
@@ -637,7 +635,7 @@ fn start_node_mempool(
         &config,
         Arc::clone(&mempool),
         network_client,
-        network_service_events,
+        network_events,
         ac_endpoint_receiver,
         quorum_store_receiver,
         mempool_listener,

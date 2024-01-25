@@ -8,7 +8,7 @@ use aptos_crypto::x25519::PublicKey;
 use aptos_types::PeerId;
 use std::sync::Arc;
 
-// pub mod builder;
+pub mod builder;
 pub mod fake_socket;
 pub mod test_framework;
 pub mod test_node;

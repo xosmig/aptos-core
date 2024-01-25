@@ -1,7 +1,7 @@
 // Copyright © Aptos Foundation
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{PeerMonitorState, PeerMonitoringServiceClient, StreamExt};
+use crate::{PeerMonitorState, PeerMonitoringServiceClient};
 // use aptos_channels::{aptos_channel, aptos_channel::Receiver, message_queues::QueueStyle};
 use aptos_config::{
     config::PeerRole,
@@ -21,10 +21,10 @@ use aptos_peer_monitoring_service_server::network::NetworkRequest;
 use aptos_peer_monitoring_service_types::PeerMonitoringServiceMessage;
 use aptos_time_service::TimeService;
 use aptos_types::account_address::{AccountAddress as PeerId};
-// use futures::FutureExt;
 use std::{collections::HashMap, sync::Arc};
 use std::collections::BTreeMap;
-use futures::stream::SelectAll;
+use futures::StreamExt;
+use futures::stream::{Stream,SelectAll};
 use aptos_config::config::RoleType;
 use aptos_network2::protocols::network::OutboundPeerConnections;
 use aptos_network2::protocols::wire::messaging::v1::NetworkMessage;
