@@ -53,9 +53,9 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use futures_channel::oneshot::Canceled;
+// use futures_channel::oneshot::Canceled;
 use tokio::runtime::Handle;
-use tokio::time::error::Elapsed;
+// use tokio::time::error::Elapsed;
 use tokio::time::timeout;
 use tokio_stream::wrappers::ReceiverStream;
 use aptos_network2::protocols::network::network_event_prefetch;
@@ -281,7 +281,7 @@ impl NetworkSender {
                             bail!("self rpc failed ({:?}), rpc err {:?}", dt, e3);
                         }
                     }
-                    Err(e2) => {
+                    Err(_e2) => {
                         // the far side of the RPC was closed instead of reply, this is okay-ish and should not stack trace
                         Err(anyhow!("cancelled"))
                         // let dt = std::time::Instant::now().duration_since(start);

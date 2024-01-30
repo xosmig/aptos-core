@@ -596,9 +596,11 @@ impl OverallMeasuring {
         );
         info!("{} GPS: {} gas/s", prefix, delta_gas.gas / elapsed);
         info!(
-            "{} effectiveGPS: {} gas/s",
+            "{} effectiveGPS: {} gas/s ({} effective block gas, in {} s)",
             prefix,
-            delta_gas.effective_block_gas / elapsed
+            delta_gas.effective_block_gas / elapsed,
+            delta_gas.effective_block_gas,
+            elapsed
         );
         info!("{} ioGPS: {} gas/s", prefix, delta_gas.io_gas / elapsed);
         info!(
@@ -669,6 +671,12 @@ impl OverallMeasuring {
             num_txns / delta_execution.commit_total
         );
     }
+}
+
+fn log_total_supply(db_reader: &Arc<dyn DbReader>) {
+    let total_supply =
+        DbAccessUtil::get_total_supply(&db_reader.latest_state_checkpoint_view().unwrap()).unwrap();
+    info!("total supply is {:?} octas", total_supply)
 }
 
 #[cfg(test)]
@@ -748,10 +756,4 @@ mod tests {
         // correct execution not yet implemented, so cannot be checked for validity
         test_generic_benchmark::<NativeExecutor>(None, false);
     }
-}
-
-fn log_total_supply(db_reader: &Arc<dyn DbReader>) {
-    let total_supply =
-        DbAccessUtil::get_total_supply(&db_reader.latest_state_checkpoint_view().unwrap()).unwrap();
-    info!("total supply is {:?} octas", total_supply)
 }
