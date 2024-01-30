@@ -49,6 +49,7 @@ use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
+use std::collections::BTreeMap;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::error::TryRecvError;
 use aptos_network2::protocols::network::{NetworkSource, OutboundPeerConnections, PeerStub, ReceivedMessage};
@@ -159,7 +160,8 @@ impl NodeInfoTrait for ValidatorNodeInfo {
         match network_id {
             NetworkId::Validator => self.peer_id,
             NetworkId::Vfn => self.vfn_peer_id,
-            NetworkId::Public => panic!("Invalid network id for validator"),
+            NetworkId::Public => panic!("Invalid public network id for validator"),
+            NetworkId::Internal => panic!("Invalid internal network id for validator"),
         }
     }
 
@@ -196,7 +198,8 @@ impl NodeInfoTrait for ValidatorFullNodeInfo {
         match network_id {
             NetworkId::Public => self.peer_id,
             NetworkId::Vfn => self.vfn_peer_id,
-            NetworkId::Validator => panic!("Invalid network id for validator full node"),
+            NetworkId::Validator => panic!("Invalid validator network id for validator full node"),
+            NetworkId::Internal => panic!("Invalid internal network id for validator full node"),
         }
     }
 
@@ -457,12 +460,12 @@ impl Node {
     /// Send network request `PeerManagerNotification` from a remote peer to the local node
     pub fn send_network_req(
         &mut self,
-        network_id: NetworkId,
+        peer_network_id: PeerNetworkId,
         protocol: ProtocolId,
         notif: NetworkMessage,
     ) {
-        self.get_network_interface(network_id)
-            .send_network_req(protocol, notif);
+        self.get_network_interface(peer_network_id.network_id())
+            .send_network_req(protocol, &peer_network_id, notif);
     }
 
     /// Sends a `ConnectionNotification` to the local node
@@ -480,11 +483,12 @@ pub struct NodeNetworkInterface {
     /// Peer notification sender for sending outgoing messages to other peers
     pub(crate) network_notifs_tx: Arc<OutboundPeerConnections>,
 
-        peer_cache_generation: u32,
-        peer_cache: HashMap<PeerNetworkId,PeerStub>,
-        // aptos_channel::Sender<(PeerId, ProtocolId), PeerManagerNotification>,
+    peer_cache_generation: u32,
+    peer_cache: HashMap<PeerNetworkId,PeerStub>,
+    // aptos_channel::Sender<(PeerId, ProtocolId), PeerManagerNotification>,
     // /// Sender for connecting / disconnecting peers
     // pub(crate) network_conn_event_notifs_tx: conn_notifs_channel::Sender,
+    pub(crate) network_conn_event_notifs_tx: tokio::sync::mpsc::Sender<ConnectionNotification>,
 }
 
 impl NodeNetworkInterface {
@@ -517,9 +521,7 @@ impl NodeNetworkInterface {
             ConnectionNotification::LostPeer(metadata, _, _) => metadata.remote_peer_id,
         };
 
-        self.network_conn_event_notifs_tx
-            .push(peer_id, notif)
-            .unwrap()
+        self.network_conn_event_notifs_tx.try_send(notif).unwrap()
     }
 }
 
@@ -560,7 +562,9 @@ fn setup_node_network_interfaces(
     );
     let (rm_sender, rm_receiver) = tokio::sync::mpsc::channel(100);
     let network_source = NetworkSource::new_single_source(rm_receiver);
-    let network_events = NetworkEvents::new(network_source);
+    let peer_senders = Arc::new(OutboundPeerConnections::new());
+    let contexts = Arc::new(BTreeMap::new());
+    let network_events = NetworkEvents::new(network_source, peer_senders, "test", contexts);
 
     (
         network_interfaces,
@@ -576,22 +580,33 @@ fn setup_node_network_interface(
 ) -> (NodeNetworkInterface, MempoolNetworkHandle) {
     // Create the network sender and events receiver
     static MAX_QUEUE_SIZE: usize = 8;
-    let (network_reqs_tx, network_reqs_rx) =
-        aptos_channel::new(QueueStyle::FIFO, MAX_QUEUE_SIZE, None);
-    let (connection_reqs_tx, _) = aptos_channel::new(QueueStyle::FIFO, MAX_QUEUE_SIZE, None);
-    let (network_notifs_tx, network_notifs_rx) =
-        aptos_channel::new(QueueStyle::FIFO, MAX_QUEUE_SIZE, None);
-    let (network_conn_event_notifs_tx, conn_status_rx) = conn_notifs_channel::new();
+    // let (network_reqs_tx, network_reqs_rx) =
+    //     aptos_channel::new(QueueStyle::FIFO, MAX_QUEUE_SIZE, None);
+    let (network_reqs_tx, network_reqs_rx) = tokio::sync::mpsc::channel(MAX_QUEUE_SIZE);
+    // let (connection_reqs_tx, _) = aptos_channel::new(QueueStyle::FIFO, MAX_QUEUE_SIZE, None);
+    // let (network_notifs_tx, network_notifs_rx) = tokio::sync::mpsc::channel(MAX_QUEUE_SIZE);
+        // aptos_channel::new(QueueStyle::FIFO, MAX_QUEUE_SIZE, None);
+    let (network_conn_event_notifs_tx, conn_status_rx) = tokio::sync::mpsc::channel(10); //tokio::sync::mpsc::Receiver<ConnectionNotification>
+    // let (network_conn_event_notifs_tx, conn_status_rx) = conn_notifs_channel::new();
+    let peer_senders = Arc::new(OutboundPeerConnections::new());
     let network_sender = NetworkSender::new(
-        PeerManagerRequestSender::new(network_reqs_tx),
-        ConnectionRequestSender::new(connection_reqs_tx),
+        peer_network_id.network_id(),
+        peer_senders.clone(),
+        RoleType::Validator,
+        // PeerManagerRequestSender::new(network_reqs_tx),
+        // ConnectionRequestSender::new(connection_reqs_tx),
     );
-    let network_events = NetworkEvents::new(network_notifs_rx, conn_status_rx, None);
+    let (net_send, netrx) = tokio::sync::mpsc::channel(1000);
+    let network_source = NetworkSource::new_single_source(netrx);
+    let contexts = Arc::new(BTreeMap::new());
+    let network_events = NetworkEvents::new(network_source, peer_senders.clone(), "test", contexts);//network_notifs_rx, conn_status_rx, None);
 
     (
         NodeNetworkInterface {
             network_reqs_rx,
-            network_notifs_tx,
+            network_notifs_tx: peer_senders,
+            peer_cache_generation: 0,
+            peer_cache: HashMap::new(),
             network_conn_event_notifs_tx,
         },
         (peer_network_id.network_id(), network_sender, network_events),

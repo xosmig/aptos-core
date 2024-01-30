@@ -2609,6 +2609,7 @@ dependencies = [
  "aptos-vm-validator",
  "async-trait",
  "bcs 0.1.4",
+ "bytes",
  "enum_dispatch",
  "fail 0.5.1",
  "futures",
