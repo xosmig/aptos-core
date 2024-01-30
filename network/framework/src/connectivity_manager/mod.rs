@@ -624,6 +624,7 @@ where
         // It enforces that a full node cannot have more outgoing connections than `connection_limit`
         // including in flight dials.
         let num_eligible = eligible.len();
+        // TODO: move to_connect calculation to top, if 0 skip everything else!
         let to_connect = if let Some(conn_limit) = self.outbound_connection_limit {
             let outbound_connections = self.peer_metadata_cache.iter()
                 .filter(|(_,metadata)| metadata.connection_metadata.origin==ConnectionOrigin::Outbound)
