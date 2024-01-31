@@ -52,11 +52,21 @@ pub enum MultiplexMessage {
     Stream(StreamMessage),
 }
 
+pub const STREAM_HEADER_OVERHEAD_BYTES : usize = 9;
+pub const STREAM_FRAGMENT_OVERHEAD_BYTES : usize = 9;
+
 impl MultiplexMessage {
     pub fn data_len(&self) -> usize {
         match self {
             MultiplexMessage::Message(msg) => {msg.data_len()}
             MultiplexMessage::Stream(sm) => {sm.data_len()}
+        }
+    }
+
+    pub fn header_len(&self) -> usize {
+        match self {
+            MultiplexMessage::Message(msg) => {msg.header_len() + 1}
+            MultiplexMessage::Stream(sm) => {sm.header_len() + 1}
         }
     }
 }
@@ -69,6 +79,16 @@ impl NetworkMessage {
             NetworkMessage::RpcRequest(request) => request.raw_request.len(),
             NetworkMessage::RpcResponse(response) => response.raw_response.len(),
             NetworkMessage::DirectSendMsg(message) => message.raw_msg.len(),
+        }
+    }
+
+    /// header_len + data_len should equal BCS serialization size
+    pub fn header_len(&self) -> usize {
+        match self {
+            NetworkMessage::Error(_) => 3,
+            NetworkMessage::RpcRequest(_) => 6,
+            NetworkMessage::RpcResponse(_) => 5,
+            NetworkMessage::DirectSendMsg(_) => 2,
         }
     }
 
@@ -277,6 +297,7 @@ impl<TWriteSocket: AsyncWrite> Sink<&MultiplexMessage> for MultiplexMessageSink<
 
     fn start_send(self: Pin<&mut Self>, message: &MultiplexMessage) -> Result<(), Self::Error> {
         let frame = bcs::to_bytes(message).map_err(WriteError::SerializeError)?;
+        println!("MMS BCS to {:?} bytes", frame.len());
         let frame = Bytes::from(frame);
 
         self.project()

@@ -4,12 +4,12 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::Receiver;
-use crate::protocols::wire::messaging::v1::{ErrorCode, MultiplexMessage, MultiplexMessageSink, MultiplexMessageStream, NetworkMessage};
+use crate::protocols::wire::messaging::v1::{ErrorCode, MultiplexMessage, MultiplexMessageSink, MultiplexMessageStream, NetworkMessage, STREAM_FRAGMENT_OVERHEAD_BYTES, STREAM_HEADER_OVERHEAD_BYTES};
 use futures::io::{AsyncRead,AsyncReadExt,AsyncWrite};
 use futures::StreamExt;
 use futures::SinkExt;
 use futures::stream::Fuse;
-use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::mpsc::error::{SendError, TryRecvError};
 use aptos_config::config::{NetworkConfig, RoleType};
 use aptos_config::network_id::{NetworkContext, NetworkId, PeerNetworkId};
 use aptos_logger::{error, info, warn};
@@ -32,6 +32,10 @@ use crate::protocols::wire::messaging::v1::DirectSendMsg;
 use aptos_types::account_address::AccountAddress;
 #[cfg(test)]
 use crate::application::ApplicationConnections;
+#[cfg(test)]
+use hex::ToHex;
+#[cfg(test)]
+use std::cmp::min;
 use crate::counters;
 
 pub fn start_peer<TSocket>(
@@ -136,31 +140,38 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
     }
 
     fn start_large(&mut self, msg: NetworkMessage) -> MultiplexMessage {
+        // pub const STREAM_HEADER_OVERHEAD_BYTES : usize = 7;
+        // pub const STREAM_FRAGMENT_OVERHEAD_BYTES : usize = 7;
         peer_message_large_msg_fragmented(&self.network_id, msg.protocol_id_as_str()).inc();
         self.stream_request_id += 1;
         self.send_large = false;
         self.large_fragment_id = 0;
-        let mut num_fragments = msg.data_len() / self.max_frame_size;
+        let header_payload_size = self.max_frame_size - STREAM_HEADER_OVERHEAD_BYTES - msg.header_len();
+        let fragment_payload_size = self.max_frame_size - STREAM_FRAGMENT_OVERHEAD_BYTES;
+        let serialized_len = estimate_serialized_length(&msg);
+        let fragments_len = serialized_len - header_payload_size;
+        let mut num_fragments = (fragments_len / fragment_payload_size) + 1;
         let mut msg = msg;
-        while num_fragments * self.max_frame_size < msg.data_len() {
+        while (num_fragments - 1) * fragment_payload_size < fragments_len {
             num_fragments += 1;
         }
         if num_fragments > 0x0ff {
             panic!("huge message cannot be fragmented {:?} > 255 * {:?}", msg.data_len(), self.max_frame_size);
         }
+        info!("start large: total {:?}, num_frag {:?}", serialized_len, num_fragments);
         let num_fragments = num_fragments as u8;
         let rest = match &mut msg {
             NetworkMessage::Error(_) => {
                 unreachable!("NetworkMessage::Error should always fit in a single frame")
             },
             NetworkMessage::RpcRequest(request) => {
-                request.raw_request.split_off(self.max_frame_size)
+                request.raw_request.split_off(header_payload_size)
             },
             NetworkMessage::RpcResponse(response) => {
-                response.raw_response.split_off(self.max_frame_size)
+                response.raw_response.split_off(header_payload_size)
             },
             NetworkMessage::DirectSendMsg(message) => {
-                message.raw_msg.split_off(self.max_frame_size)
+                message.raw_msg.split_off(header_payload_size)
             },
         };
         self.large_message = Some(rest);
@@ -178,7 +189,9 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                 counters::network_application_outbound_traffic(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), msg.data_len() as u64);
                 let queue_micros = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64) - enqueue_micros;
                 counters::network_peer_outbound_queue_time(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), queue_micros);
-                if msg.data_len() > self.max_frame_size {
+                let serialized_len = estimate_serialized_length(&msg);
+                info!("next high prio ser len {:?}", serialized_len);
+                if serialized_len > self.max_frame_size {
                     // finish prior large message before starting a new large message
                     if self.large_message.is_some() {
                         self.next_large_msg = Some(msg);
@@ -198,7 +211,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
         }
     }
 
-    async fn try_next_msg(&mut self) -> Option<MultiplexMessage> {
+    fn try_next_msg(&mut self) -> Option<MultiplexMessage> {
         if let Some(mm) = self.try_high_prio_next_msg() {
             return Some(mm);
         }
@@ -207,7 +220,9 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                 counters::network_application_outbound_traffic(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), msg.data_len() as u64);
                 let queue_micros = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64) - enqueue_micros;
                 counters::network_peer_outbound_queue_time(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), queue_micros);
-                if msg.data_len() > self.max_frame_size {
+                let serialized_len = estimate_serialized_length(&msg);
+                info!("next ser len {:?}", serialized_len);
+                if serialized_len > self.max_frame_size { // TODO: FIXME, serialize msg to find out if it is bigger than max_frame_size?
                     // finish prior large message before starting a new large message
                     if self.large_message.is_some() {
                         self.next_large_msg = Some(msg);
@@ -245,7 +260,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                 if self.send_large || self.next_large_msg.is_some() {
                     self.next_large()
                 } else {
-                    match self.try_next_msg().await {
+                    match self.try_next_msg() {
                         None => {
                             close_reason = "try_next_msg None";
                             error!("try_next_msg None where it should be Some");
@@ -273,7 +288,8 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                                 counters::network_application_outbound_traffic(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), msg.data_len() as u64);
                                 let queue_micros = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64) - enqueue_micros;
                                 counters::network_peer_outbound_queue_time(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), queue_micros);
-                                if msg.data_len() > self.max_frame_size {
+                                info!("selected high prio for {:?} bytes", estimate_serialized_length(&msg));
+                                if estimate_serialized_length(&msg) > self.max_frame_size {
                                     // start stream
                                     self.start_large(msg)
                                 } else {
@@ -291,7 +307,8 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                                 counters::network_application_outbound_traffic(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), msg.data_len() as u64);
                                 let queue_micros = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64) - enqueue_micros;
                                 counters::network_peer_outbound_queue_time(self.role_type.as_str(), self.network_id.as_str(), msg.protocol_id_as_str(), queue_micros);
-                                if msg.data_len() > self.max_frame_size {
+                                info!("selected normal for {:?} bytes", estimate_serialized_length(&msg));
+                                if estimate_serialized_length(&msg) > self.max_frame_size {
                                     // start stream
                                     self.start_large(msg)
                                 } else {
@@ -321,13 +338,14 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
             tokio::select! {
                 send_result = self.writer.send(&mm) => match send_result {
                     Ok(_) => {
+                        info!("writer_thread ok sent {:?} bytes", data_len);
                         peer_message_frames_written(&self.network_id).inc();
                         peer_message_bytes_written(&self.network_id).inc_by(data_len as u64);
                     }
                     Err(err) => {
                         // TODO: counter net write err
                         close_reason = "send error";
-                        warn!("writer_thread error sending message to peer: {:?}", err);
+                        warn!("writer_thread error sending [{:?}]message to peer: {:?}", data_len, err);
                         break;
                     }
                 },
@@ -461,6 +479,7 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
             None => {
                 // TODO: counter
                 error!("read_thread got rpc req for protocol {:?} we don't handle", protocol_id);
+                println!("read_thread got rpc req for protocol {:?} we don't handle", protocol_id);
                 // TODO: drop connection
             }
             Some(app) => {
@@ -471,6 +490,7 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
                     unreachable!("read_thread apps[{}] => {} {:?}", protocol_id, app.protocol_id, &app.sender);
                 }
                 let data_len = nmsg.data_len() as u64;
+                println!("forward {:?}", &protocol_id);
                 match app.sender.try_send(ReceivedMessage::new(nmsg, self.remote_peer_network_id)) {
                     Ok(_) => {
                         peer_read_message_bytes(&self.remote_peer_network_id.network_id(), &protocol_id, data_len);
@@ -595,6 +615,7 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
 
     async fn run(mut self, mut closed: Closer) {
         info!("read_thread start");
+        println!("read_thread start");
         let close_reason;
         loop {
             let rrmm = tokio::select! {
@@ -606,25 +627,31 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
                         peer = self.remote_peer_network_id,
                         "peerclose"
                     );
+                    println!("reader peerclose");
                     return;
                 },
             };
+            println!("reader rmm");
             match rrmm {
                 Some(rmm) => match rmm {
                     Ok(msg) => match msg {
                         MultiplexMessage::Message(nmsg) => {
+                            println!("read msg");
                             self.handle_message(nmsg).await;
                         }
                         MultiplexMessage::Stream(fragment) => {
+                            println!("read frag");
                             self.handle_stream(fragment).await;
                         }
                     }
                     Err(err) => {
+                        println!("read_thread {} err {}", self.remote_peer_network_id, err);
                         info!("read_thread {} err {}", self.remote_peer_network_id, err);
                         // Error, but not a close-worthy error?
                     }
                 }
                 None => {
+                    println!("read_thread {} None", self.remote_peer_network_id);
                     info!("read_thread {} None", self.remote_peer_network_id);
                     close_reason = "reader next none";
                     break;
@@ -713,8 +740,15 @@ pub fn app_inbound_drop(network_id: &NetworkId, protocol_id: &ProtocolId, data_l
     NETWORK_APP_INBOUND_DROP_BYTES.with_label_values(&values).inc_by(data_len);
 }
 
+/// Estimate size of NetworkMessage as wrapped in MultiplexMessage and BCS serialized
+fn estimate_serialized_length(msg: &NetworkMessage) -> usize {
+    msg.header_len() + msg.data_len() + 3
+}
+
+// TODO: this is the thing to fix today
 #[tokio::test]
 pub async fn test_stream_multiplexing() {
+    aptos_logger::Logger::init_for_testing();
     // much borrowed from start_peer()
     let config = NetworkConfig::default();
     let max_frame_size = 128; // smaller than real to force fragmentation of many messages to test fragmentation
@@ -748,35 +782,43 @@ pub async fn test_stream_multiplexing() {
         blob.push(rng.gen());
     }
 
+    let num_test_messages = 300;
+    let test_len = move |i| {
+        i + max_frame_size - 50
+    };
+
     let sender_blob = blob.clone();
+    let mut send_thread_closer = Closer::new();
+    let mut send_thread_close_sender = send_thread_closer.clone();
     let send_thread = async move {
-        for i in 0..100 {
-            let mut send_size = (i * 13) % max_data_len;
-            if send_size <= i {
-                send_size = i + 1;
-            }
-            let raw_msg = sender_blob.get(i..send_size).unwrap();
+        for i in 0..num_test_messages {
+            let mut send_end = i + test_len(i);
+            let raw_msg = sender_blob.get(i..send_end).unwrap();
             let raw_msg = Vec::<u8>::from(raw_msg);
             let msg = NetworkMessage::DirectSendMsg(DirectSendMsg {
                 protocol_id: ProtocolId::NetbenchDirectSend,
                 priority: 0,
                 raw_msg,
             });
-            println!("send {:?} size={:?} ...", i, send_size);
+            let send_size = send_end - i;
+            let hexlen = min(send_size, 10);
+            let hexend = i+hexlen;
+            let hexwat = sender_blob.get(i..hexend).unwrap().encode_hex::<String>();
+            println!("send {:?} size={:?} {:?}...", i, send_size, hexwat);
             if let Err(err) = sender.send((msg, 0)).await {
                 panic!("send err: {:?}", err);
             }
-            println!("sent {:?}", i);
+            // println!("sent {:?}", i);
         }
+        send_thread_closer.wait().await;
+        println!("send thread exit");
     };
     handle.spawn(send_thread);
 
-    for i in 0..100 {
-        let mut send_size = (i * 0x1085) % max_data_len;
-        if send_size <= i {
-            send_size = i + 1;
-        }
-        let raw_msg = blob.get(i..send_size).unwrap();
+    let mut errcount = 0;
+    for i in 0..num_test_messages {
+        let mut send_end = i + test_len(i);
+        let raw_msg = blob.get(i..send_end).unwrap();
         let raw_msg = Vec::<u8>::from(raw_msg);
         match receiver.recv().await {
             None => {
@@ -785,10 +827,15 @@ pub async fn test_stream_multiplexing() {
             Some(rmsg) => {
                 match rmsg.message {
                     NetworkMessage::DirectSendMsg(msg) => {
-                        if raw_msg != msg.raw_msg {
-                            panic!("msg{:?} not equal", i);
+                        if raw_msg == msg.raw_msg {
+                            println!("got {:?} ok", i);
+                        } else {
+                            println!("msg {:?} not equal", i);
+                            errcount += 1;
+                            if errcount >= 10 {
+                                panic!("too many errors");
+                            }
                         }
-                        println!("got {:?} ok", i);
                     }
                     _ => {
                         panic!("bad message")
@@ -797,4 +844,6 @@ pub async fn test_stream_multiplexing() {
             }
         }
     }
+    println!("outer done");
+    send_thread_close_sender.close().await;
 }
