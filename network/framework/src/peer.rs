@@ -125,9 +125,10 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
 
     /// send a next chunk from a currently fragmenting large message
     fn next_large(&mut self) -> MultiplexMessage {
+        let fragment_payload_size = self.max_frame_size - STREAM_FRAGMENT_OVERHEAD_BYTES;
         let mut blob = self.large_message.take().unwrap();
-        if blob.len() > self.max_frame_size {
-            let rest = blob.split_off(self.max_frame_size);
+        if blob.len() > fragment_payload_size {
+            let rest = blob.split_off(fragment_payload_size);
             self.large_message = Some(rest);
         }
         self.large_fragment_id += 1;
@@ -140,16 +141,15 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
     }
 
     fn start_large(&mut self, msg: NetworkMessage) -> MultiplexMessage {
-        // pub const STREAM_HEADER_OVERHEAD_BYTES : usize = 7;
-        // pub const STREAM_FRAGMENT_OVERHEAD_BYTES : usize = 7;
         peer_message_large_msg_fragmented(&self.network_id, msg.protocol_id_as_str()).inc();
         self.stream_request_id += 1;
         self.send_large = false;
         self.large_fragment_id = 0;
         let header_payload_size = self.max_frame_size - STREAM_HEADER_OVERHEAD_BYTES - msg.header_len();
         let fragment_payload_size = self.max_frame_size - STREAM_FRAGMENT_OVERHEAD_BYTES;
-        let serialized_len = estimate_serialized_length(&msg);
-        let fragments_len = serialized_len - header_payload_size;
+        // let serialized_len = estimate_serialized_length(&msg);
+        let payload_len = msg.data_len();
+        let fragments_len = payload_len - header_payload_size;
         let mut num_fragments = (fragments_len / fragment_payload_size) + 1;
         let mut msg = msg;
         while (num_fragments - 1) * fragment_payload_size < fragments_len {
@@ -158,7 +158,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
         if num_fragments > 0x0ff {
             panic!("huge message cannot be fragmented {:?} > 255 * {:?}", msg.data_len(), self.max_frame_size);
         }
-        info!("start large: total {:?}, num_frag {:?}", serialized_len, num_fragments);
+        info!("start large: payload len {:?}, num_frag {:?}", payload_len, num_fragments);
         let num_fragments = num_fragments as u8;
         let rest = match &mut msg {
             NetworkMessage::Error(_) => {
@@ -345,7 +345,7 @@ impl<WriteThing: AsyncWrite + Unpin + Send> WriterContext<WriteThing> {
                     Err(err) => {
                         // TODO: counter net write err
                         close_reason = "send error";
-                        warn!("writer_thread error sending [{:?}]message to peer: {:?}", data_len, err);
+                        warn!("writer_thread error sending [{:?}]message to peer: {:?} mm={:?}", data_len, err, mm);
                         break;
                     }
                 },
@@ -490,12 +490,13 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
                     unreachable!("read_thread apps[{}] => {} {:?}", protocol_id, app.protocol_id, &app.sender);
                 }
                 let data_len = nmsg.data_len() as u64;
-                println!("forward {:?}", &protocol_id);
                 match app.sender.try_send(ReceivedMessage::new(nmsg, self.remote_peer_network_id)) {
                     Ok(_) => {
+                        println!("forward {:?}", &protocol_id);
                         peer_read_message_bytes(&self.remote_peer_network_id.network_id(), &protocol_id, data_len);
                     }
                     Err(_) => {
+                        println!("forward {:?} ERROR DROP", &protocol_id);
                         app_inbound_drop(&self.remote_peer_network_id.network_id(), &protocol_id, data_len);
                     }
                 }
@@ -583,7 +584,7 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
                     self.fragment_index = 0;
                     return;
                 }
-                info!("read_thread more id={}, {}b", more.request_id, more.raw_data.len());
+
                 match self.large_message.as_mut() {
                     None => {
                         warn!("got fragment without header");
@@ -606,8 +607,11 @@ impl<ReadThing: AsyncRead + Unpin + Send> ReaderContext<ReadThing> {
                 }
                 self.fragment_index += 1;
                 if self.fragment_index == self.num_fragments {
+                    info!("read_thread more id={}, {}b done", more.request_id, more.raw_data.len());
                     let large_message = self.large_message.take().unwrap();
                     self.handle_message(large_message).await;
+                } else {
+                    info!("read_thread more id={}, {}b", more.request_id, more.raw_data.len());
                 }
             }
         }
@@ -782,16 +786,20 @@ pub async fn test_stream_multiplexing() {
         blob.push(rng.gen());
     }
 
-    let num_test_messages = 300;
+    let num_test_messages = 300; // this should be about 2.5x max_frame_size so we cover the unsplit case up to about 3 fragments.
     let test_len = move |i| {
         i + max_frame_size - 50
     };
+
+    let send_sem = Arc::new(tokio::sync::Semaphore::new(50));
+    let send_sem_readside = send_sem.clone();
 
     let sender_blob = blob.clone();
     let mut send_thread_closer = Closer::new();
     let mut send_thread_close_sender = send_thread_closer.clone();
     let send_thread = async move {
         for i in 0..num_test_messages {
+            send_sem.acquire().await.unwrap().forget();
             let mut send_end = i + test_len(i);
             let raw_msg = sender_blob.get(i..send_end).unwrap();
             let raw_msg = Vec::<u8>::from(raw_msg);
@@ -810,6 +818,7 @@ pub async fn test_stream_multiplexing() {
             }
             // println!("sent {:?}", i);
         }
+        println!("send thread wait");
         send_thread_closer.wait().await;
         println!("send thread exit");
     };
@@ -828,9 +837,9 @@ pub async fn test_stream_multiplexing() {
                 match rmsg.message {
                     NetworkMessage::DirectSendMsg(msg) => {
                         if raw_msg == msg.raw_msg {
-                            println!("got {:?} ok", i);
+                            println!("got {:?} ok [{:?}] bytes", i, msg.raw_msg.len());
                         } else {
-                            println!("msg {:?} not equal", i);
+                            println!("msg {:?} not equal [{:?}] bytes", i, msg.raw_msg.len());
                             errcount += 1;
                             if errcount >= 10 {
                                 panic!("too many errors");
@@ -843,7 +852,9 @@ pub async fn test_stream_multiplexing() {
                 }
             }
         }
+        send_sem_readside.add_permits(1);
     }
     println!("outer done");
     send_thread_close_sender.close().await;
+    println!("done done");
 }
