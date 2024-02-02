@@ -25,7 +25,7 @@ impl StreamMessage {
     pub fn header_len(&self) -> usize {
         match self {
             StreamMessage::Header(head) => {head.message.header_len() + 5}
-            StreamMessage::Fragment(frag) => {5}
+            StreamMessage::Fragment(_frag) => {5}
         }
     }
 }

@@ -9,7 +9,7 @@ use futures::io::{AsyncRead,AsyncReadExt,AsyncWrite};
 use futures::StreamExt;
 use futures::SinkExt;
 use futures::stream::Fuse;
-use tokio::sync::mpsc::error::{SendError, TryRecvError};
+use tokio::sync::mpsc::error::TryRecvError;
 use aptos_config::config::{NetworkConfig, RoleType};
 use aptos_config::network_id::{NetworkContext, NetworkId, PeerNetworkId};
 use aptos_logger::{error, info, warn};
@@ -791,16 +791,17 @@ pub async fn test_stream_multiplexing() {
         i + max_frame_size - 50
     };
 
+    // limit the number of sends in flight, test needs to cheat and have this rate limiting between source and sink otherwise messages will get dropped and this tests wants to see perfect message sequence. Normal operation drops messages when the application can't read them as fast as they're coming in, but in test mode we can easily get to where tokio doesn't let the consumer threads run and they drop messages even though they are runnable.
     let send_sem = Arc::new(tokio::sync::Semaphore::new(50));
     let send_sem_readside = send_sem.clone();
 
     let sender_blob = blob.clone();
     let mut send_thread_closer = Closer::new();
-    let mut send_thread_close_sender = send_thread_closer.clone();
+    let send_thread_close_sender = send_thread_closer.clone();
     let send_thread = async move {
         for i in 0..num_test_messages {
             send_sem.acquire().await.unwrap().forget();
-            let mut send_end = i + test_len(i);
+            let send_end = i + test_len(i);
             let raw_msg = sender_blob.get(i..send_end).unwrap();
             let raw_msg = Vec::<u8>::from(raw_msg);
             let msg = NetworkMessage::DirectSendMsg(DirectSendMsg {
@@ -826,7 +827,7 @@ pub async fn test_stream_multiplexing() {
 
     let mut errcount = 0;
     for i in 0..num_test_messages {
-        let mut send_end = i + test_len(i);
+        let send_end = i + test_len(i);
         let raw_msg = blob.get(i..send_end).unwrap();
         let raw_msg = Vec::<u8>::from(raw_msg);
         match receiver.recv().await {

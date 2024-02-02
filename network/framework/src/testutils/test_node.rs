@@ -11,7 +11,7 @@ use crate::{
     //     direct_send::Message,
     //     // rpc::{InboundRpcRequest, OutboundRpcRequest},
     // },
-    protocols::{network::ReceivedMessage, wire::messaging::v1::NetworkMessage},
+    protocols::network::ReceivedMessage, // wire::messaging::v1::NetworkMessage},
     transport::ConnectionMetadata,
     ProtocolId,
 };
@@ -23,7 +23,7 @@ use aptos_netcore::transport::ConnectionOrigin;
 use aptos_types::PeerId;
 use async_trait::async_trait;
 // use futures::StreamExt;
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc};
 use crate::protocols::network::OutboundPeerConnections;
 
 /// A sender to a node to mock an inbound network message from [`PeerManager`]
