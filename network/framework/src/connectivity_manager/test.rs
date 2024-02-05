@@ -148,7 +148,6 @@ impl TestHarness {
             transport,
             apps,
             peer_senders.clone(),
-            true, /* enable_latency_aware_dialing */
         );
         let mock = Self {
             network_context,
@@ -486,7 +485,7 @@ fn connect_to_seeds_on_startup() {
         println!("connect_to_seeds_on_startup done");
     };
     let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_time().build().unwrap();
-    runtime.enter();
+    let _enter_context = runtime.enter();
     let conn_mgr_future = conn_mgr.start(runtime.handle().clone());
     runtime.block_on(future::join(conn_mgr_future, test));
 }

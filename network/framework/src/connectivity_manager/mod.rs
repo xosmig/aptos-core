@@ -131,8 +131,6 @@ pub struct ConnectivityManager<TBackoff> {
     event_id: u32,
     /// A way to limit the number of connected peers by outgoing dials.
     outbound_connection_limit: Option<usize>,
-    /// Whether we are using mutual authentication or not
-    mutual_authentication: bool,
     /// how to connect to new peers
     transport: AptosNetTransportActual,
     /// routing by ProtocolId to application code, for passing to created peers
@@ -375,7 +373,6 @@ where
         let connectivity_check_interval = Duration::from_millis(config.connectivity_check_interval_ms);
         let max_delay = Duration::from_millis(config.max_connection_delay_ms);
         let outbound_connection_limit = Some(config.max_outbound_connections);
-        let mutual_authentication = config.mutual_authentication;
         let enable_latency_aware_dialing = config.enable_latency_aware_dialing;
 
         // Verify that the trusted peers set exists and that it is empty
@@ -412,7 +409,6 @@ where
             backoff_strategy,
             max_delay,
             event_id: 0,
-            mutual_authentication,
             outbound_connection_limit,
             transport,
             apps,
