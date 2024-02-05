@@ -9,7 +9,7 @@ use aptos_config::config::{NetworkConfig, NodeConfig};
 use aptos_config::network_id::{NetworkContext, NetworkId};
 use aptos_consensus::network_interface::ConsensusMsg;
 use aptos_dkg_runtime::DKGMessage;
-use aptos_jwk_consensus::JWKConsensusMsg;
+use aptos_jwk_consensus::types::JWKConsensusMsg;
 use aptos_network2::protocols::wire::handshake::v1::ProtocolId;
 use aptos_network2_builder::NetworkBuilder;
 use aptos_logger::{debug, info};

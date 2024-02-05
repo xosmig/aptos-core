@@ -11,7 +11,7 @@ use aptos_time_service::{MockTimeService, TimeService};
 use aptos_types::{account_address::AccountAddress, network_address::NetworkAddress};
 use futures::future;
 use maplit::{hashmap, hashset};
-use rand::rngs::StdRng;
+use rand::{rngs::StdRng, SeedableRng};
 use std::{io, str::FromStr};
 // use std::future::Future;
 use std::sync::Once;
@@ -148,6 +148,7 @@ impl TestHarness {
             transport,
             apps,
             peer_senders.clone(),
+            true, /* enable_latency_aware_dialing */
         );
         let mock = Self {
             network_context,
