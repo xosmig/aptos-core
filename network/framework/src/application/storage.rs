@@ -287,6 +287,13 @@ impl PeersAndMetadata {
         receiver
     }
 
+    #[cfg(test)]
+    pub fn close_subscribers(&self) {
+        let mut listeners = self.subscribers.write();
+        // drop all the senders to close them
+        listeners.clear();
+    }
+
     /// Updates the connection metadata associated with the given peer.
     /// If no peer metadata exists, a new one is created.
     pub fn insert_connection_metadata(

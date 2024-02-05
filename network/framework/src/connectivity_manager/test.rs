@@ -49,7 +49,7 @@ fn setup() {
     SETUP_ONCE.call_once(|| {
         println!("connectivity_manager::test::setup() called");
         console_subscriber::init();
-        aptos_logger::Logger::new().level(aptos_logger::Level::Debug).init();
+        aptos_logger::Logger::init_for_testing();
     });
 }
 
@@ -427,7 +427,6 @@ impl TestHarness {
 }
 
 #[test]
-#[ignore] // TODO: broken test from network1
 fn connect_to_seeds_on_startup() {
     setup();
     let (seed_peer_id, seed_peer, _, seed_addr) = test_peer(AccountAddress::ONE);
@@ -468,8 +467,12 @@ fn connect_to_seeds_on_startup() {
         // We should try to connect to both the new address and seed address.
         mock.trigger_connectivity_check().await;
         println!("connect_to_seeds_on_startup 5.1");
-        mock.trigger_pending_dials().await;
+        // mock.trigger_pending_dials().await;
+        mock.trigger_connectivity_check().await;
         println!("connect_to_seeds_on_startup 5.2");
+        mock.trigger_pending_dials().await;
+        println!("connect_to_seeds_on_startup 5.3");
+        // wait for a dial but send that dial an error
         mock.expect_one_dial_fail(seed_peer_id, new_seed_addr, Duration::from_secs(5)).await;
 
         println!("connect_to_seeds_on_startup 6");
@@ -478,9 +481,13 @@ fn connect_to_seeds_on_startup() {
         mock.trigger_pending_dials().await;
         mock.expect_one_dial_success(seed_peer_id, seed_addr, Duration::from_secs(1)).await;
 
+        mock.peers_and_metadata.close_subscribers();
         println!("connect_to_seeds_on_startup done");
     };
-    Runtime::new().unwrap().block_on(future::join(conn_mgr.test_start(), test));
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_time().build().unwrap();
+    runtime.enter();
+    let conn_mgr_future = conn_mgr.start(runtime.handle().clone());
+    runtime.block_on(future::join(conn_mgr_future, test));
 }
 
 #[test]
@@ -1003,7 +1010,7 @@ async fn test_stale_peers_unknown_inbound() {
         ConnectionNotification::NewPeer(connection_metadata, network_context);
     connectivity_manager.handle_control_notification(connection_notification);
 
-    connectivity_manager.update_peer_metadata_cache().await;
+    connectivity_manager.update_peer_metadata_cache();
     // Verify we have 2 peers
     assert_eq!(connectivity_manager.peer_metadata_cache.len(), 2);
 
@@ -1051,7 +1058,7 @@ async fn test_stale_peers_vfn_inbound() {
         ConnectionNotification::NewPeer(connection_metadata_2.clone(), network_context);
     connectivity_manager.handle_control_notification(connection_notification);
 
-    connectivity_manager.update_peer_metadata_cache().await;
+    connectivity_manager.update_peer_metadata_cache();
     // Verify we have 2 peers
     assert_eq!(connectivity_manager.peer_metadata_cache.len(), 2);
 

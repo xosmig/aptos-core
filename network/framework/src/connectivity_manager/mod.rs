@@ -381,7 +381,7 @@ where
         connmgr
     }
 
-    async fn update_peer_metadata_cache(&mut self) {
+    fn update_peer_metadata_cache(&mut self) {
         let maybe_update = self.peers_and_metadata.get_all_peers_and_metadata_generational(self.peer_metadata_generation, true, &[]);
         match maybe_update {
             None => {},
@@ -412,12 +412,13 @@ where
 
         let connection_notifs_rx = self.peers_and_metadata.subscribe();
         let mut connection_notifs_rx = ReceiverStream::new(connection_notifs_rx).fuse();
-        self.update_peer_metadata_cache().await;
+        self.update_peer_metadata_cache();
 
         loop {
             self.event_id = self.event_id.wrapping_add(1);
             futures::select! {
                 _ = ticker.select_next_some() => {
+                    // info!("tick check_connectivity");
                     self.check_connectivity(&mut pending_dials, &handle).await;
                 },
                 req = self.requests_rx.select_next_some() => {
@@ -426,7 +427,7 @@ where
                 maybe_notif = connection_notifs_rx.next() => {
                     // Shutdown the connectivity manager when the PeerManager
                     // shuts down.
-                    self.update_peer_metadata_cache().await;
+                    self.update_peer_metadata_cache();
                     match maybe_notif {
                         Some(notif) => {
                             self.handle_control_notification(notif.clone());
@@ -484,6 +485,7 @@ where
     async fn close_stale_connections(&mut self) {
         // TODO: stale peer closing is disabled for test, figure out what exactly 'stale' was supposed to mean and bring it back
         // #[cfg(disabled)]
+        self.update_peer_metadata_cache();
         if let Some(trusted_peers) = self.get_trusted_peers() {
             // Identify stale peer connections
             let trusted_peers = trusted_peers.read().clone();
@@ -543,6 +545,7 @@ where
                 .cloned()
                 .collect();
 
+            // info!("{:?} stale dials to cancel", stale_peer_dials.len());
             // Remove the stale dials from the dial queue
             for stale_peer_dial in stale_peer_dials {
                 debug!(
@@ -551,7 +554,7 @@ where
                     self.network_context,
                     stale_peer_dial.short_str()
                 );
-                self.dial_queue.remove(&stale_peer_dial);
+                self.dial_queue.remove(&stale_peer_dial).map(|x| x.send(()));
             }
         }
     }
@@ -562,6 +565,7 @@ where
         handle: &Handle,
     ) {
         let to_connect = self.choose_peers_to_dial();
+        // info!("dial_eligible_peers found {:?} to connect to", to_connect.len());
         for (peer_id, peer) in to_connect {
             self.queue_dial_peer(peer_id, peer, pending_dials, handle);
         }
@@ -674,6 +678,7 @@ where
         // the next dial attempt for this peer.
         let dial_delay = dial_state.next_backoff_delay(self.max_delay);
         let f_delay = self.time_service.sleep(dial_delay);
+        // info!("queue_dial_peer going to dial {} after delay {:?}", addr, dial_delay);
 
         let (cancel_tx, cancel_rx) = oneshot::channel();
 
@@ -733,7 +738,18 @@ where
                         }
                     }
                 },
-                _ = cancel_rx.fuse() => DialResult::Cancelled,
+                _ = cancel_rx.fuse() => {
+                    info!(
+                        NetworkSchema::new(&network_context)
+                            .remote_peer(&peer_id)
+                            .network_address(&addr),
+                        "{} dialing CANCELLED {} at {}",
+                        network_context,
+                        peer_id.short_str(),
+                        addr
+                    );
+                    DialResult::Cancelled
+                },
             };
             log_dial_result(network_context, peer_id, addr, dial_result);
             // Send peer_id as future result so it can be removed from dial queue.
@@ -771,6 +787,7 @@ where
             )
         });
 
+        self.update_peer_metadata_cache();
         // Cancel dials to peers that are no longer eligible.
         self.cancel_stale_dials().await;
         // Disconnect from connected peers that are no longer eligible.
@@ -810,6 +827,7 @@ where
             },
             // GetConnectedSize only used by test code
             ConnectivityRequest::GetConnectedSize(sender) => {
+                self.update_peer_metadata_cache();
                 sender.send(self.peer_metadata_cache.len()).unwrap();
             },
         }
@@ -942,7 +960,7 @@ where
 
                 // Cancel possible queued dial to this peer.
                 self.dial_states.remove(&peer_id);
-                self.dial_queue.remove(&peer_id);
+                self.dial_queue.remove(&peer_id).map(|x| x.send(()));
             },
             ConnectionNotification::LostPeer(metadata, _context, _reason) => {
                 let peer_id = metadata.remote_peer_id;
@@ -957,6 +975,9 @@ where
                         peer_id.short_str(),
                         metadata
                     );
+                // Cancel possible queued dial to this peer.
+                self.dial_states.remove(&peer_id);
+                self.dial_queue.remove(&peer_id).map(|x| x.send(()));
             },
         }
     }
