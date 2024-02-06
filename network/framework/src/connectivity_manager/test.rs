@@ -683,7 +683,6 @@ fn retry_on_failure() {
 // Tests that if we dial an already connected peer or disconnect from an already disconnected
 // peer, connectivity manager does not send any additional dial or disconnect requests.
 #[test]
-#[ignore] // TODO: broken test from network1
 fn no_op_requests() {
     setup();
     let (other_peer_id, peer, _, other_addr) = test_peer(AccountAddress::ZERO);
@@ -697,7 +696,9 @@ fn no_op_requests() {
 
         // Peer manager receives a request to connect to the other peer.
         mock.trigger_connectivity_check().await;
+        mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
+        info!("no_op_requests 1");
         mock.expect_one_dial_fail(other_peer_id, other_addr.clone(), Duration::from_secs(1))
             .await;
 
@@ -716,6 +717,7 @@ fn no_op_requests() {
 
         // Peer manager receives a request to disconnect from the other peer, which fails.
         mock.trigger_connectivity_check().await;
+        info!("no_op_requests 2");
         mock.expect_disconnect_fail(other_peer_id, other_addr.clone())
             .await;
 
@@ -727,8 +729,11 @@ fn no_op_requests() {
         // anything - if it does, the task should panic. That may not fail the test (right
         // now), but will be easily spotted by someone running the tests locally.
         mock.trigger_connectivity_check().await;
+        info!("no_op_requests 3");
         assert_eq!(0, mock.get_connected_size().await);
         assert_eq!(0, mock.get_dial_queue_size().await);
+        mock.peers_and_metadata.close_subscribers();
+        info!("no_op_requests done");
     };
     Runtime::new().unwrap().block_on(future::join(conn_mgr.test_start(), test));
 }
