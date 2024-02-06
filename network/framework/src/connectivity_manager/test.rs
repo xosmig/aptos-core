@@ -279,7 +279,7 @@ impl TestHarness {
                 // already gone, okay
             }
             Some(stub) => {
-                println!("Waiting to receive disconnect request");
+                println!("Waiting to receive disconnect request for {:?}", peer_network_id);
                 let mut close = stub.close.clone();
                 close.wait().await;
             }
@@ -584,7 +584,6 @@ fn lost_connection() {
 }
 
 #[test]
-#[ignore] // TODO: broken test from network1
 fn disconnect() {
     setup();
     let (other_peer_id, other_peer, _, other_addr) = test_peer(AccountAddress::ZERO);
@@ -599,6 +598,9 @@ fn disconnect() {
         // Waiting to receive dial request
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
+        mock.trigger_connectivity_check().await;
+        mock.trigger_pending_dials().await;
+        info!("disconnect 1");
         mock.expect_one_dial_success(other_peer_id, other_addr.clone(), Duration::from_secs(1))
             .await;
 
@@ -613,8 +615,13 @@ fn disconnect() {
 
         // Peer is now ineligible, we should disconnect from them
         mock.trigger_connectivity_check().await;
+        info!("disconnect 2");
+        mock.trigger_connectivity_check().await;
+        mock.trigger_connectivity_check().await;
         mock.expect_disconnect_success(other_peer_id, other_addr)
             .await;
+        mock.peers_and_metadata.close_subscribers();
+        info!("disconnect done");
     };
     Runtime::new().unwrap().block_on(future::join(conn_mgr.test_start(), test));
 }

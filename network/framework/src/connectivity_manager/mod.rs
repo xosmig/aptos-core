@@ -460,7 +460,7 @@ where
             self.event_id = self.event_id.wrapping_add(1);
             futures::select! {
                 _ = ticker.select_next_some() => {
-                    // info!("tick check_connectivity");
+                    info!("tick check_connectivity");
                     self.check_connectivity(&mut pending_dials, &handle).await;
                 },
                 req = self.requests_rx.select_next_some() => {
@@ -526,7 +526,7 @@ where
     /// this function will close our connection to it.
     async fn close_stale_connections(&mut self) {
         // TODO: stale peer closing is disabled for test, figure out what exactly 'stale' was supposed to mean and bring it back
-        // #[cfg(disabled)]
+        // see disable below...
         self.update_peer_metadata_cache();
         if let Some(trusted_peers) = self.get_trusted_peers() {
             // Identify stale peer connections
@@ -558,7 +558,7 @@ where
                         self.peer_senders_generation = new_generation;
                     }
                 }
-                #[cfg(disabled)] // TODO: actually closing 'stale' is disabled until fixed
+                // #[cfg(disabled)] // TODO: actually closing 'stale' is disabled until fixed
                 match self.peer_senders_cache.get(peer_network_id) {
                     None => {
                         // already gone, nothing to do
@@ -608,7 +608,7 @@ where
         handle: &Handle,
     ) {
         let to_connect = self.choose_peers_to_dial().await;
-        // info!("dial_eligible_peers found {:?} to connect to", to_connect.len());
+        info!("dial_eligible_peers found {:?} to connect to", to_connect.len());
         for (peer_id, peer) in to_connect {
             self.queue_dial_peer(peer_id, peer, pending_dials, handle);
         }
@@ -656,10 +656,10 @@ where
             }
             eligible_peers.push((peer_id, peer));
         }
-        aptos_logger::sample!(
-            aptos_logger::sample::SampleRate::Frequency(10),
-            info!("peers: {} discovered, {} eligible, {} ineligible, {} already connected, {} already in dial queue, {} wrong role", num_discovered, eligible_peers.len(), ineligible, already_connected, already_in_dial_queue, wrong_role)
-        );
+        // aptos_logger::sample!(
+        //     aptos_logger::sample::SampleRate::Frequency(10),
+            info!("peers: {} discovered, {} eligible, {} ineligible, {} already connected, {} already in dial queue, {} wrong role", num_discovered, eligible_peers.len(), ineligible, already_connected, already_in_dial_queue, wrong_role);
+        // );
 
         // Initialize the dial state for any new peers
         for (peer_id, _) in &eligible_peers {
@@ -837,7 +837,7 @@ where
         // the next dial attempt for this peer.
         let dial_delay = dial_state.next_backoff_delay(self.max_delay);
         let f_delay = self.time_service.sleep(dial_delay);
-        // info!("queue_dial_peer going to dial {} after delay {:?}", addr, dial_delay);
+        info!("queue_dial_peer going to dial {} after delay {:?}", addr, dial_delay);
 
         let (cancel_tx, cancel_rx) = oneshot::channel();
 
@@ -938,13 +938,13 @@ where
         );
 
         // Log the eligible peers with addresses from discovery
-        sample!(SampleRate::Duration(Duration::from_secs(60)), {
+        // sample!(SampleRate::Duration(Duration::from_secs(60)), {
             info!(
                 NetworkSchema::new(&self.network_context),
                 discovered_peers = ?self.discovered_peers,
                 "Active discovered peers"
-            )
-        });
+            );
+        // });
 
         self.update_peer_metadata_cache();
         // Cancel dials to peers that are no longer eligible.
