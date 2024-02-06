@@ -558,7 +558,7 @@ where
                         self.peer_senders_generation = new_generation;
                     }
                 }
-                // #[cfg(disabled)] // TODO: actually closing 'stale' is disabled until fixed
+                #[cfg(disabled)] // TODO: actually closing 'stale' is disabled until fixed
                 match self.peer_senders_cache.get(peer_network_id) {
                     None => {
                         // already gone, nothing to do
