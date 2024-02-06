@@ -543,7 +543,6 @@ fn addr_change() {
 }
 
 #[test]
-#[ignore] // TODO: broken test from network1
 fn lost_connection() {
     setup();
     let (other_peer_id, other_peer, _, other_addr) = test_peer(AccountAddress::ZERO);
@@ -554,23 +553,32 @@ fn lost_connection() {
         let update = hashmap! {other_peer_id => other_peer};
         mock.send_update_discovered_peers(DiscoverySource::OnChainValidatorSet, update)
             .await;
+        info!("lost_connection 1");
 
         // Peer manager receives a request to connect to the other peer.
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
+        mock.trigger_connectivity_check().await;
+        mock.trigger_pending_dials().await;
+        info!("lost_connection 2");
         mock.expect_one_dial_success(other_peer_id, other_addr.clone(), Duration::from_secs(1))
             .await;
 
         // Sending LostPeer event to signal connection loss
+        info!("lost_connection 3");
         mock.send_lost_peer_await_delivery(other_peer_id, other_addr.clone())
             .await;
 
         // Peer manager receives a request to connect to the other peer after loss of
         // connection.
+        info!("lost_connection 4");
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
+        info!("lost_connection 5");
         mock.expect_one_dial_success(other_peer_id, other_addr.clone(), Duration::from_secs(1))
             .await;
+        mock.peers_and_metadata.close_subscribers();
+        info!("lost_connection done");
     };
     Runtime::new().unwrap().block_on(future::join(conn_mgr.test_start(), test));
 }
