@@ -829,7 +829,6 @@ fn multiple_addrs_basic() {
 // Test that connectivity manager will work with multiple addresses even if we
 // retry more times than there are addresses.
 #[test]
-#[ignore] // TODO: broken test from network1
 fn multiple_addrs_wrapping() {
     setup();
     let (other_peer_id, mut peer, pubkey, _) = test_peer(AccountAddress::ZERO);
@@ -847,20 +846,26 @@ fn multiple_addrs_wrapping() {
 
         // Assume that the first listen addr fails to connect.
         mock.trigger_connectivity_check().await;
+        mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
+        info!("multiple_addrs_wrapping 1");
         mock.expect_one_dial_fail(other_peer_id, other_addr_1.clone(), Duration::from_secs(1))
             .await;
 
         // The second attempt also fails.
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
+        info!("multiple_addrs_wrapping 2");
         mock.expect_one_dial_fail(other_peer_id, other_addr_2, Duration::from_secs(1)).await;
 
         // Our next attempt should wrap around to the first address.
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
+        info!("multiple_addrs_wrapping 3");
         mock.expect_one_dial_success(other_peer_id, other_addr_1, Duration::from_secs(1))
             .await;
+        mock.peers_and_metadata.close_subscribers();
+        info!("multiple_addrs_wrapping done");
     };
     Runtime::new().unwrap().block_on(future::join(conn_mgr.test_start(), test));
 }
