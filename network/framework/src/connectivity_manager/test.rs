@@ -788,7 +788,6 @@ fn backoff_on_failure() {
 // Test that connectivity manager will still connect to a peer if it advertises
 // multiple listen addresses and some of them don't work.
 #[test]
-#[ignore] // TODO: broken test from network1
 fn multiple_addrs_basic() {
     setup();
     let (other_peer_id, mut peer, pubkey, _) = test_peer(AccountAddress::ZERO);
@@ -808,7 +807,9 @@ fn multiple_addrs_basic() {
 
         // Assume that the first listen addr fails to connect.
         mock.trigger_connectivity_check().await;
+        mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
+        info!("multiple_addrs_basic 1");
         mock.expect_one_dial_fail(other_peer_id, other_addr_1, Duration::from_secs(1)).await;
 
         // Since the last connection attempt failed for other_addr_1, we should
@@ -816,8 +817,11 @@ fn multiple_addrs_basic() {
         // succeeds and we should connect to the peer.
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
+        info!("multiple_addrs_basic 2");
         mock.expect_one_dial_success(other_peer_id, other_addr_2, Duration::from_secs(1))
             .await;
+        mock.peers_and_metadata.close_subscribers();
+        info!("multiple_addrs_basic done");
     };
     Runtime::new().unwrap().block_on(future::join(conn_mgr.test_start(), test));
 }
