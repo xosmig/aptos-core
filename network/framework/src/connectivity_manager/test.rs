@@ -628,7 +628,6 @@ fn disconnect() {
 
 // Tests that connectivity manager retries dials and disconnects on failure.
 #[test]
-#[ignore] // TODO: broken test from network1
 fn retry_on_failure() {
     setup();
     let (other_peer_id, peer, _, other_addr) = test_peer(AccountAddress::ZERO);
@@ -642,13 +641,16 @@ fn retry_on_failure() {
 
         // First dial attempt fails
         mock.trigger_connectivity_check().await;
+        mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
+        info!("retry_on_failure 1");
         mock.expect_one_dial_fail(other_peer_id, other_addr.clone(), Duration::from_secs(1))
             .await;
 
         // We should retry after the failed attempt; this time, it succeeds.
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
+        info!("retry_on_failure 2");
         mock.expect_one_dial_success(other_peer_id, other_addr.clone(), Duration::from_secs(1))
             .await;
 
@@ -662,14 +664,18 @@ fn retry_on_failure() {
 
         // Peer manager receives a request to disconnect from the other peer, which fails.
         mock.trigger_connectivity_check().await;
+        info!("retry_on_failure 3");
         mock.expect_disconnect_fail(other_peer_id, other_addr.clone())
             .await;
 
         // Peer manager receives another request to disconnect from the other peer, which now
         // succeeds.
         mock.trigger_connectivity_check().await;
+        info!("retry_on_failure 4");
         mock.expect_disconnect_success(other_peer_id, other_addr.clone())
             .await;
+        mock.peers_and_metadata.close_subscribers();
+        info!("retry_on_failure done");
     };
     Runtime::new().unwrap().block_on(future::join(conn_mgr.test_start(), test));
 }
