@@ -746,7 +746,6 @@ fn generate_account_address(val: usize) -> AccountAddress {
 }
 
 #[test]
-#[ignore] // TODO: broken test from network1
 fn backoff_on_failure() {
     setup();
     let (mut mock, conn_mgr) = TestHarness::new(HashMap::new());
@@ -765,10 +764,12 @@ fn backoff_on_failure() {
             .await;
 
         // We fail 10 attempts. In production, an exponential backoff strategy is used.
-        for _ in 0..10 {
+        for i in 0..10 {
             // Peer manager receives a request to connect to the seed peer.
             mock.trigger_connectivity_check().await;
+            mock.trigger_connectivity_check().await;
             mock.trigger_pending_dials().await;
+            info!("backoff_on_failure {}", i);
             mock.expect_one_dial_fail(peer_id_a, peer_a_addr.clone(), Duration::from_secs(1))
                 .await;
         }
@@ -776,7 +777,10 @@ fn backoff_on_failure() {
         // Finally, one dial request succeeds
         mock.trigger_connectivity_check().await;
         mock.trigger_pending_dials().await;
+        info!("backoff_on_failure -1");
         mock.expect_one_dial_success(peer_id_a, peer_a_addr, Duration::from_secs(1)).await;
+        mock.peers_and_metadata.close_subscribers();
+        info!("backoff_on_failure done");
     };
     Runtime::new().unwrap().block_on(future::join(conn_mgr.test_start(), test));
 }
