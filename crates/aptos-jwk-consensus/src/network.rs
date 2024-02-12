@@ -6,7 +6,7 @@ use crate::{
 };
 use anyhow::bail;
 use aptos_channels::{aptos_channel, message_queues::QueueStyle};
-use aptos_config::network_id::NetworkId;
+use aptos_config::network_id::{NetworkId, PeerNetworkId};
 use aptos_consensus_types::common::Author;
 #[cfg(test)]
 use aptos_infallible::RwLock;
@@ -22,7 +22,7 @@ use bytes::Bytes;
 use futures::Stream;
 use futures_channel::oneshot;
 use futures_util::{
-    stream::{select, select_all, StreamExt},
+    stream::{select, StreamExt},
     SinkExt,
 };
 #[cfg(test)]
@@ -36,14 +36,12 @@ pub struct IncomingRpcRequest {
     pub response_sender: Box<dyn RpcResponseSender>,
 }
 
-#[cfg(unused)]
 pub struct NetworkSender {
     author: AccountAddress,
     jwk_network_client: JWKConsensusNetworkClient<NetworkClient<JWKConsensusMsg>>,
     self_sender: aptos_channels::Sender<Event<JWKConsensusMsg>>,
 }
 
-#[cfg(unused)]
 impl NetworkSender {
     pub fn new(
         author: AccountAddress,
@@ -58,7 +56,6 @@ impl NetworkSender {
     }
 }
 
-#[cfg(unused)]
 #[async_trait::async_trait]
 impl RBNetworkSender<JWKConsensusMsg> for NetworkSender {
     async fn send_rb_rpc(
@@ -69,7 +66,8 @@ impl RBNetworkSender<JWKConsensusMsg> for NetworkSender {
     ) -> anyhow::Result<JWKConsensusMsg> {
         if receiver == self.author {
             let (tx, rx) = oneshot::channel();
-            let self_msg = Event::RpcRequest(receiver, msg, RPC[0], tx);
+            // TODO: does pretending to be validator network matter?
+            let self_msg = Event::RpcRequest(PeerNetworkId::new(NetworkId::Validator, receiver), msg, RPC[0], tx);
             self.self_sender.clone().send(self_msg).await?;
             if let Ok(Ok(Ok(bytes))) = timeout(time_limit, rx).await {
                 Ok(RPC[0].from_bytes(&bytes)?)
@@ -144,16 +142,7 @@ impl NetworkTask {
     ) -> (NetworkTask, NetworkReceivers) {
         let (rpc_tx, rpc_rx) = aptos_channel::new(QueueStyle::FIFO, 10, None);
 
-        // let network_and_events = network_service_events.into_network_and_events();
-        // if (network_and_events.values().len() != 1)
-        //     || !network_and_events.contains_key(&NetworkId::Validator)
-        // {
-        //     panic!("The network has not been setup correctly for JWK consensus!");
-        // }
-        //
-        // // Collect all the network events into a single stream
-        // let network_events: Vec<_> = network_and_events.into_values().collect();
-        let network_events = network_events.fuse(); //select_all(network_events).fuse();
+        let network_events = network_events.fuse();
         let all_events = Box::new(select(network_events, self_receiver));
 
         (NetworkTask { rpc_tx, all_events }, NetworkReceivers {
