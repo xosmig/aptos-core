@@ -541,15 +541,6 @@ where
                     continue; // not stale
                 }
                 // is stale! Close...
-                info!(
-                    NetworkSchema::new(&self.network_context).remote_peer(&peer_network_id.peer_id()),
-                    net = self.network_context,
-                    peer = peer_network_id,
-                    op = "stale",
-                    trusted = trusted_peers,
-                    metadata = metadata,
-                    "peerclose"
-                );
 
                 match self.peer_senders.get_generational(self.peer_senders_generation) {
                     None => {}
@@ -564,6 +555,15 @@ where
                         // already gone, nothing to do
                     }
                     Some(stub) => {
+                        info!(
+                            NetworkSchema::new(&self.network_context).remote_peer(&peer_network_id.peer_id()),
+                            net = self.network_context,
+                            peer = peer_network_id,
+                            op = "stale",
+                            trusted = trusted_peers,
+                            metadata = metadata,
+                            "peerclose"
+                        );
                         stub.close.close().await;
                     }
                 }
