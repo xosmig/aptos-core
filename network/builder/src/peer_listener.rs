@@ -98,7 +98,7 @@ impl<TTransport, TSocket> PeerListener<TTransport, TSocket>
                     }
                 }
                 None => {
-                    info!("listener_thread {:?} got None, assuming source closed, exiting", self.config.network_id, );
+                    error!("listener_thread {:?} got None, assuming source closed, exiting", self.config.network_id, );
                     return;
                 }
             };
@@ -125,7 +125,7 @@ impl<TTransport, TSocket> PeerListener<TTransport, TSocket>
                     );
                 }
                 Err(err) => {
-                    error!("listener_thread {:?} connection post-processing failed (continuing): {:?}", self.config.network_id, err);
+                    error!(addr = remote_addr, "listener_thread {:?} connection post-processing failed (continuing): {:?}", self.config.network_id, err);
                 }
             }
         }
