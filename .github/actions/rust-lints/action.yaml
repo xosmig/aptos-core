@@ -12,7 +12,7 @@ runs:
     - uses: actions/checkout@v3
       with:
         fetch-depth: 0 # get all the history because cargo xtest --change-since origin/main requires it.
-    - uses: aptos-labs/aptos-core/.github/actions/rust-setup@main
+    - uses: ./.github/actions/rust-setup
       with:
         GIT_CREDENTIALS: ${{ inputs.GIT_CREDENTIALS }}
 
@@ -23,5 +23,5 @@ runs:
     - name: Run cargo sort and rust lint checks
       shell: bash
       run: |
-        cargo install cargo-sort
-        scripts/rust_lint.sh --check
+        firebuild cargo install cargo-sort
+        firebuild scripts/rust_lint.sh --check
