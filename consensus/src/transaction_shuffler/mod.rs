@@ -1,7 +1,6 @@
 // Copyright © Aptos Foundation
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::sender_aware_shuffler::SenderAwareShuffler;
 use aptos_logger::info;
 use aptos_types::{
     on_chain_config::{
@@ -10,7 +9,11 @@ use aptos_types::{
     },
     transaction::SignedTransaction,
 };
+use sender_aware::SenderAwareShuffler;
 use std::sync::Arc;
+
+mod fairness;
+mod sender_aware;
 
 /// Interface to shuffle transactions
 pub trait TransactionShuffler: Send + Sync {
@@ -44,6 +47,23 @@ pub fn create_transaction_shuffler(
                 conflict_window_size
             );
             Arc::new(SenderAwareShuffler::new(conflict_window_size as usize))
+        },
+        TransactionShufflerType::Fairness {
+            sender_conflict_window_size,
+            module_conflict_window_size,
+            entry_fun_conflict_window_size,
+        } => {
+            info!(
+                "Using fairness transaction shuffling with conflict window sizes: sender {}, module {}, entry fun {}",
+                sender_conflict_window_size,
+                module_conflict_window_size,
+                entry_fun_conflict_window_size
+            );
+            Arc::new(fairness::FairnessShuffler {
+                sender_conflict_window_size: sender_conflict_window_size as usize,
+                module_conflict_window_size: module_conflict_window_size as usize,
+                entry_fun_conflict_window_size: entry_fun_conflict_window_size as usize,
+            })
         },
     }
 }

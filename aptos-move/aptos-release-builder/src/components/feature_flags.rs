@@ -91,7 +91,7 @@ pub enum FeatureFlag {
     LimitMaxIdentifierLength,
     OperatorBeneficiaryChange,
     VMBinaryFormatV7,
-    ResourceGroupsChargeAsSizeSum,
+    ResourceGroupsSplitInVmChangeSet,
     CommissionChangeDelegationPool,
     BN254Structures,
     WebAuthnSignature,
@@ -101,6 +101,8 @@ pub enum FeatureFlag {
     RemoveDetailedError,
     JWKConsensus,
     ConcurrentFungibleAssets,
+    RefundableBytes,
+    ObjectCodeDeployment,
 }
 
 fn generate_features_blob(writer: &CodeWriter, data: &[u64]) {
@@ -246,8 +248,8 @@ impl From<FeatureFlag> for AptosFeatureFlag {
             FeatureFlag::ConcurrentTokenV2 => AptosFeatureFlag::CONCURRENT_TOKEN_V2,
             FeatureFlag::LimitMaxIdentifierLength => AptosFeatureFlag::LIMIT_MAX_IDENTIFIER_LENGTH,
             FeatureFlag::OperatorBeneficiaryChange => AptosFeatureFlag::OPERATOR_BENEFICIARY_CHANGE,
-            FeatureFlag::ResourceGroupsChargeAsSizeSum => {
-                AptosFeatureFlag::RESOURCE_GROUPS_CHARGE_AS_SIZE_SUM
+            FeatureFlag::ResourceGroupsSplitInVmChangeSet => {
+                AptosFeatureFlag::RESOURCE_GROUPS_SPLIT_IN_VM_CHANGE_SET
             },
             FeatureFlag::CommissionChangeDelegationPool => {
                 AptosFeatureFlag::COMMISSION_CHANGE_DELEGATION_POOL
@@ -260,6 +262,8 @@ impl From<FeatureFlag> for AptosFeatureFlag {
             FeatureFlag::RemoveDetailedError => AptosFeatureFlag::REMOVE_DETAILED_ERROR_FROM_HASH,
             FeatureFlag::JWKConsensus => AptosFeatureFlag::JWK_CONSENSUS,
             FeatureFlag::ConcurrentFungibleAssets => AptosFeatureFlag::CONCURRENT_FUNGIBLE_ASSETS,
+            FeatureFlag::RefundableBytes => AptosFeatureFlag::REFUNDABLE_BYTES,
+            FeatureFlag::ObjectCodeDeployment => AptosFeatureFlag::OBJECT_CODE_DEPLOYMENT,
         }
     }
 }
@@ -328,8 +332,8 @@ impl From<AptosFeatureFlag> for FeatureFlag {
             AptosFeatureFlag::CONCURRENT_TOKEN_V2 => FeatureFlag::ConcurrentTokenV2,
             AptosFeatureFlag::LIMIT_MAX_IDENTIFIER_LENGTH => FeatureFlag::LimitMaxIdentifierLength,
             AptosFeatureFlag::OPERATOR_BENEFICIARY_CHANGE => FeatureFlag::OperatorBeneficiaryChange,
-            AptosFeatureFlag::RESOURCE_GROUPS_CHARGE_AS_SIZE_SUM => {
-                FeatureFlag::ResourceGroupsChargeAsSizeSum
+            AptosFeatureFlag::RESOURCE_GROUPS_SPLIT_IN_VM_CHANGE_SET => {
+                FeatureFlag::ResourceGroupsSplitInVmChangeSet
             },
             AptosFeatureFlag::COMMISSION_CHANGE_DELEGATION_POOL => {
                 FeatureFlag::CommissionChangeDelegationPool
@@ -342,6 +346,8 @@ impl From<AptosFeatureFlag> for FeatureFlag {
             AptosFeatureFlag::REMOVE_DETAILED_ERROR_FROM_HASH => FeatureFlag::RemoveDetailedError,
             AptosFeatureFlag::JWK_CONSENSUS => FeatureFlag::JWKConsensus,
             AptosFeatureFlag::CONCURRENT_FUNGIBLE_ASSETS => FeatureFlag::ConcurrentFungibleAssets,
+            AptosFeatureFlag::REFUNDABLE_BYTES => FeatureFlag::RefundableBytes,
+            AptosFeatureFlag::OBJECT_CODE_DEPLOYMENT => FeatureFlag::ObjectCodeDeployment,
         }
     }
 }
