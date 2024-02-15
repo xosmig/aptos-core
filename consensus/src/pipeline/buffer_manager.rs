@@ -593,7 +593,7 @@ impl BufferManager {
                                 commit_info = commit_info,
                                 "Failed to add commit vote",
                             );
-                            reply_nack(protocol, response_sender);
+                            reply_nack(protocol, response_sender); // TODO: send_commit_vote() doesn't care about the response and this should be direct send not RPC
                             item
                         },
                     };
@@ -629,14 +629,14 @@ impl BufferManager {
                         match protocol.to_bytes(&response) {
                             Ok(bytes) => {
                                 if let Err(send_err) = response_sender.send(Ok(bytes.into())) {
-                                    error!(
+                                    debug!(
                                         error = format!("{:?}", send_err.err().unwrap()),
                                         "CommitMessage::Decision send err"
                                     )
                                 }
                             }
                             Err(bcs_err) => {
-                                error!(
+                                warn!(
                                     error = bcs_err.to_string(),
                                     "CommitMessage::Decision bcs err"
                                 )
@@ -644,19 +644,19 @@ impl BufferManager {
                         }
                         return Some(target_block_id);
                     } else {
-                        error!("CommitMessage::Decision not aggregated")
+                        debug!("CommitMessage::Decision not aggregated")
                     }
                 } else {
-                    error!("CommitMessage::Decision no cursor")
+                    debug!("CommitMessage::Decision no cursor")
                 }
                 reply_nack(protocol, response_sender); // TODO: send_commit_proof() doesn't care about the response and this should be direct send not RPC
             },
             CommitMessage::Ack(_) => {
                 // It should be filtered out by verify, so we log errors here
-                error!("Unexpected ack message");
+                warn!("Unexpected ack message");
             },
             CommitMessage::Nack => {
-                error!("Unexpected NACK message");
+                warn!("Unexpected NACK message");
             },
         }
         None
@@ -825,6 +825,7 @@ impl BufferManager {
 }
 
 fn reply_nack(protocol: ProtocolId, response_sender: oneshot::Sender<Result<Bytes, RpcError>>) {
+    // TODO: the benefit of sending a Nack RPC reply is that it cuts down on false 'errors' due to unreplied RPC. Actually the protocol should change to be one-way direct send messages because the sender doesn't actually care about the reply.
     let response = ConsensusMsg::CommitMessage(Box::new(CommitMessage::Nack));
     if let Ok(bytes) = protocol.to_bytes(&response) {
         let _ = response_sender.send(Ok(bytes.into()));

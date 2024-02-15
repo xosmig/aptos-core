@@ -892,7 +892,15 @@ where
                             DialResult::Success
                         },
                         Err(err) => {
-                            warn!("dial peer {} err {}", peer_id.short_str(), err);
+                            warn!(
+                                NetworkSchema::new(&network_context)
+                                    .remote_peer(&peer_id)
+                                    .network_address(&addr),
+                                "{} dialing peer {} err {}",
+                                network_context,
+                                peer_id.short_str(),
+                                err,
+                            );
                             DialResult::Failed
                         }
                     }
