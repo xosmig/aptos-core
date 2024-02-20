@@ -128,7 +128,8 @@ impl NoiseUpgrader {
         self.anti_replay_timestamps.is_some()
     }
 
-    pub fn is_trusted_peer(&self, network_id: &NetworkId, peer_id: &PeerId) -> Option<Peer> {
+    /// If peer_id is trusted, return its {addresses,keys,role} config object; otherwise None
+    pub fn peer_config_if_trusted(&self, network_id: &NetworkId, peer_id: &PeerId) -> Option<Peer> {
         let trusted_peers = match self.peers_and_metadata.get_trusted_peers(network_id) {
             Ok(ps) => {ps}
             Err(_) => {return None;}
@@ -243,7 +244,7 @@ impl NoiseUpgrader {
         //     HandshakeAuthMode::MaybeMutual(peers_and_metadata) => peers_and_metadata.clone(),
         // };
 
-        match self.is_trusted_peer(&self.network_context.network_id(), &remote_peer_id) {
+        match self.peer_config_if_trusted(&self.network_context.network_id(), &remote_peer_id) {
             Some(peer) => {
                 peer.role
             },
@@ -348,7 +349,7 @@ impl NoiseUpgrader {
 
         // if mutual auth mode, verify the remote pubkey is in our set of trusted peers
         let network_id = self.network_context.network_id();
-        let peer_role = if let Some(peer) = self.is_trusted_peer(&network_id, &remote_peer_id) {
+        let peer_role = if let Some(peer) = self.peer_config_if_trusted(&network_id, &remote_peer_id) {
             Self::authenticate_inbound(remote_peer_short, &peer, &remote_public_key)
         } else if self.is_mutual_mode() {
             Err(NoiseHandshakeError::UnauthenticatedClient(

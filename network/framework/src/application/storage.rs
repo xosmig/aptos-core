@@ -7,7 +7,6 @@ use crate::{
         error::Error,
         metadata::{ConnectionState, PeerMetadata},
     },
-    counters,
     transport::{ConnectionId, ConnectionMetadata},
     ProtocolId,
 };
@@ -22,6 +21,7 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     sync::Arc,
 };
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, Ordering};
 use aptos_config::config::{PeerRole, RoleType};
 use aptos_config::network_id::NetworkContext;
@@ -29,8 +29,6 @@ use std::fmt;
 use tokio::sync::mpsc::error::TrySendError;
 use serde::Serialize;
 use aptos_logger::info;
-use aptos_netcore::transport::ConnectionOrigin;
-use aptos_types::account_address::AccountAddress;
 
 /// A simple container that tracks all peers and peer metadata for the node.
 /// This container is updated by both the networking code (e.g., for new
@@ -47,6 +45,8 @@ pub struct PeersAndMetadata {
 
     subscribers: RwLock<Vec<tokio::sync::mpsc::Sender<ConnectionNotification>>>,
 }
+
+pub static PEERS_AND_METADATA_SINGLETON: OnceLock<Arc<PeersAndMetadata>> = OnceLock::new();
 
 impl PeersAndMetadata {
     pub fn new(network_ids: &[NetworkId]) -> Arc<PeersAndMetadata> {
@@ -317,7 +317,6 @@ impl PeersAndMetadata {
             .or_insert_with(|| {
                 PeerMetadata::new(connection_metadata.clone())
             });
-        count_gauges(writer.iter());
         let event = ConnectionNotification::NewPeer(connection_metadata, net_context);
         self.broadcast(event);
 
@@ -349,18 +348,14 @@ impl PeersAndMetadata {
                 match connection_state {
                     ConnectionState::Connected => {
                         info!("PeersAndMetadata {} inc", peer_metadata.connection_metadata.origin);
-                        counters::connections(&peer_network_id.network_id(), peer_metadata.connection_metadata.origin).inc();
                     }
                     ConnectionState::Disconnecting | ConnectionState::Disconnected => {
                         if peer_metadata.connection_state == ConnectionState::Connected {
                             info!("PeersAndMetadata {} dec", peer_metadata.connection_metadata.origin);
-                            counters::connections(&peer_network_id.network_id(), peer_metadata.connection_metadata.origin).dec();
                         }
                     }
                 }
                 peer_metadata.connection_state = connection_state;
-                // If the above counter update ever gets messier or in doubt, just re-do the count:
-                // count_gauges(writer.iter());
             }
             Ok(())
         } else {
@@ -423,7 +418,6 @@ impl PeersAndMetadata {
                 self.generation.fetch_add(1 , Ordering::SeqCst);
 
                 let peer_metadata = entry.remove();
-                count_gauges(writer.iter());
                 // TODO: fix network context and disconnect reason?
                 let nc = NetworkContext::new(RoleType::Validator, peer_network_id.network_id(), PeerId::ZERO);
                 let event = ConnectionNotification::LostPeer(peer_metadata.connection_metadata.clone(), nc, DisconnectReason::Requested);
@@ -456,22 +450,6 @@ impl PeersAndMetadata {
         let cached_peers_and_metadata = self.cached_peers_and_metadata.clone();
 
         (peers_and_metadata, trusted_peers, cached_peers_and_metadata)
-    }
-}
-
-fn count_gauges<'a, T: Iterator<Item=(&'a NetworkId,&'a HashMap<AccountAddress,PeerMetadata>)>>(outer_iter: T) {
-    for (network_id, they) in outer_iter {
-        let mut inbound = 0;
-        let mut outbound = 0;
-        for (_peer_id, peer_metadata) in they.iter() {
-            match peer_metadata.connection_metadata.origin {
-                ConnectionOrigin::Inbound => {inbound += 1}
-                ConnectionOrigin::Outbound => {outbound += 1}
-            }
-        }
-        // info!("PeersAndMetadata count_gauges {} in={} out={}", network_id, inbound, outbound);
-        counters::connections(network_id, ConnectionOrigin::Inbound).set(inbound);
-        counters::connections(network_id, ConnectionOrigin::Outbound).set(outbound);
     }
 }
 

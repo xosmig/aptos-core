@@ -22,20 +22,6 @@ use crate::protocols::network::{Closer, OutboundPeerConnections, PeerStub, Recei
 use crate::protocols::stream::{StreamFragment, StreamHeader, StreamMessage};
 use crate::transport::ConnectionMetadata;
 use once_cell::sync::Lazy;
-#[cfg(test)]
-use aptos_memsocket::MemorySocket;
-#[cfg(test)]
-use rand::{rngs::OsRng, Rng};
-#[cfg(test)]
-use crate::protocols::wire::messaging::v1::DirectSendMsg;
-#[cfg(test)]
-use aptos_types::account_address::AccountAddress;
-#[cfg(test)]
-use crate::application::ApplicationConnections;
-#[cfg(test)]
-use hex::ToHex;
-#[cfg(test)]
-use std::cmp::min;
 use crate::counters;
 
 pub fn start_peer<TSocket>(
@@ -749,113 +735,124 @@ fn estimate_serialized_length(msg: &NetworkMessage) -> usize {
     msg.header_len() + msg.data_len() + 3
 }
 
-// TODO: this is the thing to fix today
-#[tokio::test]
-pub async fn test_stream_multiplexing() {
-    aptos_logger::Logger::init_for_testing();
-    // much borrowed from start_peer()
-    let config = NetworkConfig::default();
-    let max_frame_size = 128; // smaller than real to force fragmentation of many messages to test fragmentation
-    // let (async_write, async_read) = async_pipe::pipe();
-    let (outbound, inbound) = MemorySocket::new_pair();
-    let reader = MultiplexMessageStream::new(inbound, max_frame_size).fuse();
-    let writer = MultiplexMessageSink::new(outbound, max_frame_size);
-    let role_type = RoleType::Validator;
-    let closed = Closer::new();
-    let network_id = NetworkId::Validator;
-    let (sender, to_send) = tokio::sync::mpsc::channel::<(NetworkMessage,u64)>(config.network_channel_size);
-    let (_sender_high_prio, to_send_high_prio) = tokio::sync::mpsc::channel::<(NetworkMessage,u64)>(config.network_channel_size);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aptos_memsocket::MemorySocket;
+    use rand::{rngs::OsRng, Rng};
+    use crate::protocols::wire::messaging::v1::DirectSendMsg;
+    use aptos_types::account_address::AccountAddress;
+    use crate::application::ApplicationConnections;
+    use hex::ToHex;
+    use std::cmp::min;
 
-    let queue_size = 101;
-    let counter_label = "test";
-    let mut apps = ApplicationCollector::new();
-    let (app_con, mut receiver) = ApplicationConnections::build(ProtocolId::NetbenchDirectSend, queue_size, counter_label);
-    apps.add(app_con);
-    let apps = Arc::new(apps);
-    let remote_peer_network_id = PeerNetworkId::new(network_id, AccountAddress::random());
-    let open_outbound_rpc = OutboundRpcMatcher::new();
+    #[tokio::test]
+    pub async fn test_stream_multiplexing() {
+        aptos_logger::Logger::init_for_testing();
+        // much borrowed from start_peer()
+        let config = NetworkConfig::default();
+        let max_frame_size = 128; // smaller than real to force fragmentation of many messages to test fragmentation
+        // let (async_write, async_read) = async_pipe::pipe();
+        let (outbound, inbound) = MemorySocket::new_pair();
+        let reader = MultiplexMessageStream::new(inbound, max_frame_size).fuse();
+        let writer = MultiplexMessageSink::new(outbound, max_frame_size);
+        let role_type = RoleType::Validator;
+        let closed = Closer::new();
+        let network_id = NetworkId::Validator;
+        let (sender, to_send) = tokio::sync::mpsc::channel::<(NetworkMessage, u64)>(config.network_channel_size);
+        let (_sender_high_prio, to_send_high_prio) = tokio::sync::mpsc::channel::<(NetworkMessage, u64)>(config.network_channel_size);
 
-    let handle = Handle::current();
-    handle.spawn(writer_task(network_id, to_send, to_send_high_prio, writer, max_frame_size, role_type, closed.clone()));
-    handle.spawn(reader_task(reader, apps, remote_peer_network_id, open_outbound_rpc.clone(), handle.clone(), closed.clone(), role_type));
+        let queue_size = 101;
+        let counter_label = "test";
+        let mut apps = ApplicationCollector::new();
+        let (app_con, mut receiver) = ApplicationConnections::build(ProtocolId::NetbenchDirectSend, queue_size, counter_label);
+        apps.add(app_con);
+        let apps = Arc::new(apps);
+        let remote_peer_network_id = PeerNetworkId::new(network_id, AccountAddress::random());
+        let open_outbound_rpc = OutboundRpcMatcher::new();
 
-    let max_data_len = max_frame_size * 13;
-    let mut blob = Vec::<u8>::with_capacity(max_data_len);
-    let mut rng = OsRng;
-    for _ in 0..max_data_len {
-        blob.push(rng.gen());
-    }
+        let handle = Handle::current();
+        handle.spawn(writer_task(network_id, to_send, to_send_high_prio, writer, max_frame_size, role_type, closed.clone()));
+        handle.spawn(reader_task(reader, apps, remote_peer_network_id, open_outbound_rpc.clone(), handle.clone(), closed.clone(), role_type));
 
-    let num_test_messages = 300; // this should be about 2.5x max_frame_size so we cover the unsplit case up to about 3 fragments.
-    let test_len = move |i| {
-        i + max_frame_size - 50
-    };
-
-    // limit the number of sends in flight, test needs to cheat and have this rate limiting between source and sink otherwise messages will get dropped and this tests wants to see perfect message sequence. Normal operation drops messages when the application can't read them as fast as they're coming in, but in test mode we can easily get to where tokio doesn't let the consumer threads run and they drop messages even though they are runnable.
-    let send_sem = Arc::new(tokio::sync::Semaphore::new(50));
-    let send_sem_readside = send_sem.clone();
-
-    let sender_blob = blob.clone();
-    let mut send_thread_closer = Closer::new();
-    let send_thread_close_sender = send_thread_closer.clone();
-    let send_thread = async move {
-        for i in 0..num_test_messages {
-            send_sem.acquire().await.unwrap().forget();
-            let send_end = i + test_len(i);
-            let raw_msg = sender_blob.get(i..send_end).unwrap();
-            let raw_msg = Vec::<u8>::from(raw_msg);
-            let msg = NetworkMessage::DirectSendMsg(DirectSendMsg {
-                protocol_id: ProtocolId::NetbenchDirectSend,
-                priority: 0,
-                raw_msg,
-            });
-            let send_size = send_end - i;
-            let hexlen = min(send_size, 10);
-            let hexend = i+hexlen;
-            let hexwat = sender_blob.get(i..hexend).unwrap().encode_hex::<String>();
-            println!("send {:?} size={:?} {:?}...", i, send_size, hexwat);
-            if let Err(err) = sender.send((msg, 0)).await {
-                panic!("send err: {:?}", err);
-            }
-            // println!("sent {:?}", i);
+        let max_data_len = max_frame_size * 13;
+        let mut blob = Vec::<u8>::with_capacity(max_data_len);
+        let mut rng = OsRng;
+        for _ in 0..max_data_len {
+            blob.push(rng.gen());
         }
-        println!("send thread wait");
-        send_thread_closer.wait().await;
-        println!("send thread exit");
-    };
-    handle.spawn(send_thread);
 
-    let mut errcount = 0;
-    for i in 0..num_test_messages {
-        let send_end = i + test_len(i);
-        let raw_msg = blob.get(i..send_end).unwrap();
-        let raw_msg = Vec::<u8>::from(raw_msg);
-        match receiver.recv().await {
-            None => {
-                panic!("recv end early at i={:?}", i)
+        let num_test_messages = 300; // this should be about 2.5x max_frame_size so we cover the unsplit case up to about 3 fragments.
+        let test_len = move |i| {
+            i + max_frame_size - 50
+        };
+
+        // limit the number of sends in flight, test needs to cheat and have this rate limiting between source and sink otherwise messages will get dropped and this tests wants to see perfect message sequence. Normal operation drops messages when the application can't read them as fast as they're coming in, but in test mode we can easily get to where tokio doesn't let the consumer threads run and they drop messages even though they are runnable.
+        let send_sem = Arc::new(tokio::sync::Semaphore::new(50));
+        let send_sem_readside = send_sem.clone();
+
+        let sender_blob = blob.clone();
+        let mut send_thread_closer = Closer::new();
+        let send_thread_close_sender = send_thread_closer.clone();
+        let send_thread = async move {
+            for i in 0..num_test_messages {
+                send_sem.acquire().await.unwrap().forget();
+                let send_end = i + test_len(i);
+                let raw_msg = sender_blob.get(i..send_end).unwrap();
+                let raw_msg = Vec::<u8>::from(raw_msg);
+                let msg = NetworkMessage::DirectSendMsg(DirectSendMsg {
+                    protocol_id: ProtocolId::NetbenchDirectSend,
+                    priority: 0,
+                    raw_msg,
+                });
+                let send_size = send_end - i;
+                let hexlen = min(send_size, 10);
+                let hexend = i + hexlen;
+                let hexwat = sender_blob.get(i..hexend).unwrap().encode_hex::<String>();
+                println!("send {:?} size={:?} {:?}...", i, send_size, hexwat);
+                if let Err(err) = sender.send((msg, 0)).await {
+                    panic!("send err: {:?}", err);
+                }
+                // println!("sent {:?}", i);
             }
-            Some(rmsg) => {
-                match rmsg.message {
-                    NetworkMessage::DirectSendMsg(msg) => {
-                        if raw_msg == msg.raw_msg {
-                            println!("got {:?} ok [{:?}] bytes", i, msg.raw_msg.len());
-                        } else {
-                            println!("msg {:?} not equal [{:?}] bytes", i, msg.raw_msg.len());
-                            errcount += 1;
-                            if errcount >= 10 {
-                                panic!("too many errors");
+            println!("send thread wait");
+            send_thread_closer.wait().await;
+            println!("send thread exit");
+        };
+        handle.spawn(send_thread);
+
+        let mut errcount = 0;
+        for i in 0..num_test_messages {
+            let send_end = i + test_len(i);
+            let raw_msg = blob.get(i..send_end).unwrap();
+            let raw_msg = Vec::<u8>::from(raw_msg);
+            match receiver.recv().await {
+                None => {
+                    panic!("recv end early at i={:?}", i)
+                }
+                Some(rmsg) => {
+                    match rmsg.message {
+                        NetworkMessage::DirectSendMsg(msg) => {
+                            if raw_msg == msg.raw_msg {
+                                println!("got {:?} ok [{:?}] bytes", i, msg.raw_msg.len());
+                            } else {
+                                println!("msg {:?} not equal [{:?}] bytes", i, msg.raw_msg.len());
+                                errcount += 1;
+                                if errcount >= 10 {
+                                    panic!("too many errors");
+                                }
                             }
                         }
-                    }
-                    _ => {
-                        panic!("bad message")
+                        _ => {
+                            panic!("bad message")
+                        }
                     }
                 }
             }
+            send_sem_readside.add_permits(1);
         }
-        send_sem_readside.add_permits(1);
+        println!("outer done");
+        send_thread_close_sender.close().await;
+        println!("done done");
     }
-    println!("outer done");
-    send_thread_close_sender.close().await;
-    println!("done done");
 }

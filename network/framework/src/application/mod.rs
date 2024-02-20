@@ -10,6 +10,7 @@ pub mod error;
 pub mod interface;
 pub mod metadata;
 pub mod storage;
+pub mod pamgauge;
 
 /// Container for connection to application code listening on a ProtocolId
 #[derive(Debug)]

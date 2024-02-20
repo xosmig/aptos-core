@@ -15,7 +15,7 @@ use aptos_network2_builder::NetworkBuilder;
 use aptos_logger::{debug, info};
 use aptos_network2::application::interface::NetworkClient;
 use aptos_network2::protocols::network::{NetworkEvents, NetworkSender, NetworkSource, NewNetworkEvents, NewNetworkSender, OutboundPeerConnections};
-use aptos_network2::application::storage::PeersAndMetadata;
+use aptos_network2::application::storage::{PEERS_AND_METADATA_SINGLETON, PeersAndMetadata};
 use aptos_time_service::TimeService;
 use aptos_types::chain_id::ChainId;
 use aptos_event_notifications::EventSubscriptionService;
@@ -23,6 +23,7 @@ use aptos_peer_monitoring_service_types::PeerMonitoringServiceMessage;
 use aptos_storage_service_types::StorageServiceMessage;
 use aptos_mempool::MempoolSyncMsg;
 use aptos_network2::application::{ApplicationCollector, ApplicationConnections};
+use aptos_network2::application::pamgauge::PeersAndMetadataGauge;
 use aptos_network_benchmark::NetbenchMessage;
 
 pub trait MessageTrait : Clone + DeserializeOwned + Serialize + Send + Sync + Unpin + 'static {}
@@ -277,7 +278,13 @@ fn extract_network_ids(node_config: &NodeConfig) -> Vec<NetworkId> {
 /// Creates the global peers and metadata struct
 pub fn create_peers_and_metadata(node_config: &NodeConfig) -> Arc<PeersAndMetadata> {
     let network_ids = extract_network_ids(node_config);
-    PeersAndMetadata::new(&network_ids)
+    let out = PeersAndMetadata::new(&network_ids);
+    PEERS_AND_METADATA_SINGLETON.set(out.clone()).unwrap();
+    PeersAndMetadataGauge::register(
+        "aptos_connections".to_string(),
+        "Number of current connections and their direction".to_string(),
+        out.clone());
+    out
 }
 
 pub fn setup_networks(

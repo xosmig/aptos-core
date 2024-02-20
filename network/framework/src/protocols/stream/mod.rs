@@ -24,8 +24,14 @@ impl StreamMessage {
     }
     pub fn header_len(&self) -> usize {
         match self {
-            StreamMessage::Header(head) => {head.message.header_len() + 5}
-            StreamMessage::Fragment(_frag) => {5}
+            StreamMessage::Header(head) => {
+                // 5 bytes for {request_id: u32, num_fragments: u8} in StreamMessage::Header(StreamHeader{...})
+                head.message.header_len() + 5
+            }
+            StreamMessage::Fragment(_frag) => {
+                // 5 bytes for {request_id: u32, frament_id: u8} in StreamMessage::Fragment(StreamFragment{...})
+                5
+            }
         }
     }
 }

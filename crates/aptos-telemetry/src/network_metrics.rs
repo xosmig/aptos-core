@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::utils;
+use aptos_netcore::transport::ConnectionOrigin;
+use aptos_network2::application::storage::PEERS_AND_METADATA_SINGLETON;
 use aptos_telemetry_service::types::telemetry::TelemetryEvent;
 use prometheus::core::Collector;
 use std::collections::BTreeMap;
@@ -45,21 +47,25 @@ fn collect_network_metrics(network_metrics: &mut BTreeMap<String, String>) {
 /// Collects the connection metrics and appends them to the given map
 fn collect_connection_metrics(network_metrics: &mut BTreeMap<String, String>) {
     // Calculate the number of inbound and outbound connections
-    let mut inbound_connection_count: f64 = 0.0;
-    let mut outbound_connection_count: f64 = 0.0;
-    for metric_family in aptos_network2::counters::APTOS_CONNECTIONS.collect() {
-        for metric in metric_family.get_metric() {
-            // TODO(joshlind): avoid matching on strings that can change!
-            for label in metric.get_label() {
-                if label.get_name() == "direction" {
-                    if label.get_value() == "inbound" {
-                        inbound_connection_count += metric.get_gauge().get_value();
-                    } else if label.get_value() == "outbound" {
-                        outbound_connection_count += metric.get_gauge().get_value();
+    let mut inbound_connection_count: i64 = 0;
+    let mut outbound_connection_count: i64 = 0;
+    if let Some(pam) = PEERS_AND_METADATA_SINGLETON.get() {
+        if let Ok(cpeers) = pam.get_connected_peers_and_metadata() {
+            for (_peer_network_id, metadata) in cpeers.iter() {
+                match metadata.get_connection_metadata().origin {
+                    ConnectionOrigin::Inbound => {
+                        inbound_connection_count += 1;
+                    }
+                    ConnectionOrigin::Outbound => {
+                        outbound_connection_count += 1;
                     }
                 }
             }
+        } else {
+            return;
         }
+    } else {
+        return;
     }
 
     // Update the connection metrics

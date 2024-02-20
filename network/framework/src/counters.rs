@@ -41,32 +41,7 @@ const PRE_DIAL_LABEL: &str = "pre_dial";
 pub const SERIALIZATION_LABEL: &str = "serialization";
 pub const DESERIALIZATION_LABEL: &str = "deserialization";
 
-pub static APTOS_CONNECTIONS: Lazy<IntGaugeVec> = Lazy::new(|| {
-    register_int_gauge_vec!(
-        "aptos_connections",
-        "Number of current connections and their direction",
-        &[
-            // "role_type",
-            "network_id",
-            // "peer_id",
-            "direction"
-        ]
-    )
-    .unwrap()
-});
-
-pub fn connections(
-    // network_context: &NetworkContext,
-    network_id: &NetworkId,
-    origin: ConnectionOrigin
-) -> IntGauge {
-    APTOS_CONNECTIONS.with_label_values(&[
-        // network_context.role().as_str(),
-        network_id.as_str(),
-        // network_context.peer_id().short_str().as_str(),
-        origin.as_str(),
-    ])
-}
+// previous APTOS_CONNECTIONS counter replaced by PeersAndMetadataGauge which translates PeersAndMetadata global singleton directly to Prometheus Metrics data
 
 pub static APTOS_CONNECTIONS_REJECTED: Lazy<IntCounterVec> = Lazy::new(|| {
     register_int_counter_vec!(
