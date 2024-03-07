@@ -107,13 +107,13 @@ impl FeatureFlag {
             FeatureFlag::RESOURCE_GROUPS_SPLIT_IN_VM_CHANGE_SET,
             FeatureFlag::COMMISSION_CHANGE_DELEGATION_POOL,
             FeatureFlag::WEBAUTHN_SIGNATURE,
-            // FeatureFlag::RECONFIGURE_WITH_DKG, //TODO: re-enable once randomness is ready.
+            FeatureFlag::RECONFIGURE_WITH_DKG, //TODO: re-enable once randomness is ready.
             FeatureFlag::JWK_CONSENSUS,
             FeatureFlag::REFUNDABLE_BYTES,
             FeatureFlag::OBJECT_CODE_DEPLOYMENT,
             FeatureFlag::MAX_OBJECT_NESTING_CHECK,
             FeatureFlag::KEYLESS_ACCOUNTS_WITH_PASSKEYS,
-            // FeatureFlag::FAST_RANDOMNESS,
+            FeatureFlag::FAST_RANDOMNESS,
         ]
     }
 }
