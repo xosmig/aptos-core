@@ -1024,6 +1024,7 @@ def image_exists(
     """Check if an image exists in a given repository"""
     if cloud == Cloud.GCP:
         full_image = f"{GAR_REPO_NAME}/{image_name}:{image_tag}"
+        log.info(f"Checking if image exists in GAR: {full_image}")
         return shell.run(
             [
                 "crane",
@@ -1034,7 +1035,7 @@ def image_exists(
         ).succeeded()
     elif cloud == Cloud.AWS:
         full_image = f"{ECR_REPO_PREFIX}/{image_name}:{image_tag}"
-        log.info(f"Checking if image exists in GCP: {full_image}")
+        log.info(f"Checking if image exists in ECR: {full_image}")
         return shell.run(
             [
                 "aws",

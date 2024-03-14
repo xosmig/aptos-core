@@ -38,6 +38,11 @@ def main() -> None:
         default="validator-testing",
     )
     parser.add_argument(
+        "--image-tag",
+        "-t",
+        help="The image tag to search for (usually a git SHA ref)",
+    )
+    parser.add_argument(
         "--variant",
         "-v",
         help="A build variant",
