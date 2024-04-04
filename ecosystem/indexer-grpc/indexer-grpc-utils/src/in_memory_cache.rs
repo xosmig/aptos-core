@@ -70,7 +70,7 @@ impl InMemoryCache {
         tracing::info!("In-memory cache is created");
         Ok(Self {
             cache: cache.clone(),
-            _cancellation_token_drop_guard: cancellation_token.clone().drop_guard(),
+            _cancellation_token_drop_guard: cancellation_token.drop_guard(),
         })
     }
 
