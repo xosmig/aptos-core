@@ -495,12 +495,7 @@ spec aptos_framework::stake {
         let post post_inactive_value = post_stake_pool.inactive.value;
         ensures post_stake_pool.pending_active.value == 0;
         // the amount stored in the stake pool should not changed after the update
-        ensures if (features::spec_is_enabled(features::COLLECT_AND_DISTRIBUTE_GAS_FEES) && table::spec_contains(fees_table, pool_address)) {
-            !table::spec_contains(post_fees_table, pool_address) &&
-            post_active_value == stake_pool.active.value + rewards_amount_1 + stake_pool.pending_active.value + table::spec_get(fees_table, pool_address).value
-        } else {
-            post_active_value == stake_pool.active.value + rewards_amount_1 + stake_pool.pending_active.value
-        };
+        ensures post_active_value == stake_pool.active.value + rewards_amount_1 + stake_pool.pending_active.value;
         // when current lockup cycle has expired, pending inactive should be fully unlocked and moved into inactive
         ensures if (spec_get_reconfig_start_time_secs() >= stake_pool.locked_until_secs) {
             post_pending_inactive_value == 0 &&

@@ -146,7 +146,6 @@ spec aptos_framework::aptos_governance {
             account: aptos_framework
         };
         include stake::GetReconfigStartTimeRequirement;
-        include transaction_fee::RequiresCollectedFeesPerValueLeqBlockAptosSupply;
         requires chain_status::is_operating();
         requires exists<stake::ValidatorFees>(@aptos_framework);
         requires exists<CoinInfo<AptosCoin>>(@aptos_framework);
@@ -586,7 +585,6 @@ spec aptos_framework::aptos_governance {
         };
         include stake::GetReconfigStartTimeRequirement;
 
-        include transaction_fee::RequiresCollectedFeesPerValueLeqBlockAptosSupply;
         requires chain_status::is_operating();
         requires exists<stake::ValidatorFees>(@aptos_framework);
         requires exists<CoinInfo<AptosCoin>>(@aptos_framework);

@@ -47,7 +47,6 @@ mod storage_refund;
 mod string_args;
 mod token_event_store;
 mod token_objects;
-mod transaction_fee;
 mod type_too_large;
 mod vector_numeric_address;
 mod vm;
