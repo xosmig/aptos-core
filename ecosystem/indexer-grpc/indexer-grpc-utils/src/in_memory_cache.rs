@@ -74,6 +74,14 @@ impl InMemoryCache {
         })
     }
 
+    fn latest_version(&self) -> u64 {
+        if let Some(key) = self.cache.last_key() {
+            let key: u64 = key.into();
+            return key + 1;
+        }
+        0
+    }
+
     // This returns the transaction if it exists in the cache.
     // If requested version is not in the cache, it blocks until the version is available.
     // Otherwise, empty.
@@ -127,14 +135,6 @@ impl InMemoryCache {
             "In-memory cache lookup",
         );
         res
-    }
-
-    pub fn latest_version(&self) -> u64 {
-        if let Some(key) = self.cache.last_key() {
-            let key: u64 = key.into();
-            return key + 1;
-        }
-        0
     }
 }
 
