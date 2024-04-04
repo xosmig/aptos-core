@@ -67,13 +67,11 @@ impl InMemoryCache {
             cancellation_token.clone(),
         );
 
-        let wrapper = Self {
+        tracing::info!("In-memory cache is created");
+        Ok(Self {
             cache: cache.clone(),
             _cancellation_token_drop_guard: cancellation_token.clone().drop_guard(),
-        };
-
-        tracing::info!("In-memory cache is created");
-        Ok(wrapper)
+        })
     }
 
     // This returns the transaction if it exists in the cache.
@@ -217,6 +215,11 @@ fn spawn_update_task<C, Ca>(
                 .unwrap();
             // Ensure that transactions are ordered by version.
             let cache_processing_start_time = std::time::Instant::now();
+            for (ind, transaction) in transactions.iter().enumerate() {
+                if transaction.version != in_cache_latest_version + ind as u64 {
+                    panic!("Transactions are not ordered by version");
+                }
+            }
             for transaction in transactions {
                 cache.insert(
                     TransactionVersion(transaction.version),
