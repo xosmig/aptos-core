@@ -32,6 +32,7 @@ where
     fn last_key(&self) -> Option<K>;
 }
 
+// TODO: Find better solution for guaranteeing order
 pub trait Incrementable<V>: Send + Sync
 where
     V: Clone + Send + Sync,
