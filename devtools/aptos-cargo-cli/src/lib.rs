@@ -10,11 +10,29 @@ pub use common::SelectedPackageArgs;
 use determinator::Utf8Paths0;
 use log::{debug, trace};
 
-// The CLI package name to match against for targeted CLI tests
+// Useful package name constants for targeted tests
 const APTOS_CLI_PACKAGE_NAME: &str = "aptos";
+const APTOS_NODE_PACKAGE_NAME: &str = "aptos-node";
+const SMOKE_TESTS_PACKAGE_NAME: &str = "smoke-test";
+
+// Relevant file paths to monitor when deciding to run the targeted tests
+const RELEVANT_FILE_PATHS_FOR_COMPILER_V2: [&str; 7] = [
+    "aptos-move/aptos-transactional-test-harness",
+    "aptos-move/e2e-move-tests",
+    "aptos-move/framework",
+    "aptos-move/move-examples",
+    "third_party/move",
+    ".github/workflows/move-test-compiler-v2.yaml",
+    ".github/actions/move-tests-compiler-v2",
+];
+const RELEVANT_FILE_PATHS_FOR_SMOKE_TESTS: [&str; 2] = ["aptos-node/", "testsuite/"];
+
+// Relevant packages to monitor when deciding to run the targeted tests
+const RELEVANT_PACKAGES_FOR_COMPILER_V2: [&str; 2] = ["aptos-framework", "e2e-move-tests"];
+const RELEVANT_PACKAGES_FOR_SMOKE_TESTS: [&str; 2] = ["aptos-node", "smoke-test"];
 
 // The targeted unit test packages to ignore (these will be run separately, by other jobs)
-const TARGETED_TEST_PACKAGES_TO_IGNORE: [&str; 2] = ["aptos-testcases", "smoke-test"];
+const TARGETED_UNIT_TEST_PACKAGES_TO_IGNORE: [&str; 2] = ["aptos-testcases", "smoke-test"];
 
 #[derive(Args, Clone, Debug)]
 #[command(disable_help_flag = true)]
@@ -43,6 +61,8 @@ pub enum AptosCargoCommand {
     Fmt(CommonArgs),
     Nextest(CommonArgs),
     TargetedCLITests(CommonArgs),
+    TargetedCompilerV2Tests(CommonArgs),
+    TargetedSmokeTests(CommonArgs),
     TargetedUnitTests(CommonArgs),
     Test(CommonArgs),
 }
@@ -68,6 +88,8 @@ impl AptosCargoCommand {
             AptosCargoCommand::Fmt(args) => args,
             AptosCargoCommand::Nextest(args) => args,
             AptosCargoCommand::TargetedCLITests(args) => args,
+            AptosCargoCommand::TargetedCompilerV2Tests(args) => args,
+            AptosCargoCommand::TargetedSmokeTests(args) => args,
             AptosCargoCommand::TargetedUnitTests(args) => args,
             AptosCargoCommand::Test(args) => args,
         }
@@ -126,8 +148,8 @@ impl AptosCargoCommand {
                 output_changed_files(changed_files)
             },
             AptosCargoCommand::TargetedCLITests(_) => {
-                // Calculate the affected packages and run the targeted CLI tests (if any).
-                // Start by fetching the affected packages.
+                // Run the targeted CLI tests (if necessary).
+                // First, start by calculating the affected packages.
                 let packages = package_args.compute_target_packages()?;
 
                 // Check if the affected packages contains the Aptos CLI
@@ -138,7 +160,7 @@ impl AptosCargoCommand {
 
                     // Check if the package is the Aptos CLI
                     if package_name == APTOS_CLI_PACKAGE_NAME {
-                        cli_affected = true;
+                        cli_affected = true; // The Aptos CLI was affected
                         break;
                     }
                 }
@@ -153,27 +175,110 @@ impl AptosCargoCommand {
                 println!("Skipping CLI tests as the Aptos CLI package was not affected!");
                 Ok(())
             },
-            AptosCargoCommand::TargetedUnitTests(_) => {
-                // Calculate the affected packages and run the targeted unit tests (if any).
-                // Start by fetching the arguments and affected packages.
+            AptosCargoCommand::TargetedCompilerV2Tests(_) => {
+                // Run the targeted compiler v2 tests (if necessary).
+                // Start by calculating the changed files and affected packages.
+                let (_, _, changed_files) = package_args.identify_changed_files()?;
                 let (direct_args, push_through_args, packages) =
                     self.get_args_and_affected_packages(package_args)?;
 
-                // Collect all the affected packages to test, but filter out the packages
-                // that should not be run as unit tests.
+                // Check if the changed files contain any of the relevant compiler v2 file paths
+                let mut relevant_file_changed = false;
+                for file_path in changed_files.into_iter() {
+                    for compiler_v2_file_path in RELEVANT_FILE_PATHS_FOR_COMPILER_V2.iter() {
+                        if file_path.to_string().contains(compiler_v2_file_path) {
+                            relevant_file_changed = true; // A relevant file was changed
+                            break;
+                        }
+                    }
+                }
+
+                // Check if the affected packages contains the relevant compiler v2 packages
+                let mut relevant_packages_changed = false;
+                for package_path in packages {
+                    // Extract the package name from the full path
+                    let package_name = get_package_name_from_path(&package_path);
+
+                    // Check if the package is a relevant compiler v2 package
+                    if RELEVANT_PACKAGES_FOR_COMPILER_V2.contains(&package_name.as_str()) {
+                        relevant_packages_changed = true; // A relevant package was changed
+                        break;
+                    }
+                }
+
+                // If relevant files or packages were changed, run the targeted compiler v2 tests
+                if relevant_file_changed || relevant_packages_changed {
+                    println!("Running the targeted compiler v2 tests...");
+                    return run_targeted_compiler_v2_tests(direct_args, push_through_args);
+                }
+
+                // Otherwise, skip the targeted compiler v2 tests
+                println!("Skipping targeted compiler v2 tests because no relevant files or packages were affected!");
+                Ok(())
+            },
+            AptosCargoCommand::TargetedSmokeTests(_) => {
+                // Run the targeted smoke tests (if necessary).
+                // Start by calculating the changed files and affected packages.
+                let (_, _, changed_files) = package_args.identify_changed_files()?;
+                let (direct_args, push_through_args, packages) =
+                    self.get_args_and_affected_packages(package_args)?;
+
+                // Check if the changed files contain any of the relevant smoke test file paths
+                let mut relevant_file_changed = false;
+                for file_path in changed_files.into_iter() {
+                    for smoke_tests_file_path in RELEVANT_FILE_PATHS_FOR_SMOKE_TESTS.iter() {
+                        if file_path.to_string().contains(smoke_tests_file_path) {
+                            relevant_file_changed = true; // A relevant file was changed
+                            break;
+                        }
+                    }
+                }
+
+                // Check if the affected packages contains the relevant smoke test packages
+                let mut relevant_packages_changed = false;
+                for package_path in packages {
+                    // Extract the package name from the full path
+                    let package_name = get_package_name_from_path(&package_path);
+
+                    // Check if the package is a relevant smoke test package
+                    if RELEVANT_PACKAGES_FOR_SMOKE_TESTS.contains(&package_name.as_str()) {
+                        relevant_packages_changed = true; // A relevant package was changed
+                        break;
+                    }
+                }
+
+                // If relevant files or the package was changed, run the smoke tests
+                if relevant_file_changed || relevant_packages_changed {
+                    println!("Running the smoke tests...");
+                    return run_targeted_smoke_tests(direct_args, push_through_args);
+                }
+
+                // Otherwise, skip the smoke tests
+                println!(
+                    "Skipping smoke tests because no relevant files or packages were affected!"
+                );
+                Ok(())
+            },
+            AptosCargoCommand::TargetedUnitTests(_) => {
+                // Run the targeted unit tests (if necessary).
+                // Start by calculating the affected packages.
+                let (direct_args, push_through_args, packages) =
+                    self.get_args_and_affected_packages(package_args)?;
+
+                // Filter out the ignored packages
                 let mut packages_to_test = vec![];
                 for package_path in packages {
                     // Extract the package name from the full path
                     let package_name = get_package_name_from_path(&package_path);
 
                     // Only add the package if it is not in the ignore list
-                    if TARGETED_TEST_PACKAGES_TO_IGNORE.contains(&package_name.as_str()) {
+                    if TARGETED_UNIT_TEST_PACKAGES_TO_IGNORE.contains(&package_name.as_str()) {
                         debug!(
                             "Ignoring package when running targeted-unit-tests: {:?}",
                             package_name
                         );
                     } else {
-                        packages_to_test.push(package_path);
+                        packages_to_test.push(package_path); // Add the package to the list
                     }
                 }
 
@@ -260,7 +365,59 @@ fn run_targeted_cli_tests() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Runs the targeted unit tests. This includes building and testing the unit tests.
+/// Runs the targeted compiler v2 tests
+fn run_targeted_compiler_v2_tests(
+    mut direct_args: Vec<String>,
+    push_through_args: Vec<String>,
+) -> anyhow::Result<()> {
+    // Add the compiler v2 packages to test to the arguments
+    for package in RELEVANT_PACKAGES_FOR_COMPILER_V2.iter() {
+        direct_args.push("-p".into());
+        direct_args.push(package.to_string());
+    }
+
+    // Create the command to run the compiler v2 tests
+    let mut command = Cargo::command("nextest");
+    command.args(["run"]);
+    command.args(direct_args).pass_through(push_through_args);
+
+    // Run the compiler v2 tests
+    command.run(false);
+    Ok(())
+}
+
+/// Runs the targeted smoke tests
+fn run_targeted_smoke_tests(
+    mut direct_args: Vec<String>,
+    push_through_args: Vec<String>,
+) -> anyhow::Result<()> {
+    // First, build the aptos-node binary (as a separate step) before running the tests
+    let mut command = Cargo::command("build");
+    command.args([
+        "-p",
+        APTOS_NODE_PACKAGE_NAME,
+        "--release",
+        "--locked",
+        "--features",
+        "failpoints,indexer",
+    ]);
+    command.run(false);
+
+    // Next, add the smoke test package to the arguments
+    direct_args.push("-p".into());
+    direct_args.push(SMOKE_TESTS_PACKAGE_NAME.into());
+
+    // Create the command to run the smoke tests
+    let mut command = Cargo::command("nextest");
+    command.args(["run"]);
+    command.args(direct_args).pass_through(push_through_args);
+
+    // Run the smoke tests
+    command.run(false);
+    Ok(())
+}
+
+/// Runs the targeted unit tests
 fn run_targeted_unit_tests(
     packages_to_test: Vec<String>,
     mut direct_args: Vec<String>,
