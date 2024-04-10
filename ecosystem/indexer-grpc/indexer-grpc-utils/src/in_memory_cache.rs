@@ -3,7 +3,7 @@
 
 use crate::compression_util::{CacheEntry, StorageFormat};
 use anyhow::Context;
-use aptos_in_memory_cache::{caches::fifo::FIFOCache, Cache, Incrementable, Ordered};
+use aptos_in_memory_cache::{caches::fifo::FIFOCache, Cache, IncrementableCacheKey, OrderedCache};
 use aptos_protos::transaction::v1::Transaction;
 use itertools::Itertools;
 use prost::Message;
@@ -31,7 +31,7 @@ impl Into<u64> for TransactionVersion {
     }
 }
 
-impl Incrementable<Arc<Transaction>> for TransactionVersion {
+impl IncrementableCacheKey<Arc<Transaction>> for TransactionVersion {
     fn next(&self, value_context: &Arc<Transaction>) -> Self {
         TransactionVersion(value_context.version + 1)
     }
@@ -146,7 +146,7 @@ async fn warm_up_the_cache<C, Ca>(
 ) -> anyhow::Result<(u64, u64, u64)>
 where
     C: redis::aio::ConnectionLike + Send + Sync + Clone + 'static,
-    Ca: Cache<TransactionVersion, Arc<Transaction>> + Ordered<TransactionVersion> + 'static,
+    Ca: OrderedCache<TransactionVersion, Arc<Transaction>> + 'static,
 {
     let mut conn = conn.clone();
     let latest_version = get_config_by_key(&mut conn, "latest_version")
@@ -177,7 +177,7 @@ fn spawn_update_task<C, Ca>(
     cancellation_token: tokio_util::sync::CancellationToken,
 ) where
     C: redis::aio::ConnectionLike + Send + Sync + Clone + 'static,
-    Ca: Cache<TransactionVersion, Arc<Transaction>> + Ordered<TransactionVersion> + 'static,
+    Ca: OrderedCache<TransactionVersion, Arc<Transaction>> + 'static,
 {
     tokio::spawn(async move {
         let mut conn = conn.clone();

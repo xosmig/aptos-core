@@ -1,7 +1,7 @@
 // Copyright © Aptos Foundation
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{Cache, Incrementable, Ordered};
+use crate::{Cache, IncrementableCacheKey, OrderedCache};
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use std::{hash::Hash, sync::Arc, time::Duration};
@@ -22,7 +22,7 @@ struct CacheMetadata<K> {
 /// A simple in-memory cache with a deterministic FIFO eviction policy.
 pub struct FIFOCache<K, V>
 where
-    K: Hash + Eq + PartialEq + Incrementable<V> + Send + Sync + Clone + 'static,
+    K: Hash + Eq + PartialEq + IncrementableCacheKey<V> + Send + Sync + Clone + 'static,
     V: Send + Sync + Clone + 'static,
 {
     /// Cache maps the cache key to the deserialized Transaction.
@@ -33,7 +33,7 @@ where
 
 impl<K, V> FIFOCache<K, V>
 where
-    K: Hash + Eq + PartialEq + Incrementable<V> + Send + Sync + Clone + 'static,
+    K: Hash + Eq + PartialEq + IncrementableCacheKey<V> + Send + Sync + Clone + 'static,
     V: Send + Sync + Clone + 'static,
 {
     pub fn new(target_size_in_bytes: u64, eviction_trigger_size_in_bytes: u64) -> Self {
@@ -116,7 +116,7 @@ where
 
 impl<K, V> Cache<K, V> for FIFOCache<K, V>
 where
-    K: Hash + Eq + PartialEq + Incrementable<V> + Send + Sync + Clone,
+    K: Hash + Eq + PartialEq + IncrementableCacheKey<V> + Send + Sync + Clone,
     V: Send + Sync + Clone,
 {
     fn get(&self, key: &K) -> Option<V> {
@@ -128,6 +128,22 @@ where
         if self.items.is_empty() {
             let mut cache_metadata = self.cache_metadata.write();
             cache_metadata.first_key = Some(key.clone());
+        }
+
+        // TODO: Implement pre-caching for out of order writes
+        // Check if the inserted key is in order
+        let last_kv = {
+            self.cache_metadata
+                .read()
+                .last_key
+                .clone()
+                .and_then(|k| self.get(&k).and_then(|v| Some((k, v))))
+        };
+        if let Some((k, v)) = last_kv {
+            if k.next(&v) != key {
+                // Panic if the key is not in order
+                panic!("Key is not in order");
+            }
         }
 
         let mut cache_metadata = self.cache_metadata.write();
@@ -142,9 +158,9 @@ where
     }
 }
 
-impl<K, V> Ordered<K> for FIFOCache<K, V>
+impl<K, V> OrderedCache<K, V> for FIFOCache<K, V>
 where
-    K: Hash + Eq + PartialEq + Incrementable<V> + Send + Sync + Clone,
+    K: Hash + Eq + PartialEq + IncrementableCacheKey<V> + Send + Sync + Clone,
     V: Send + Sync + Clone,
 {
     fn first_key(&self) -> Option<K> {

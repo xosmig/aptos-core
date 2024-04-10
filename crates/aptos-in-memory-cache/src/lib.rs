@@ -21,9 +21,10 @@ where
     fn total_size(&self) -> u64;
 }
 
-pub trait Ordered<K>: Send + Sync
+pub trait OrderedCache<K, V>: Cache<K, V>
 where
-    K: Clone + Send + Sync,
+    K: Eq + Hash + Clone + Send + Sync,
+    V: Clone + Send + Sync,
 {
     /// Returns the first key in the cache. Returns [`None`] if the cache is empty.
     fn first_key(&self) -> Option<K>;
@@ -33,7 +34,7 @@ where
 }
 
 // TODO: Find better solution for guaranteeing order
-pub trait Incrementable<V>: Send + Sync
+pub trait IncrementableCacheKey<V>: Send + Sync
 where
     V: Clone + Send + Sync,
 {
