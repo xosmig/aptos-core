@@ -3,7 +3,7 @@
 
 use crate::compression_util::{CacheEntry, StorageFormat};
 use anyhow::Context;
-use aptos_in_memory_cache::{caches::fifo::FIFOCache, Cache, IncrementableCacheKey, OrderedCache};
+use aptos_in_memory_cache::{caches::fifo::FIFOCache, Cache, OrderedCache};
 use aptos_protos::transaction::v1::Transaction;
 use itertools::Itertools;
 use prost::Message;
@@ -22,25 +22,10 @@ const IN_MEMORY_CACHE_EVICTION_TRIGGER_SIZE_IN_BYTES: u64 = 3_500_000_000;
 pub const WARM_UP_CACHE_ENTRIES: u64 = 20_000;
 pub const MAX_REDIS_FETCH_BATCH_SIZE: usize = 500;
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct TransactionVersion(u64);
-
-impl Into<u64> for TransactionVersion {
-    fn into(self) -> u64 {
-        self.0
-    }
-}
-
-impl IncrementableCacheKey<Arc<Transaction>> for TransactionVersion {
-    fn next(&self, value_context: &Arc<Transaction>) -> Self {
-        TransactionVersion(value_context.version + 1)
-    }
-}
-
 /// InMemoryCache is a simple in-memory cache that stores the protobuf Transaction.
 pub struct InMemoryCache {
     /// Cache maps the cache key to the deserialized Transaction.
-    cache: Arc<FIFOCache<TransactionVersion, Arc<Transaction>>>,
+    cache: Arc<FIFOCache<u64, Arc<Transaction>>>,
     _cancellation_token_drop_guard: tokio_util::sync::DropGuard,
 }
 
@@ -56,6 +41,7 @@ impl InMemoryCache {
         let cache = Arc::new(FIFOCache::new(
             IN_MEMORY_CACHE_TARGET_MAX_CAPACITY_IN_BYTES,
             IN_MEMORY_CACHE_EVICTION_TRIGGER_SIZE_IN_BYTES,
+            |key, _| Some(key + 1),
         ));
 
         warm_up_the_cache(conn.clone(), cache.clone(), storage_format).await?;
@@ -76,7 +62,6 @@ impl InMemoryCache {
 
     fn latest_version(&self) -> u64 {
         if let Some(key) = self.cache.last_key() {
-            let key: u64 = key.into();
             return key + 1;
         }
         0
@@ -110,7 +95,7 @@ impl InMemoryCache {
         let lock_waiting_time = start_time.elapsed().as_secs_f64();
         let mut arc_transactions = Vec::new();
         for key in versions_to_fetch {
-            if let Some(transaction) = self.cache.get(&TransactionVersion(key)) {
+            if let Some(transaction) = self.cache.get(&key) {
                 arc_transactions.push(transaction.clone());
             } else {
                 break;
@@ -146,7 +131,7 @@ async fn warm_up_the_cache<C, Ca>(
 ) -> anyhow::Result<(u64, u64, u64)>
 where
     C: redis::aio::ConnectionLike + Send + Sync + Clone + 'static,
-    Ca: OrderedCache<TransactionVersion, Arc<Transaction>> + 'static,
+    Ca: OrderedCache<u64, Arc<Transaction>> + 'static,
 {
     let mut conn = conn.clone();
     let latest_version = get_config_by_key(&mut conn, "latest_version")
@@ -162,10 +147,7 @@ where
     let transactions = batch_get_transactions(&mut conn, versions_to_fetch, storage_format).await?;
     let total_size_in_bytes = transactions.iter().map(|t| t.encoded_len() as u64).sum();
     for transaction in transactions {
-        cache.insert(
-            TransactionVersion(transaction.version),
-            Arc::new(transaction),
-        );
+        cache.insert(transaction.version, Arc::new(transaction));
     }
     Ok((first_version, latest_version, total_size_in_bytes))
 }
@@ -177,7 +159,7 @@ fn spawn_update_task<C, Ca>(
     cancellation_token: tokio_util::sync::CancellationToken,
 ) where
     C: redis::aio::ConnectionLike + Send + Sync + Clone + 'static,
-    Ca: OrderedCache<TransactionVersion, Arc<Transaction>> + 'static,
+    Ca: OrderedCache<u64, Arc<Transaction>> + 'static,
 {
     tokio::spawn(async move {
         let mut conn = conn.clone();
@@ -194,8 +176,7 @@ fn spawn_update_task<C, Ca>(
                 .context("Latest version doesn't exist in Redis")
                 .unwrap();
 
-            let last_key: u64 = { cache.last_key().expect("Cache is warmed up") }.into();
-            let in_cache_latest_version = last_key + 1;
+            let in_cache_latest_version = { cache.last_key().expect("Cache is warmed up") } + 1;
             if current_latest_version == in_cache_latest_version {
                 tokio::time::sleep(std::time::Duration::from_millis(
                     IN_MEMORY_CACHE_LOOKUP_RETRY_INTERVAL_MS,
@@ -221,10 +202,7 @@ fn spawn_update_task<C, Ca>(
                 }
             }
             for transaction in transactions {
-                cache.insert(
-                    TransactionVersion(transaction.version),
-                    Arc::new(transaction),
-                );
+                cache.insert(transaction.version, Arc::new(transaction));
             }
             let processing_duration = start_time.elapsed().as_secs_f64();
             tracing::info!(
