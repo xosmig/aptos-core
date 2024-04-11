@@ -41,7 +41,7 @@ impl InMemoryCache {
         let cache = Arc::new(FIFOCache::new(
             IN_MEMORY_CACHE_TARGET_MAX_CAPACITY_IN_BYTES,
             IN_MEMORY_CACHE_EVICTION_TRIGGER_SIZE_IN_BYTES,
-            |key, _| Some(key + 1),
+            |txn_version, _| Some(txn_version + 1),
         ));
 
         warm_up_the_cache(conn.clone(), cache.clone(), storage_format).await?;
@@ -91,7 +91,6 @@ impl InMemoryCache {
                 latest_version,
             );
         };
-
         let lock_waiting_time = start_time.elapsed().as_secs_f64();
         let mut arc_transactions = Vec::new();
         for key in versions_to_fetch {
