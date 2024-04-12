@@ -29,6 +29,8 @@ where
     insert_notify: Arc<Notify>,
     cache_metadata: Arc<RwLock<CacheMetadata<K>>>,
     _cancellation_token_drop_guard: tokio_util::sync::DropGuard,
+    // User defined function to get the next key for a given key
+    // The function provides the key and the getter function to the DashMap in case a lookup is necessary
     next_key_function:
         Arc<dyn Fn(&K, &dyn Fn(&K) -> Option<V>) -> Option<K> + Send + Sync + 'static>,
 }
@@ -201,26 +203,16 @@ mod tests {
         let cache = Arc::new(cache);
         tokio::time::sleep(Duration::from_nanos(1)).await;
 
-        let key1 = 1;
-        let key2 = 2;
-        let key3 = 3;
-        let key4 = 4;
-
-        let value1 = 1;
-        let value2 = 2;
-        let value3 = 3;
-        let value4 = 4;
-
-        cache.insert(key1.clone(), value1);
-        cache.insert(key2.clone(), value2);
-        cache.insert(key3.clone(), value3);
-        cache.insert(key4.clone(), value4);
+        cache.insert(1, 1);
+        cache.insert(2, 2);
+        cache.insert(3, 3);
+        cache.insert(4, 4);
         tokio::time::sleep(Duration::from_nanos(1)).await;
 
-        assert_eq!(cache.get(&key1), Some(value1));
-        assert_eq!(cache.get(&key2), Some(value2));
-        assert_eq!(cache.get(&key3), Some(value3));
-        assert_eq!(cache.get(&key4), Some(value4));
+        assert_eq!(cache.get(&1), Some(1));
+        assert_eq!(cache.get(&2), Some(2));
+        assert_eq!(cache.get(&3), Some(3));
+        assert_eq!(cache.get(&4), Some(4));
     }
 
     #[tokio::test]
@@ -231,7 +223,7 @@ mod tests {
         // Insert 8 values, size is 8*8=64 bytes
         for i in 0..8 {
             cache.insert(i, i);
-            assert_eq!(cache.total_size(), ((i + 1) * 8) as u64);
+            assert_eq!(cache.total_size(), (i + 1) * 8);
         }
 
         for i in 0..8 {
