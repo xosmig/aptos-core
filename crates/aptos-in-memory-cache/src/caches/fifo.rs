@@ -243,7 +243,7 @@ where
     V: Send + Sync + Clone,
 {
     fn next_key(&self, key: &K) -> Option<K> {
-        FIFOCache::next_key(&self, key)
+        FIFOCache::next_key(self, key)
     }
 
     fn next_key_and_value(&self, key: &K) -> Option<(K, V)> {
