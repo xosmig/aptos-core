@@ -134,6 +134,10 @@ where
             }
         });
     }
+
+    pub fn next_key(&self, key: &K) -> Option<K> {
+        (self.next_key_function)(key, &|k| self.items.get(k).map(|r| r.value().clone()))
+    }
 }
 
 impl<K, V> Cache<K, V> for FIFOCache<K, V>
