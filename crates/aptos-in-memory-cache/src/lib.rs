@@ -32,3 +32,12 @@ where
     /// Returns the last key in the cache. Returns [`None`] if the cache is empty.
     fn last_key(&self) -> Option<K>;
 }
+
+pub trait IncrementableOrderedCache<K, V>: OrderedCache<K, V>
+where
+    K: Eq + Hash + Clone + Send + Sync,
+    V: Clone + Send + Sync,
+{
+    /// Returns the next key in the cache. Returns [`None`] if the cache is empty.
+    fn next_key(&self, key: &K) -> Option<K>;
+}

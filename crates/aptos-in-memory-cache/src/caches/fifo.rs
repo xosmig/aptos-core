@@ -1,7 +1,7 @@
 // Copyright © Aptos Foundation
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{Cache, OrderedCache};
+use crate::{Cache, IncrementableOrderedCache, OrderedCache};
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use std::{fmt::Debug, hash::Hash, sync::Arc};
@@ -134,10 +134,6 @@ where
             }
         });
     }
-
-    pub fn next_key(&self, key: &K) -> Option<K> {
-        (self.next_key_function)(key, &|k| self.items.get(k).map(|r| r.value().clone()))
-    }
 }
 
 impl<K, V> Cache<K, V> for FIFOCache<K, V>
@@ -193,6 +189,16 @@ where
     fn last_key(&self) -> Option<K> {
         let cache_metadata = self.cache_metadata.read();
         cache_metadata.last_key.clone()
+    }
+}
+
+impl<K, V> IncrementableOrderedCache<K, V> for FIFOCache<K, V>
+where
+    K: Hash + Eq + PartialEq + Send + Sync + Clone,
+    V: Send + Sync + Clone,
+{
+    fn next_key(&self, key: &K) -> Option<K> {
+        (self.next_key_function)(key, &|k| self.items.get(k).map(|r| r.value().clone()))
     }
 }
 
