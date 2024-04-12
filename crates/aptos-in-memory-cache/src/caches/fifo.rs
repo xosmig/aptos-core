@@ -325,5 +325,22 @@ mod tests {
         for i in 0..8 {
             assert_eq!(stream.next().await, Some(i));
         }
+
+        // Insert 9th value, size is 8*9=72>64 bytes, eviction threshold reached
+        // Evicts until target size size is reached
+        // Sleep for 1 second to ensure eviction task finishes
+        tokio::time::sleep(Duration::from_nanos(1)).await;
+        cache.insert(8, 8);
+        tokio::time::sleep(Duration::from_nanos(1)).await;
+
+        // New size is 8*5=40 bytes
+        // Keys evicted: 0, 1, 2, 3
+        let mut stream = cache.get_stream(Some(0));
+        // Since 0 does not exist, start from last key 8
+        assert_eq!(stream.next().await, Some(8));
+
+        let mut stream = cache.get_stream(None);
+        // Since no start version specified, start from last key 8
+        assert_eq!(stream.next().await, Some(8));
     }
 }
