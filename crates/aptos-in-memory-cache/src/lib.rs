@@ -38,6 +38,9 @@ where
     K: Eq + Hash + Clone + Send + Sync,
     V: Clone + Send + Sync,
 {
-    /// Returns the next key in the cache. Returns [`None`] if the cache is empty.
+    /// Returns the next key in the cache. Returns [`None`] if the key is not in the cache.
     fn next_key(&self, key: &K) -> Option<K>;
+
+    /// Returns the previous key in the cache. Returns [`None`] if the next key or value is not in the cache.
+    fn next_key_and_value(&self, key: &K) -> Option<(K, V)>;
 }

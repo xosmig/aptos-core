@@ -200,6 +200,11 @@ where
     fn next_key(&self, key: &K) -> Option<K> {
         (self.next_key_function)(key, &|k| self.items.get(k).map(|r| r.value().clone()))
     }
+
+    fn next_key_and_value(&self, key: &K) -> Option<(K, V)> {
+        let next_key = self.next_key(key);
+        next_key.map(|k| (k.clone(), self.get(&k).unwrap()))
+    }
 }
 
 #[cfg(test)]
