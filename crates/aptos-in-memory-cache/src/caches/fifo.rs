@@ -3,6 +3,7 @@
 
 use crate::{Cache, IncrementableOrderedCache, OrderedCache};
 use dashmap::DashMap;
+use futures::{stream, Stream};
 use parking_lot::RwLock;
 use std::{fmt::Debug, hash::Hash, sync::Arc};
 use tokio::sync::Notify;
@@ -37,7 +38,7 @@ where
 
 impl<K, V> FIFOCache<K, V>
 where
-    K: Hash + Eq + PartialEq + Send + Sync + Clone + Debug + 'static,
+    K: Hash + Eq + PartialEq + Send + Sync + Clone + 'static,
     V: Send + Sync + Clone + 'static,
 {
     pub fn new(
@@ -134,6 +135,51 @@ where
             }
         });
     }
+
+    fn next_key(&self, key: &K) -> Option<K> {
+        (self.next_key_function)(key, &|k| self.items.get(k).map(|r| r.value().clone()))
+    }
+
+    /// Returns a stream of values in the cache.
+    pub fn get_stream(&self, starting_key: Option<K>) -> impl Stream<Item = V> + '_ {
+        let items = self.items.clone();
+        let notify = self.insert_notify.clone();
+
+        // Start from the starting key if provided, otherwise start from the last key
+        let last_key = self.cache_metadata.read().last_key.clone();
+        let mut initial_state = starting_key.or_else(|| last_key.clone());
+
+        // If the provided starting key is not in the cache, start from the last key
+        if let Some(k) = initial_state.clone() {
+            if !items.contains_key(&k) {
+                initial_state = last_key;
+            }
+        }
+
+        Box::pin(stream::unfold(initial_state, move |state| {
+            let items_clone = items.clone();
+            let notify_clone = notify.clone();
+
+            async move {
+                let mut current_key = state;
+
+                // Continuously loop until a value is found
+                loop {
+                    // If a key is provided, get the value and the next key
+                    if let Some(key) = current_key {
+                        if let Some(value) = items_clone.get(&key).map(|r| r.value().clone()) {
+                            let next_key = self.next_key(&key);
+                            return Some((value, next_key));
+                        }
+                    }
+
+                    // If no next key or value was found, wait for an insert before checking again
+                    notify_clone.notified().await;
+                    current_key = self.cache_metadata.read().last_key.clone();
+                }
+            }
+        }))
+    }
 }
 
 impl<K, V> Cache<K, V> for FIFOCache<K, V>
@@ -156,8 +202,7 @@ where
         // Check if the inserted key is in order
         let last_key = { self.cache_metadata.read().last_key.clone() };
         if let Some(k) = last_key {
-            let getter = |k: &K| -> Option<V> { self.items.get(k).map(|r| r.value().clone()) };
-            if (self.next_key_function)(&k, &getter).unwrap() != key {
+            if self.next_key(&k).unwrap() != key {
                 // Panic if the key is not in order
                 panic!("Key is not in order");
             }
@@ -198,7 +243,7 @@ where
     V: Send + Sync + Clone,
 {
     fn next_key(&self, key: &K) -> Option<K> {
-        (self.next_key_function)(key, &|k| self.items.get(k).map(|r| r.value().clone()))
+        FIFOCache::next_key(&self, key)
     }
 
     fn next_key_and_value(&self, key: &K) -> Option<(K, V)> {
@@ -210,6 +255,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::{caches::fifo::FIFOCache, Cache};
+    use futures::StreamExt;
     use std::{sync::Arc, time::Duration};
 
     #[tokio::test]
@@ -263,5 +309,21 @@ mod tests {
         cache.insert(9, 9);
         assert_eq!(cache.total_size(), 48);
         assert_eq!(cache.get(&9), Some(9));
+    }
+
+    #[tokio::test]
+    async fn test_read_from_stream() {
+        let cache = FIFOCache::<u64, u64>::new(40, 64, |key, _| Some(key + 1));
+        let cache = Arc::new(cache);
+
+        // Insert 8 values, size is 8*8=64 bytes
+        for i in 0..8 {
+            cache.insert(i, i);
+        }
+
+        let mut stream = cache.get_stream(Some(0));
+        for i in 0..8 {
+            assert_eq!(stream.next().await, Some(i));
+        }
     }
 }
