@@ -1,6 +1,6 @@
 [package]
 name = "aptos-in-memory-cache"
-description = "In-Memory cache"
+description = "In-memory cache"
 version = "0.1.0"
 
 # Workspace inherited keys

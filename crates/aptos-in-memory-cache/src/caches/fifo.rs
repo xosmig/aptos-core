@@ -161,7 +161,14 @@ where
             let notify_clone = notify.clone();
 
             async move {
-                let mut current_key = state;
+                // If stream subscriber falls behind, start from the last key
+                let mut current_key = state.clone();
+                if let Some(k) = state {
+                    let last_key = self.cache_metadata.read().last_key.clone();
+                    if !items_clone.contains_key(&k) {
+                        current_key = last_key;
+                    }
+                }
 
                 // Continuously loop until a value is found
                 loop {
@@ -293,7 +300,7 @@ mod tests {
 
         // Insert 9th value, size is 8*9=72>64 bytes, eviction threshold reached
         // Evicts until target size size is reached
-        // Sleep for 1 second to ensure eviction task finishes
+        // Sleep for 1 ns to ensure eviction task finishes
         tokio::time::sleep(Duration::from_nanos(1)).await;
         cache.insert(8, 8);
         tokio::time::sleep(Duration::from_nanos(1)).await;
@@ -328,19 +335,43 @@ mod tests {
 
         // Insert 9th value, size is 8*9=72>64 bytes, eviction threshold reached
         // Evicts until target size size is reached
-        // Sleep for 1 second to ensure eviction task finishes
+        // Sleep for 1 ns to ensure eviction task finishes
         tokio::time::sleep(Duration::from_nanos(1)).await;
         cache.insert(8, 8);
         tokio::time::sleep(Duration::from_nanos(1)).await;
 
         // New size is 8*5=40 bytes
         // Keys evicted: 0, 1, 2, 3
-        let mut stream = cache.get_stream(Some(0));
+        let mut stream2 = cache.get_stream(Some(0));
         // Since 0 does not exist, start from last key 8
-        assert_eq!(stream.next().await, Some(8));
+        assert_eq!(stream2.next().await, Some(8));
 
-        let mut stream = cache.get_stream(None);
+        let mut stream3 = cache.get_stream(None);
         // Since no start version specified, start from last key 8
-        assert_eq!(stream.next().await, Some(8));
+        assert_eq!(stream3.next().await, Some(8));
+
+        // Insert more values such that all previous values read by stream1 are evicted as well as the next one
+        // This is to simulate if the stream subscriber falls behind
+        for i in 9..20 {
+            cache.insert(i, i);
+        }
+
+        // Sleep for 1 ns to ensure eviction task finishes
+        tokio::time::sleep(Duration::from_nanos(1)).await;
+        assert_eq!(stream.next().await, Some(19));
+    }
+
+    #[tokio::test]
+    async fn test_stream_picks_up_new_inserts() {
+        let cache = FIFOCache::<u64, u64>::new(40, 64, |key, _| Some(key + 1));
+        let cache = Arc::new(cache);
+
+        let cache_clone = cache.clone();
+        tokio::spawn(async move {
+            let mut stream = cache_clone.get_stream(None);
+            assert_eq!(stream.next().await, Some(0));
+        });
+
+        cache.insert(0, 0);
     }
 }
