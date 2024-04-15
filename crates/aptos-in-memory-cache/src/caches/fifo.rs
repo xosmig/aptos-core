@@ -1,7 +1,7 @@
 // Copyright © Aptos Foundation
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{Cache, IncrementableOrderedCache, OrderedCache};
+use crate::{Cache, OrderedCache, StreamableOrderedCache};
 use dashmap::DashMap;
 use futures::{stream, Stream};
 use parking_lot::RwLock;
@@ -140,54 +140,6 @@ where
     fn next_key(&self, key: &K) -> Option<K> {
         (self.next_key_function)(key, &|k| self.items.get(k).map(|r| r.value().clone()))
     }
-
-    /// Returns a stream of values in the cache.
-    pub fn get_stream(&self, starting_key: Option<K>) -> impl Stream<Item = V> + '_ {
-        let items = self.items.clone();
-        let notify = self.insert_notify.clone();
-
-        // Start from the starting key if provided, otherwise start from the last key
-        let last_key = self.cache_metadata.read().last_key.clone();
-        let mut initial_state = starting_key.or_else(|| last_key.clone());
-
-        // If the provided starting key is not in the cache, start from the last key
-        if let Some(k) = initial_state.clone() {
-            if !items.contains_key(&k) {
-                initial_state = last_key;
-            }
-        }
-
-        Box::pin(stream::unfold(initial_state, move |state| {
-            let items_clone = items.clone();
-            let notify_clone = notify.clone();
-
-            async move {
-                // If stream subscriber falls behind, start from the last key
-                let mut current_key = state.clone();
-                if let Some(k) = state {
-                    let last_key = self.cache_metadata.read().last_key.clone();
-                    if !items_clone.contains_key(&k) {
-                        current_key = last_key;
-                    }
-                }
-
-                // Continuously loop until a value is found
-                loop {
-                    // If a key is provided, get the value and the next key
-                    if let Some(key) = current_key {
-                        if let Some(value) = items_clone.get(&key).map(|r| r.value().clone()) {
-                            let next_key = self.next_key(&key);
-                            return Some((value, next_key));
-                        }
-                    }
-
-                    // If no next key or value was found, wait for an insert before checking again
-                    notify_clone.notified().await;
-                    current_key = self.cache_metadata.read().last_key.clone();
-                }
-            }
-        }))
-    }
 }
 
 impl<K, V> Cache<K, V> for FIFOCache<K, V>
@@ -245,7 +197,7 @@ where
     }
 }
 
-impl<K, V> IncrementableOrderedCache<K, V> for FIFOCache<K, V>
+impl<K, V> StreamableOrderedCache<K, V> for FIFOCache<K, V>
 where
     K: Hash + Eq + PartialEq + Send + Sync + Clone,
     V: Send + Sync + Clone,
@@ -258,11 +210,58 @@ where
         let next_key = self.next_key(key);
         next_key.and_then(|k| self.get(&k).and_then(|v| Some((k, v))))
     }
+
+    fn get_stream(&self, starting_key: Option<K>) -> impl Stream<Item = V> + '_ {
+        let items = self.items.clone();
+        let notify = self.insert_notify.clone();
+
+        // Start from the starting key if provided, otherwise start from the last key
+        let last_key = self.cache_metadata.read().last_key.clone();
+        let mut initial_state = starting_key.or_else(|| last_key.clone());
+
+        // If the provided starting key is not in the cache, start from the last key
+        if let Some(k) = initial_state.clone() {
+            if !items.contains_key(&k) {
+                initial_state = last_key;
+            }
+        }
+
+        Box::pin(stream::unfold(initial_state, move |state| {
+            let items_clone = items.clone();
+            let notify_clone = notify.clone();
+
+            async move {
+                // If stream subscriber falls behind, start from the last key
+                let mut current_key = state.clone();
+                if let Some(k) = state {
+                    let last_key = self.cache_metadata.read().last_key.clone();
+                    if !items_clone.contains_key(&k) {
+                        current_key = last_key;
+                    }
+                }
+
+                // Continuously loop until a value is found
+                loop {
+                    // If a key is provided, get the value and the next key
+                    if let Some(key) = current_key {
+                        if let Some(value) = items_clone.get(&key).map(|r| r.value().clone()) {
+                            let next_key = self.next_key(&key);
+                            return Some((value, next_key));
+                        }
+                    }
+
+                    // If no next key or value was found, wait for an insert before checking again
+                    notify_clone.notified().await;
+                    current_key = self.cache_metadata.read().last_key.clone();
+                }
+            }
+        }))
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{caches::fifo::FIFOCache, Cache};
+    use crate::{caches::fifo::FIFOCache, Cache, StreamableOrderedCache};
     use futures::StreamExt;
     use std::{sync::Arc, time::Duration};
 

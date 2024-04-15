@@ -1,6 +1,7 @@
 // Copyright © Aptos Foundation
 // SPDX-License-Identifier: Apache-2.0
 
+use futures::Stream;
 use std::hash::Hash;
 
 pub mod caches;
@@ -33,7 +34,7 @@ where
     fn last_key(&self) -> Option<K>;
 }
 
-pub trait IncrementableOrderedCache<K, V>: OrderedCache<K, V>
+pub trait StreamableOrderedCache<K, V>: OrderedCache<K, V>
 where
     K: Eq + Hash + Clone + Send + Sync,
     V: Clone + Send + Sync,
@@ -43,4 +44,7 @@ where
 
     /// Returns the previous key in the cache. Returns [`None`] if the next key or value is not in the cache.
     fn next_key_and_value(&self, key: &K) -> Option<(K, V)>;
+
+    /// Returns a stream of values in the cache.
+    fn get_stream(&self, starting_key: Option<K>) -> impl Stream<Item = V> + '_;
 }
