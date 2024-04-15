@@ -100,12 +100,13 @@ where
             if let Some(key_to_remove) = current_cache_metadata.first_key.clone() {
                 let (_k, v) = items
                     .remove(&key_to_remove)
-                    .expect("Failed to remove the key");
+                    .expect("Key to remove should exist.");
                 let size_of_v = std::mem::size_of_val(&v) as u64;
                 bytes_to_remove = bytes_to_remove.saturating_sub(size_of_v);
                 actual_bytes_removed += size_of_v;
-                current_cache_metadata.first_key =
-                    Some((next_key_function)(&key_to_remove, &getter).unwrap());
+                current_cache_metadata.first_key = Some(
+                    (next_key_function)(&key_to_remove, &getter).expect("Next key should exist."),
+                );
             } else {
                 break;
             }
@@ -209,7 +210,7 @@ where
         // Check if the inserted key is in order
         let last_key = { self.cache_metadata.read().last_key.clone() };
         if let Some(k) = last_key {
-            if self.next_key(&k).unwrap() != key {
+            if self.next_key(&k).expect("Next key should exist.") != key {
                 // Panic if the key is not in order
                 panic!("Key is not in order");
             }
@@ -255,7 +256,7 @@ where
 
     fn next_key_and_value(&self, key: &K) -> Option<(K, V)> {
         let next_key = self.next_key(key);
-        next_key.map(|k| (k.clone(), self.get(&k).unwrap()))
+        next_key.and_then(|k| self.get(&k).and_then(|v| Some((k, v))))
     }
 }
 
