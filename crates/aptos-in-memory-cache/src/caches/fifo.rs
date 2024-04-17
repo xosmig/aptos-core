@@ -211,48 +211,44 @@ where
         next_key.and_then(|k| self.get(&k).and_then(|v| Some((k, v))))
     }
 
+    /// Returns a stream of values in the cache starting from the given key.
+    /// If the stream falls behind, the stream will return None for the next value (indicating that it should be reset).
     fn get_stream(&self, starting_key: Option<K>) -> impl Stream<Item = V> + '_ {
-        let items = self.items.clone();
-        let notify = self.insert_notify.clone();
-
         // Start from the starting key if provided, otherwise start from the last key
-        let last_key = self.cache_metadata.read().last_key.clone();
-        let mut initial_state = starting_key.or_else(|| last_key.clone());
-
-        // If the provided starting key is not in the cache, start from the last key
-        if let Some(k) = initial_state.clone() {
-            if !items.contains_key(&k) {
-                initial_state = last_key;
-            }
-        }
+        let initial_state = starting_key.or_else(|| self.cache_metadata.read().last_key.clone());
 
         Box::pin(stream::unfold(initial_state, move |state| {
-            let items_clone = items.clone();
-            let notify_clone = notify.clone();
-
             async move {
-                // If stream subscriber falls behind, start from the last key
-                let mut current_key = state.clone();
-                if let Some(k) = state {
-                    let last_key = self.cache_metadata.read().last_key.clone();
-                    if !items_clone.contains_key(&k) {
-                        current_key = last_key;
-                    }
-                }
-
-                // Continuously loop until a value is found
+                let mut current_key = state;
                 loop {
-                    // If a key is provided, get the value and the next key
-                    if let Some(key) = current_key {
-                        if let Some(value) = items_clone.get(&key).map(|r| r.value().clone()) {
-                            let next_key = self.next_key(&key);
-                            return Some((value, next_key));
-                        }
+                    // If cache empty, wait for an insert
+                    if current_key.is_none() {
+                        self.insert_notify.notified().await;
+                        current_key = self.cache_metadata.read().last_key.clone();
+                        continue;
                     }
 
-                    // If no next key or value was found, wait for an insert before checking again
-                    notify_clone.notified().await;
-                    current_key = self.cache_metadata.read().last_key.clone();
+                    // This conditional should always pass
+                    let last_key = self.cache_metadata.read().last_key.clone();
+                    if let (Some(state), Some(last_key)) = (current_key.clone(), last_key) {
+                        // Stream is ahead of cache
+                        // If the last value in the cache has already been streamed, wait until a new value is inserted
+                        if let Some(next_key) = self.next_key(&last_key) {
+                            if state == next_key {
+                                self.insert_notify.notified().await;
+                                current_key = self.cache_metadata.read().last_key.clone();
+                                continue;
+                            }
+                        }
+                        // Stream is in cache bounds
+                        // If the next value to stream is in the cache, return it
+                        else if let Some(v) = self.get(&state) {
+                            return Some((v, self.next_key(&state)));
+                        }
+                        // Stream is behind cache
+                        // If the next value to stream is not in the cache, stop the stream
+                        return None;
+                    }
                 }
             }
         }))
@@ -330,7 +326,7 @@ mod tests {
 
         let mut stream = cache.get_stream(Some(0));
         for i in 0..8 {
-            assert_eq!(stream.next().await, Some(i));
+            assert_eq!(stream.next().await.unwrap(), i);
         }
 
         // Insert 9th value, size is 8*9=72>64 bytes, eviction threshold reached
@@ -343,22 +339,8 @@ mod tests {
         // New size is 8*5=40 bytes
         // Keys evicted: 0, 1, 2, 3
         let mut stream2 = cache.get_stream(Some(0));
-        // Since 0 does not exist, start from last key 8
-        assert_eq!(stream2.next().await, Some(8));
-
-        let mut stream3 = cache.get_stream(None);
-        // Since no start version specified, start from last key 8
-        assert_eq!(stream3.next().await, Some(8));
-
-        // Insert more values such that all previous values read by stream1 are evicted as well as the next one
-        // This is to simulate if the stream subscriber falls behind
-        for i in 9..20 {
-            cache.insert(i, i);
-        }
-
-        // Sleep for 1 ns to ensure eviction task finishes
-        tokio::time::sleep(Duration::from_nanos(1)).await;
-        assert_eq!(stream.next().await, Some(19));
+        // The stream has fallen behind since 0 has been evicted already
+        assert_eq!(stream2.next().await, None);
     }
 
     #[tokio::test]
@@ -369,7 +351,7 @@ mod tests {
         let cache_clone = cache.clone();
         tokio::spawn(async move {
             let mut stream = cache_clone.get_stream(None);
-            assert_eq!(stream.next().await, Some(0));
+            assert_eq!(stream.next().await.unwrap(), 0);
         });
 
         cache.insert(0, 0);
