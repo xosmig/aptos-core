@@ -38,7 +38,7 @@ where
 
 impl<K, V> FIFOCache<K, V>
 where
-    K: Hash + Eq + PartialEq + Send + Sync + Clone + 'static,
+    K: Debug + Hash + Eq + PartialEq + Send + Sync + Clone + 'static,
     V: Send + Sync + Clone + 'static,
 {
     pub fn new(
@@ -145,7 +145,7 @@ where
 
 impl<K, V> Cache<K, V> for FIFOCache<K, V>
 where
-    K: Hash + Eq + PartialEq + Send + Sync + Clone,
+    K: Debug + Hash + Eq + PartialEq + Send + Sync + Clone,
     V: Send + Sync + Clone,
 {
     fn get(&self, key: &K) -> Option<V> {
@@ -184,7 +184,7 @@ where
 
 impl<K, V> OrderedCache<K, V> for FIFOCache<K, V>
 where
-    K: Hash + Eq + PartialEq + Send + Sync + Clone,
+    K: Debug + Hash + Eq + PartialEq + Send + Sync + Clone,
     V: Send + Sync + Clone,
 {
     fn first_key(&self) -> Option<K> {
@@ -200,7 +200,7 @@ where
 
 impl<K, V> StreamableOrderedCache<K, V> for FIFOCache<K, V>
 where
-    K: Hash + Eq + PartialEq + Send + Sync + Clone,
+    K: Debug + Hash + Eq + PartialEq + Send + Sync + Clone,
     V: Send + Sync + Clone,
 {
     fn next_key(&self, key: &K) -> Option<K> {
