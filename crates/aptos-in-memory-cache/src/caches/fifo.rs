@@ -228,25 +228,28 @@ where
                         continue;
                     }
 
-                    // This conditional should always pass
+                    // These conditional should always pass
                     let last_key = self.cache_metadata.read().last_key.clone();
                     if let (Some(state), Some(last_key)) = (current_key.clone(), last_key) {
-                        // Stream is ahead of cache
-                        // If the last value in the cache has already been streamed, wait until a new value is inserted
                         if let Some(next_key) = self.next_key(&last_key) {
+                            // Stream is ahead of cache
+                            // If the last value in the cache has already been streamed, wait until a new value is inserted
                             if state == next_key {
                                 self.insert_notify.notified().await;
                                 current_key = self.cache_metadata.read().last_key.clone();
                                 continue;
                             }
+                            // Stream is in cache bounds
+                            // If the next value to stream is in the cache, return it
+                            else if let Some(v) = self.get(&state) {
+                                return Some((v, self.next_key(&state)));
+                            } else {
+                                // Stream is behind cache
+                                // If the next value to stream is not in the cache, stop the stream
+                                return None;
+                            }
                         }
-                        // Stream is in cache bounds
-                        // If the next value to stream is in the cache, return it
-                        else if let Some(v) = self.get(&state) {
-                            return Some((v, self.next_key(&state)));
-                        }
-                        // Stream is behind cache
-                        // If the next value to stream is not in the cache, stop the stream
+                        // Something is wrong, last key should exists
                         return None;
                     }
                 }
