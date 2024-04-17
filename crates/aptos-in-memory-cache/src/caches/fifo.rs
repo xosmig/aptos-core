@@ -105,7 +105,8 @@ where
                 bytes_to_remove = bytes_to_remove.saturating_sub(size_of_v);
                 actual_bytes_removed += size_of_v;
                 current_cache_metadata.first_key = Some(
-                    (next_key_function)(&key_to_remove, &getter).expect("Next key should exist."),
+                    (next_key_function)(&key_to_remove, &getter)
+                        .expect(&format!("Key after {} should exist.", k)),
                 );
             } else {
                 break;
