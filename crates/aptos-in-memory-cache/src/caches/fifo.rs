@@ -98,16 +98,15 @@ where
         let getter = |k: &K| -> Option<V> { items.get(k).map(|r| r.value().clone()) };
         while bytes_to_remove > 0 {
             if let Some(key_to_remove) = current_cache_metadata.first_key.clone() {
+                let next_key = (next_key_function)(&key_to_remove, &getter)
+                    .expect(&format!("Key after {:?} should exist.", key_to_remove));
                 let (_k, v) = items
                     .remove(&key_to_remove)
                     .expect("Key to remove should exist.");
                 let size_of_v = std::mem::size_of_val(&v) as u64;
                 bytes_to_remove = bytes_to_remove.saturating_sub(size_of_v);
                 actual_bytes_removed += size_of_v;
-                current_cache_metadata.first_key = Some(
-                    (next_key_function)(&key_to_remove, &getter)
-                        .expect(&format!("Key after {:?} should exist.", key_to_remove)),
-                );
+                current_cache_metadata.first_key = Some(next_key);
             } else {
                 break;
             }
