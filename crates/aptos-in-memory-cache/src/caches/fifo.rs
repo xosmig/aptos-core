@@ -25,6 +25,9 @@ where
     K: Hash + Eq + PartialEq + Send + Sync + Clone + 'static,
     V: Send + Sync + Clone + 'static,
 {
+    /// Precache to support out of order inserts
+    precache: Arc<DashMap<K, V>>,
+    precache_insert_notify: Arc<Notify>,
     /// Cache maps the cache key to the deserialized Transaction.
     items: Arc<DashMap<K, V>>,
     insert_notify: Arc<Notify>,
@@ -47,6 +50,8 @@ where
         next_key_function: impl Fn(&K, &dyn Fn(&K) -> Option<V>) -> Option<K> + Send + Sync + 'static,
     ) -> Self {
         let cancellation_token = CancellationToken::new();
+        let precache = Arc::new(DashMap::new());
+        let precache_insert_notify = Arc::new(Notify::new());
         let items = Arc::new(DashMap::new());
         let insert_notify = Arc::new(Notify::new());
         let cache_metadata = Arc::new(RwLock::new(CacheMetadata {
@@ -59,6 +64,8 @@ where
         let next_key_function = Arc::new(next_key_function);
 
         let cache = Self {
+            precache,
+            precache_insert_notify,
             items,
             insert_notify,
             cache_metadata,
@@ -66,8 +73,66 @@ where
             next_key_function,
         };
 
-        cache.spawn_cleanup_task(cancellation_token);
+        cache.spawn_insertion_task(cancellation_token.clone());
+        cache.spawn_eviction_task(cancellation_token);
         cache
+    }
+
+    fn insert(
+        items: Arc<DashMap<K, V>>,
+        cache_metadata: Arc<RwLock<CacheMetadata<K>>>,
+        insert_notify: Arc<Notify>,
+        key: K,
+        value: V,
+    ) {
+        // If cache is empty, set the first to the new key.
+        if items.is_empty() {
+            let mut cache_metadata = cache_metadata.write();
+            cache_metadata.first_key = Some(key.clone());
+        }
+
+        let mut cache_metadata = cache_metadata.write();
+        cache_metadata.last_key = Some(key.clone());
+        cache_metadata.total_size_in_bytes += std::mem::size_of_val(&value) as u64;
+        items.insert(key, value);
+        insert_notify.notify_waiters();
+    }
+
+    fn spawn_insertion_task(&self, cancellation_token: CancellationToken) {
+        let precache = self.precache.clone();
+        let precache_insert_notify = self.precache_insert_notify.clone();
+        let items = self.items.clone();
+        let insert_notify = self.insert_notify.clone();
+        let cache_metadata = self.cache_metadata.clone();
+        let next_key_function = self.next_key_function.clone();
+
+        tokio::spawn(async move {
+            let cache_getter = |k: &K| -> Option<V> { items.get(k).map(|r| r.value().clone()) };
+            loop {
+                tokio::select! {
+                    _ = precache_insert_notify.notified() => {
+                        loop {
+                            let key_to_insert = match cache_metadata.read().last_key {
+                                Some(ref last_key) => (next_key_function)(last_key, &cache_getter),
+                                None => precache.iter().next().map(|r| r.key().clone()),
+                            };
+
+                            if let Some(key) = key_to_insert {
+                                if let Some((key, value)) = precache.remove(&key) {
+                                    Self::insert(items.clone(), cache_metadata.clone(), insert_notify.clone(), key, value);
+                                    continue;
+                                }
+                            }
+                            break;
+                        }
+                    },
+                    _ = cancellation_token.cancelled() => {
+                        info!("In-memory cache insertion task is cancelled.");
+                        return;
+                    }
+                }
+            }
+        });
     }
 
     fn evict(
@@ -99,7 +164,7 @@ where
         while bytes_to_remove > 0 {
             if let Some(key_to_remove) = current_cache_metadata.first_key.clone() {
                 let next_key = (next_key_function)(&key_to_remove, &getter)
-                    .expect(&format!("Key after {:?} should exist.", key_to_remove));
+                    .unwrap_or_else(|| panic!("Key after {:?} should exist.", key_to_remove));
                 let (_k, v) = items
                     .remove(&key_to_remove)
                     .expect("Key to remove should exist.");
@@ -116,7 +181,7 @@ where
     }
 
     /// Perform cache eviction on a separate task.
-    fn spawn_cleanup_task(&self, cancellation_token: tokio_util::sync::CancellationToken) {
+    fn spawn_eviction_task(&self, cancellation_token: CancellationToken) {
         let insert_notify = self.insert_notify.clone();
         let items = self.items.clone();
         let cache_metadata = self.cache_metadata.clone();
@@ -129,7 +194,7 @@ where
                         Self::evict(items.clone(), cache_metadata.clone(), next_key_function.clone());
                     },
                     _ = cancellation_token.cancelled() => {
-                        info!("In-memory cache cleanup task is cancelled.");
+                        info!("In-memory cache eviction task is cancelled.");
                         return;
                     }
                 }
@@ -152,27 +217,8 @@ where
     }
 
     fn insert(&self, key: K, value: V) {
-        // If cache is empty, set the first to the new key.
-        if self.items.is_empty() {
-            let mut cache_metadata = self.cache_metadata.write();
-            cache_metadata.first_key = Some(key.clone());
-        }
-
-        // TODO: Implement pre-caching for out of order writes
-        // Check if the inserted key is in order
-        let last_key = { self.cache_metadata.read().last_key.clone() };
-        if let Some(k) = last_key {
-            if self.next_key(&k).expect("Next key should exist.") != key {
-                // Panic if the key is not in order
-                panic!("Key is not in order");
-            }
-        }
-
-        let mut cache_metadata = self.cache_metadata.write();
-        cache_metadata.last_key = Some(key.clone());
-        cache_metadata.total_size_in_bytes += std::mem::size_of_val(&value) as u64;
-        self.items.insert(key, value);
-        self.insert_notify.notify_waiters();
+        self.precache.insert(key, value);
+        self.precache_insert_notify.notify_waiters();
     }
 
     fn total_size(&self) -> u64 {
@@ -208,7 +254,7 @@ where
 
     fn next_key_and_value(&self, key: &K) -> Option<(K, V)> {
         let next_key = self.next_key(key);
-        next_key.and_then(|k| self.get(&k).and_then(|v| Some((k, v))))
+        next_key.and_then(|k| self.get(&k).map(|v| (k, v)))
     }
 
     /// Returns a stream of values in the cache starting from the given key.
@@ -264,15 +310,18 @@ mod tests {
     use futures::StreamExt;
     use std::{sync::Arc, time::Duration};
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn test_insert_four_values() {
         let cache = FIFOCache::<u64, u64>::new(100, 200, |key, _| Some(key + 1));
         let cache = Arc::new(cache);
         tokio::time::sleep(Duration::from_nanos(1)).await;
 
         cache.insert(1, 1);
+        tokio::time::sleep(Duration::from_nanos(1)).await;
         cache.insert(2, 2);
+        tokio::time::sleep(Duration::from_nanos(1)).await;
         cache.insert(3, 3);
+        tokio::time::sleep(Duration::from_nanos(1)).await;
         cache.insert(4, 4);
         tokio::time::sleep(Duration::from_nanos(1)).await;
 
@@ -286,11 +335,14 @@ mod tests {
     async fn test_add_ten_values_with_eviction() {
         let cache = FIFOCache::<u64, u64>::new(40, 64, |key, _| Some(key + 1));
         let cache = Arc::new(cache);
+        tokio::time::sleep(Duration::from_nanos(1)).await;
 
         // Insert 8 values, size is 8*8=64 bytes
         for i in 0..8 {
             cache.insert(i, i);
+            tokio::time::sleep(Duration::from_nanos(1)).await;
             assert_eq!(cache.total_size(), (i + 1) * 8);
+            tokio::time::sleep(Duration::from_nanos(1)).await;
         }
 
         for i in 0..8 {
@@ -313,6 +365,7 @@ mod tests {
 
         // Insert 10th value, size is 8*6=48 bytes
         cache.insert(9, 9);
+        tokio::time::sleep(Duration::from_nanos(1)).await;
         assert_eq!(cache.total_size(), 48);
         assert_eq!(cache.get(&9), Some(9));
     }
@@ -321,15 +374,19 @@ mod tests {
     async fn test_read_from_stream() {
         let cache = FIFOCache::<u64, u64>::new(40, 64, |key, _| Some(key + 1));
         let cache = Arc::new(cache);
+        tokio::time::sleep(Duration::from_nanos(1)).await;
 
         // Insert 8 values, size is 8*8=64 bytes
         for i in 0..8 {
             cache.insert(i, i);
+            tokio::time::sleep(Duration::from_nanos(1)).await;
         }
 
         let mut stream = cache.get_stream(Some(0));
+        tokio::time::sleep(Duration::from_nanos(1)).await;
         for i in 0..8 {
             assert_eq!(stream.next().await.unwrap(), i);
+            tokio::time::sleep(Duration::from_nanos(1)).await;
         }
 
         // Insert 9th value, size is 8*9=72>64 bytes, eviction threshold reached
