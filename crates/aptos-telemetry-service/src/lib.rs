@@ -193,16 +193,17 @@ impl MetricsEndpoint {
         self.endpoint_urls
             .iter()
             .map(|(name, url)| {
-                let secret = secrets.get(name).unwrap_or_else(|| {
-                    panic!(
+                let secret = secrets.get(name);
+                if secret.is_none() {
+                    warn!(
                         "environment variable {} is missing secret for {}",
                         self.keys_env_var.clone(),
                         name,
                     )
-                });
+                }
                 (
                     name.clone(),
-                    MetricsClient::new(url.clone(), secret.clone()),
+                    MetricsClient::new(url.clone(), secret.cloned()),
                 )
             })
             .collect()

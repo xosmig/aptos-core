@@ -17,11 +17,11 @@ pub mod victoria_metrics_api {
     pub struct Client {
         inner: ClientWithMiddleware,
         base_url: Url,
-        auth_token: String,
+        bearer_auth_token: Option<String>,
     }
 
     impl Client {
-        pub fn new(base_url: Url, auth_token: String) -> Self {
+        pub fn new(base_url: Url, bearer_auth_token: Option<String>) -> Self {
             let retry_policy = ExponentialBackoff::builder().build_with_max_retries(3);
             let inner = ClientBuilder::new(ReqwestClient::new())
                 .with(RetryTransientMiddleware::new_with_policy(retry_policy))
@@ -29,7 +29,7 @@ pub mod victoria_metrics_api {
             Self {
                 inner,
                 base_url,
-                auth_token,
+                bearer_auth_token,
             }
         }
 
@@ -44,10 +44,25 @@ pub mod victoria_metrics_api {
                 .map(|label| ("extra_label".into(), label.into()))
                 .collect();
 
-            self.inner
-                .post(format!("{}api/v1/import/prometheus", self.base_url))
-                .bearer_auth(self.auth_token.clone())
-                .header(CONTENT_ENCODING, encoding)
+            let req = if let Some(token) = &self.bearer_auth_token {
+                if self
+                    .base_url
+                    .host_str()
+                    .is_some_and(|x| x.contains("last9"))
+                {
+                    let parts: Vec<&str> = token.split(":").collect();
+                    self.inner
+                        .post(format!("{}", self.base_url))
+                        .basic_auth(parts[0], Some(parts[1]))
+                } else {
+                    self.inner
+                        .post(format!("{}api/v1/import/prometheus", self.base_url))
+                        .bearer_auth(token.clone())
+                }
+            } else {
+                self.inner.post(format!("{}", self.base_url))
+            };
+            req.header(CONTENT_ENCODING, encoding)
                 .query(&labels)
                 .body(raw_metrics_body)
                 .send()
