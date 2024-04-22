@@ -356,6 +356,7 @@ mod tests {
         .await
         .unwrap();
 
+        tokio::time::sleep(std::time::Duration::from_nanos(1)).await;
         assert_eq!(in_memory_cache.latest_version(), 1);
         let txns = in_memory_cache.get_transactions(0).await;
         assert_eq!(txns.len(), 1);
