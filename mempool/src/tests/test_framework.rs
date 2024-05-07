@@ -290,7 +290,8 @@ impl MempoolNode {
             protocol_id.from_bytes(&response).unwrap()
         } else {
             match self.get_outbound_handle(network_id).next().await.unwrap() {
-                PeerManagerRequest::SendDirectSend(peer_id, msg) => {
+                PeerManagerRequest::SendDirectSend(peer_id, message_and_metadata) => {
+                    let msg = message_and_metadata.get_message();
                     assert_eq!(peer_id, remote_peer_id);
                     msg.protocol_id.from_bytes(&msg.mdata).unwrap()
                 },
@@ -356,7 +357,8 @@ impl MempoolNode {
             PeerManagerRequest::SendRpc(peer_id, msg) => {
                 (peer_id, msg.protocol_id, msg.data, Some(msg.res_tx))
             },
-            PeerManagerRequest::SendDirectSend(peer_id, msg) => {
+            PeerManagerRequest::SendDirectSend(peer_id, message_and_metadata) => {
+                let msg = message_and_metadata.get_message().clone();
                 (peer_id, msg.protocol_id, msg.mdata, None)
             },
         };

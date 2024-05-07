@@ -265,8 +265,8 @@ impl NetworkPlayground {
             // Convert PeerManagerRequest to corresponding PeerManagerNotification,
             // and extract destination peer
             let (dst, msg) = match &net_req {
-                PeerManagerRequest::SendDirectSend(dst_inner, msg_inner) => {
-                    (*dst_inner, msg_inner.clone())
+                PeerManagerRequest::SendDirectSend(dst_inner, message_and_metadata) => {
+                    (*dst_inner, message_and_metadata.get_message().clone())
                 },
                 msg_inner => panic!(
                     "[network playground] Unexpected PeerManagerRequest: {:?}",
@@ -380,8 +380,8 @@ impl NetworkPlayground {
             // Convert PeerManagerRequest to corresponding PeerManagerNotification,
             // and extract destination peer
             let (dst, msg) = match &net_req {
-                PeerManagerRequest::SendDirectSend(dst_inner, msg_inner) => {
-                    (*dst_inner, msg_inner.clone())
+                PeerManagerRequest::SendDirectSend(dst_inner, message_and_metadata) => {
+                    (*dst_inner, message_and_metadata.get_message().clone())
                 },
                 msg_inner => panic!(
                     "[network playground] Unexpected PeerManagerRequest: {:?}",

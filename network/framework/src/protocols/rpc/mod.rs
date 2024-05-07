@@ -52,9 +52,12 @@ use crate::{
     },
     logging::NetworkSchema,
     peer::PeerNotification,
+    peer_manager::MessageLatencyMetadata,
     protocols::{
         network::SerializedRequest,
-        wire::messaging::v1::{NetworkMessage, Priority, RequestId, RpcRequest, RpcResponse},
+        wire::messaging::v1::{
+            NetworkMessage, NetworkMessageAndMetadata, Priority, RequestId, RpcRequest, RpcResponse,
+        },
     },
     ProtocolId,
 };
@@ -326,7 +329,7 @@ impl InboundRpcs {
     /// the outbound write queue.
     pub async fn send_outbound_response(
         &mut self,
-        write_reqs_tx: &mut aptos_channels::Sender<NetworkMessage>,
+        write_reqs_tx: &mut aptos_channels::Sender<NetworkMessageAndMetadata>,
         maybe_response: Result<(RpcResponse, ProtocolId), RpcError>,
     ) -> Result<(), RpcError> {
         let network_context = &self.network_context;
@@ -345,7 +348,7 @@ impl InboundRpcs {
         };
         let res_len = response.raw_response.len() as u64;
 
-        // Send outbound response to remote peer.
+        // Create the response to send to the remote peer
         trace!(
             NetworkSchema::new(network_context).remote_peer(&self.remote_peer_id),
             "{} Sending rpc response to peer {} for request_id {}",
@@ -353,7 +356,13 @@ impl InboundRpcs {
             self.remote_peer_id.short_str(),
             response.request_id,
         );
-        let message = NetworkMessage::RpcResponse(response);
+        let network_message = NetworkMessage::RpcResponse(response);
+        let message = NetworkMessageAndMetadata::new_with_metadata(
+            network_message,
+            MessageLatencyMetadata::new_empty(),
+        );
+
+        // Send outbound response to remote peer.
         write_reqs_tx.send(message).await?;
 
         // Update the outbound RPC response metrics
@@ -436,7 +445,7 @@ impl OutboundRpcs {
     pub async fn handle_outbound_request(
         &mut self,
         request: OutboundRpcRequest,
-        write_reqs_tx: &mut aptos_channels::Sender<NetworkMessage>,
+        write_reqs_tx: &mut aptos_channels::Sender<NetworkMessageAndMetadata>,
     ) -> Result<(), RpcError> {
         let network_context = &self.network_context;
         let peer_id = &self.remote_peer_id;
@@ -493,12 +502,16 @@ impl OutboundRpcs {
             counters::outbound_rpc_request_latency(network_context, protocol_id).start_timer();
 
         // Enqueue rpc request message onto outbound write queue.
-        let message = NetworkMessage::RpcRequest(RpcRequest {
+        let network_message = NetworkMessage::RpcRequest(RpcRequest {
             protocol_id,
             request_id,
             priority: Priority::default(),
             raw_request: Vec::from(request_data.as_ref()),
         });
+        let message = NetworkMessageAndMetadata::new_with_metadata(
+            network_message,
+            MessageLatencyMetadata::new_empty(),
+        );
         write_reqs_tx.send(message).await?;
 
         // Update the outbound RPC request metrics

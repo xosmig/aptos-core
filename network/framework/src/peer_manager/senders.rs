@@ -3,11 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    peer_manager::{types::PeerManagerRequest, ConnectionRequest, PeerManagerError},
-    protocols::{
-        direct_send::Message,
-        rpc::{error::RpcError, OutboundRpcRequest},
+    peer_manager::{
+        types::PeerManagerRequest, ConnectionRequest, MessageAndMetadata, PeerManagerError,
     },
+    protocols::rpc::{error::RpcError, OutboundRpcRequest},
     ProtocolId,
 };
 use aptos_channels::{self, aptos_channel};
@@ -45,12 +44,18 @@ impl PeerManagerRequestSender {
         &self,
         peer_id: PeerId,
         protocol_id: ProtocolId,
-        mdata: Bytes,
+        mut message_and_metadata: MessageAndMetadata,
     ) -> Result<(), PeerManagerError> {
-        self.inner.push(
-            (peer_id, protocol_id),
-            PeerManagerRequest::SendDirectSend(peer_id, Message { protocol_id, mdata }),
-        )?;
+        // Set the peer manager dispatch time
+        message_and_metadata
+            .get_latency_metadata()
+            .set_peer_manager_dispatch_time();
+
+        // Create the peer manager direct send request
+        let request = PeerManagerRequest::new_direct_send(peer_id, message_and_metadata);
+
+        // Send the request to the peer manager
+        self.inner.push((peer_id, protocol_id), request)?;
         Ok(())
     }
 
@@ -69,19 +74,25 @@ impl PeerManagerRequestSender {
         &self,
         recipients: impl Iterator<Item = PeerId>,
         protocol_id: ProtocolId,
-        mdata: Bytes,
+        message_and_metadata: MessageAndMetadata,
     ) -> Result<(), PeerManagerError> {
-        let msg = Message { protocol_id, mdata };
         for recipient in recipients {
+            // Set the peer manager dispatch time
+            let mut message_and_metadata = message_and_metadata.clone();
+            message_and_metadata
+                .get_latency_metadata()
+                .set_peer_manager_dispatch_time();
+
+            // Create the peer manager direct send request
+            let request = PeerManagerRequest::new_direct_send(recipient, message_and_metadata);
+
             // We return `Err` early here if the send fails. Since sending will
             // only fail if the queue is unexpectedly shutdown (i.e., receiver
             // dropped early), we know that we can't make further progress if
             // this send fails.
-            self.inner.push(
-                (recipient, protocol_id),
-                PeerManagerRequest::SendDirectSend(recipient, msg.clone()),
-            )?;
+            self.inner.push((recipient, protocol_id), request)?;
         }
+
         Ok(())
     }
 

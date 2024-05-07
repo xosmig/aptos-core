@@ -8,7 +8,7 @@ use crate::{
         MAX_FRAME_SIZE, MAX_MESSAGE_SIZE, NETWORK_CHANNEL_SIZE,
     },
     peer::{DisconnectReason, Peer, PeerNotification, PeerRequest},
-    peer_manager::TransportNotification,
+    peer_manager::{MessageAndMetadata, TransportNotification},
     protocols::{
         direct_send::Message,
         rpc::{error::RpcError, InboundRpcRequest, OutboundRpcRequest},
@@ -170,10 +170,10 @@ async fn assert_disconnected_event(
 struct PeerHandle(aptos_channel::Sender<ProtocolId, PeerRequest>);
 
 impl PeerHandle {
-    fn send_direct_send(&mut self, message: Message) {
-        self.0
-            .push(message.protocol_id, PeerRequest::SendDirectSend(message))
-            .unwrap()
+    fn send_direct_send(&mut self, message_and_metadata: MessageAndMetadata) {
+        let protocol_id = message_and_metadata.get_message().protocol_id;
+        let peer_request = PeerRequest::SendDirectSend(message_and_metadata);
+        self.0.push(protocol_id, peer_request).unwrap()
     }
 
     async fn send_rpc_request(
@@ -212,6 +212,8 @@ fn peer_send_message() {
         protocol_id: PROTOCOL,
         mdata: Bytes::from("hello world"),
     };
+    let message_and_metadata = MessageAndMetadata::new_empty_metadata(send_msg);
+
     let recv_msg = MultiplexMessage::Message(NetworkMessage::DirectSendMsg(DirectSendMsg {
         protocol_id: PROTOCOL,
         priority: 0,
@@ -231,7 +233,7 @@ fn peer_send_message() {
     let server = async {
         // Server sends some direct send messages.
         for _ in 0..30 {
-            peer_handle.send_direct_send(send_msg.clone());
+            peer_handle.send_direct_send(message_and_metadata.clone());
         }
     };
     rt.block_on(future::join3(peer.start(), server, client));
@@ -305,9 +307,9 @@ fn peers_send_message_concurrent() {
         };
 
         // Peer A -> msg_a -> Peer B
-        peer_handle_a.send_direct_send(msg_a.clone());
+        peer_handle_a.send_direct_send(MessageAndMetadata::new_empty_metadata(msg_a.clone()));
         // Peer A <- msg_b <- Peer B
-        peer_handle_b.send_direct_send(msg_b.clone());
+        peer_handle_b.send_direct_send(MessageAndMetadata::new_empty_metadata(msg_b.clone()));
 
         // Check that each peer received the other's message
         let notif_a = peer_notifs_rx_a.next().await;
@@ -917,9 +919,9 @@ fn peers_send_multiplex() {
         };
 
         // Peer A -> msg_a -> Peer B
-        peer_handle_a.send_direct_send(msg_a.clone());
+        peer_handle_a.send_direct_send(MessageAndMetadata::new_empty_metadata(msg_a.clone()));
         // Peer A <- msg_b <- Peer B
-        peer_handle_b.send_direct_send(msg_b.clone());
+        peer_handle_b.send_direct_send(MessageAndMetadata::new_empty_metadata(msg_b.clone()));
 
         // Check that each peer received the other's message
         let notif_a = peer_notifs_rx_a.next().await;

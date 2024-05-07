@@ -8,9 +8,10 @@ pub use crate::protocols::rpc::error::RpcError;
 use crate::{
     error::NetworkError,
     peer_manager::{
-        ConnectionNotification, ConnectionRequestSender, PeerManagerNotification,
-        PeerManagerRequestSender,
+        ConnectionNotification, ConnectionRequestSender, MessageAndMetadata,
+        MessageLatencyMetadata, PeerManagerNotification, PeerManagerRequestSender,
     },
+    protocols,
     transport::ConnectionMetadata,
     ProtocolId,
 };
@@ -364,8 +365,9 @@ impl<TMessage: Message + Send + 'static> NetworkSender<TMessage> {
         protocol: ProtocolId,
         message: TMessage,
     ) -> Result<(), NetworkError> {
-        let mdata = protocol.to_bytes(&message)?.into();
-        self.peer_mgr_reqs_tx.send_to(recipient, protocol, mdata)?;
+        let message_and_metadata = Self::serialize_message_with_metadata(protocol, &message)?;
+        self.peer_mgr_reqs_tx
+            .send_to(recipient, protocol, message_and_metadata)?;
         Ok(())
     }
 
@@ -377,10 +379,9 @@ impl<TMessage: Message + Send + 'static> NetworkSender<TMessage> {
         protocol: ProtocolId,
         message: TMessage,
     ) -> Result<(), NetworkError> {
-        // Serialize message.
-        let mdata = protocol.to_bytes(&message)?.into();
+        let message_and_metadata = Self::serialize_message_with_metadata(protocol, &message)?;
         self.peer_mgr_reqs_tx
-            .send_to_many(recipients, protocol, mdata)?;
+            .send_to_many(recipients, protocol, message_and_metadata)?;
         Ok(())
     }
 
@@ -408,6 +409,27 @@ impl<TMessage: Message + Send + 'static> NetworkSender<TMessage> {
         // Deserialize the response using a blocking task
         let res_msg = tokio::task::spawn_blocking(move || protocol.from_bytes(&res_data)).await??;
         Ok(res_msg)
+    }
+
+    /// Serializes the given message and creates a new message and metadata object
+    fn serialize_message_with_metadata(
+        protocol_id: ProtocolId,
+        message: &TMessage,
+    ) -> Result<MessageAndMetadata, NetworkError> {
+        // Create latency metadata for the message and set the serialization start time
+        let mut latency_metadata = MessageLatencyMetadata::new_empty();
+        latency_metadata.set_serialization_start_time(protocol_id);
+
+        // Serialize the message into bytes
+        let message_bytes = protocol_id.to_bytes(&message)?.into();
+
+        // Create and return the message and metadata
+        let message = protocols::direct_send::Message {
+            protocol_id,
+            mdata: message_bytes,
+        };
+        let message_and_metadata = MessageAndMetadata::new(message, latency_metadata);
+        Ok(message_and_metadata)
     }
 }
 
