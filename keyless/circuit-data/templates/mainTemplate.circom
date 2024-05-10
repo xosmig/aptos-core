@@ -104,6 +104,7 @@ template identity(
     signal ascii_jwt_payload_hash <== HashBytesToFieldWithLen(max_ascii_jwt_payload_len)(ascii_jwt_payload, ascii_payload_len);
 
 
+    signal brackets_map[max_ascii_jwt_payload_len] <== BracketsMap(max_ascii_jwt_payload_len)(ascii_jwt_payload);
     signal string_bodies[max_ascii_jwt_payload_len] <== StringBodies(max_ascii_jwt_payload_len)(ascii_jwt_payload);
 
     // Check aud field is in the JWT

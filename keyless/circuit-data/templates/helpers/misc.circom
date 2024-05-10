@@ -140,6 +140,18 @@ template StringBodies(len) {
   }
 }
 
+template BracketsMap(len) {
+    signal input arr[len];
+    signal output brackets[len];
+
+    brackets[0] <== 0;
+    for (var i = 1; i < len; i++) {
+        var is_open_bracket = IsEqual()([arr[i], 123]);
+        var is_closed_bracket = IsEqual()([arr[i], 125]);
+        brackets[i] <== is_open_bracket + brackets[i-1] - is_closed_bracket;
+    }
+}
+
 
 // Given a base64-encoded array `in`, max length `maxN`, and actual unpadded length `n`, returns
 // the actual length of the decoded string
