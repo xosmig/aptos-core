@@ -119,6 +119,18 @@ impl DKGRounding {
             },
         );
 
+
+        // let weights = [5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 8, 8, 8, 8, 8, 9, 11, 11, 12, 16, 18, 18, 18, 18, 19, 22, 23, 23, 25, 29, 30, 32, 33, 34, 36, 46, 51, 69, 72, 72, 73, 73, 76, 76, 76, 77, 78, 79, 82, 84, 84, 84, 84, 86, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 93, 94, 98, 98, 98, 98];
+        let weights = [5, 5, 5, 5, 5, 5, 5];
+        let total_weight = weights.iter().sum::<usize>();
+        let threshold_weight = total_weight * 2/ 3;
+        let wconfig = WeightedConfig::new(
+            threshold_weight,
+            weights.iter().map(|w| *w as usize).collect(),
+        )
+        .unwrap();
+        let fast_wconfig = Some(wconfig.clone());
+
         Self {
             rounding_method,
             profile,

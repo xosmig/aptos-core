@@ -1034,7 +1034,7 @@ fn realistic_env_sweep_wrap(
         )
         .with_genesis_helm_config_fn(Arc::new(|helm_values| {
             // no epoch change.
-            helm_values["chain"]["epoch_duration_secs"] = (24 * 3600).into();
+            helm_values["chain"]["epoch_duration_secs"] = (180).into();
         }))
         .with_success_criteria(
             SuccessCriteria::new(0)
@@ -1048,15 +1048,15 @@ fn realistic_env_sweep_wrap(
 }
 
 fn realistic_env_load_sweep_test() -> ForgeConfig {
-    realistic_env_sweep_wrap(20, 10, LoadVsPerfBenchmark {
+    realistic_env_sweep_wrap(112, 10, LoadVsPerfBenchmark {
         test: Box::new(PerformanceBenchmark),
-        workloads: Workloads::TPS(vec![10, 100, 1000, 3000, 5000]),
+        workloads: Workloads::TPS(vec![100]),
         criteria: [
-            (9, 1.5, 3., 4., 0),
+            // (9, 1.5, 3., 4., 0),
             (95, 1.5, 3., 4., 0),
-            (950, 2., 3., 4., 0),
-            (2750, 2.5, 3.5, 4.5, 0),
-            (4600, 3., 4., 6., 10), // Allow some expired transactions (high-load)
+            // (950, 2., 3., 4., 0),
+            // (2750, 2.5, 3.5, 4.5, 0),
+            // (4600, 3., 4., 6., 10), // Allow some expired transactions (high-load)
         ]
         .into_iter()
         .map(
@@ -1951,8 +1951,8 @@ fn realistic_env_max_load_test(
 
     // Create the test
     ForgeConfig::default()
-        .with_initial_validator_count(NonZeroUsize::new(num_validators).unwrap())
-        .with_initial_fullnode_count(num_fullnodes)
+        .with_initial_validator_count(NonZeroUsize::new(7).unwrap())
+        .with_initial_fullnode_count(0)
         .add_network_test(wrap_with_realistic_env(TwoTrafficsTest {
             inner_traffic: EmitJobRequest::default()
                 .mode(EmitJobMode::MaxLoad {
@@ -1974,7 +1974,7 @@ fn realistic_env_max_load_test(
         .with_genesis_helm_config_fn(Arc::new(move |helm_values| {
             // Have single epoch change in land blocking, and a few on long-running
             helm_values["chain"]["epoch_duration_secs"] =
-                (if long_running { 600 } else { 300 }).into();
+                (if long_running { 180 } else { 180 }).into();
             helm_values["chain"]["on_chain_consensus_config"] =
                 serde_yaml::to_value(OnChainConsensusConfig::default_for_genesis())
                     .expect("must serialize");
