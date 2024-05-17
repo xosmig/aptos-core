@@ -429,6 +429,16 @@ Lifetime: ephemeral
 
 
 
+<a id="0x1_features_EFEATURE_CANNOT_BE_DISABLED"></a>
+
+Deployed to production, and disabling is deprecated.
+
+
+<pre><code><b>const</b> <a href="features.md#0x1_features_EFEATURE_CANNOT_BE_DISABLED">EFEATURE_CANNOT_BE_DISABLED</a>: u64 = 3;
+</code></pre>
+
+
+
 <a id="0x1_features_EFRAMEWORK_SIGNER_NEEDED"></a>
 
 The provided signer has not a framework address.
@@ -1543,7 +1553,9 @@ Lifetime: transient
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="features.md#0x1_features_get_auids">get_auids</a>(): u64 { <a href="features.md#0x1_features_APTOS_UNIQUE_IDENTIFIERS">APTOS_UNIQUE_IDENTIFIERS</a> }
+<pre><code><b>public</b> <b>fun</b> <a href="features.md#0x1_features_get_auids">get_auids</a>(): u64 {
+    <a href="error.md#0x1_error_invalid_argument">error::invalid_argument</a>(<a href="features.md#0x1_features_EFEATURE_CANNOT_BE_DISABLED">EFEATURE_CANNOT_BE_DISABLED</a>)
+ }
 </code></pre>
 
 
@@ -1565,8 +1577,8 @@ Lifetime: transient
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="features.md#0x1_features_auids_enabled">auids_enabled</a>(): bool <b>acquires</b> <a href="features.md#0x1_features_Features">Features</a> {
-    <a href="features.md#0x1_features_is_enabled">is_enabled</a>(<a href="features.md#0x1_features_APTOS_UNIQUE_IDENTIFIERS">APTOS_UNIQUE_IDENTIFIERS</a>)
+<pre><code><b>public</b> <b>fun</b> <a href="features.md#0x1_features_auids_enabled">auids_enabled</a>(): bool {
+    <b>true</b>
 }
 </code></pre>
 
@@ -1728,8 +1740,7 @@ Lifetime: transient
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="features.md#0x1_features_get_aggregator_v2_api_feature">get_aggregator_v2_api_feature</a>(): u64 {
-    // API fully rolled out, cannot be reverted any more
-    <b>abort</b> <a href="error.md#0x1_error_invalid_argument">error::invalid_argument</a>(<a href="features.md#0x1_features_EINVALID_FEATURE">EINVALID_FEATURE</a>)
+    <b>abort</b> <a href="error.md#0x1_error_invalid_argument">error::invalid_argument</a>(<a href="features.md#0x1_features_EFEATURE_CANNOT_BE_DISABLED">EFEATURE_CANNOT_BE_DISABLED</a>)
 }
 </code></pre>
 
@@ -1873,8 +1884,7 @@ Lifetime: transient
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="features.md#0x1_features_get_concurrent_token_v2_feature">get_concurrent_token_v2_feature</a>(): u64 {
-    // Deployed <b>to</b> production, and disabling deprecated.
-    <a href="error.md#0x1_error_invalid_argument">error::invalid_argument</a>(<a href="features.md#0x1_features_EINVALID_FEATURE">EINVALID_FEATURE</a>)
+    <a href="error.md#0x1_error_invalid_argument">error::invalid_argument</a>(<a href="features.md#0x1_features_EFEATURE_CANNOT_BE_DISABLED">EFEATURE_CANNOT_BE_DISABLED</a>)
 }
 </code></pre>
 
@@ -1923,7 +1933,7 @@ Lifetime: transient
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="features.md#0x1_features_get_concurrent_assets_feature">get_concurrent_assets_feature</a>(): u64 {
-    <b>abort</b> <a href="error.md#0x1_error_invalid_argument">error::invalid_argument</a>(<a href="features.md#0x1_features_EINVALID_FEATURE">EINVALID_FEATURE</a>)
+    <b>abort</b> <a href="error.md#0x1_error_invalid_argument">error::invalid_argument</a>(<a href="features.md#0x1_features_EFEATURE_CANNOT_BE_DISABLED">EFEATURE_CANNOT_BE_DISABLED</a>)
 }
 </code></pre>
 
@@ -1948,7 +1958,7 @@ Lifetime: transient
 
 
 <pre><code><b>public</b> <b>fun</b> <a href="features.md#0x1_features_concurrent_assets_enabled">concurrent_assets_enabled</a>(): bool {
-    <b>abort</b> <a href="error.md#0x1_error_invalid_argument">error::invalid_argument</a>(<a href="features.md#0x1_features_EINVALID_FEATURE">EINVALID_FEATURE</a>)
+    <b>abort</b> <a href="error.md#0x1_error_invalid_argument">error::invalid_argument</a>(<a href="features.md#0x1_features_EFEATURE_CANNOT_BE_DISABLED">EFEATURE_CANNOT_BE_DISABLED</a>)
 }
 </code></pre>
 
