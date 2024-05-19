@@ -18,7 +18,11 @@ use aptos_types::{
     transaction::{TransactionListWithProof, TransactionOutputListWithProof, Version},
 };
 use serde::Serialize;
-use std::{cmp::min, sync::Arc, time::Instant};
+use std::{
+    cmp::min,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 /// The interface into local storage (e.g., the Aptos DB) used by the storage
 /// server to handle client requests and responses.
@@ -469,13 +473,26 @@ impl StorageReaderInterface for StorageReader {
             .get_state_value_chunk_iter(version, start_index as usize, num_state_values_to_fetch)
             .map_err(|error| Error::StorageErrorEncountered(error.to_string()))?;
 
-        // Initialize the state values and the serialized data size
+        // Initialize the state values, storage read time and serialized data size
         let mut state_values = vec![];
+        let mut total_storage_read_duration = Duration::from_millis(0);
         let mut serialized_state_value_size = 0;
 
-        // Fetch as many state values as possible without exceeding the network frame size
+        // Generate a random number to track the request
+        let request_identifier = rand::random::<u64>();
+
+        // Log the request
+        info!(
+            "(Request: {:?}) Fetching state values: version: {:?}, start index: {:?}, end index: {:?}",
+            request_identifier, version, start_index, end_index
+        );
+
+        // Fetch as many state values as possible without exceeding the
+        // network frame size or the max storage read time.
         while state_values.len() < num_state_values_to_fetch
             && serialized_state_value_size < self.config.max_network_chunk_bytes
+            && total_storage_read_duration.as_millis()
+                < self.config.max_total_storage_read_time_ms as u128
         {
             // Get the current timestamp
             let current_timestamp = Instant::now();
@@ -487,18 +504,30 @@ impl StorageReaderInterface for StorageReader {
                     let num_serialized_bytes = get_num_serialized_bytes(&state_value)
                         .map_err(|error| Error::UnexpectedErrorEncountered(error.to_string()))?;
 
-                    // Add the state value to the list and increment the serialized size
+                    // Calculate the duration of the state value fetch
+                    let storage_read_duration = current_timestamp.elapsed();
+
+                    // Add the state value to the list
                     state_values.push(state_value);
+
+                    // Update the total serialized data size
                     serialized_state_value_size += num_serialized_bytes;
 
-                    // Calculate the duration of the state value fetch
-                    let duration = current_timestamp.elapsed();
+                    // Update the total storage read duration
+                    if let Some(total_duration) =
+                        total_storage_read_duration.checked_add(storage_read_duration)
+                    {
+                        total_storage_read_duration = total_duration;
+                    } else {
+                        break; // The total duration has overflowed
+                    }
 
                     // Log the size and duration of the state value fetch
                     info!(
-                        "Fetched state value: size: {:?} bytes, duration: {:?}, index: {:?}",
+                        "(Request: {:?}) Fetched state value: size: {:?} bytes, duration: {:?}, index: {:?}",
+                        request_identifier,
                         num_serialized_bytes,
-                        duration,
+                        storage_read_duration,
                         start_index + (state_values.len() as u64)
                     );
                 },
@@ -510,6 +539,17 @@ impl StorageReaderInterface for StorageReader {
                     break; // No more state values to fetch
                 },
             }
+        }
+
+        // Log if the data was truncated
+        if state_values.len() < num_state_values_to_fetch {
+            info!(
+                "(Request: {:?}) The state value fetch was truncated: expected: {:?}, actual: {:?}, total duration: {:?}",
+                request_identifier,
+                num_state_values_to_fetch,
+                state_values.len(),
+                total_storage_read_duration,
+            );
         }
 
         // Create the state value chunk with proof
