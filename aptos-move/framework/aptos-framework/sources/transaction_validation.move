@@ -151,10 +151,7 @@ module aptos_framework::transaction_validation {
         };
 
         let max_transaction_fee = txn_gas_price * txn_max_gas_units;
-        assert!(
-            coin::is_account_registered<AptosCoin>(gas_payer),
-            error::invalid_argument(PROLOGUE_ECANT_PAY_GAS_DEPOSIT),
-        );
+
         assert!(
             coin::is_balance_at_least<AptosCoin>(gas_payer, max_transaction_fee),
             error::invalid_argument(PROLOGUE_ECANT_PAY_GAS_DEPOSIT)
