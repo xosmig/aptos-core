@@ -30,6 +30,7 @@ use std::{
     fmt::Debug,
     fs,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 /// subdirectory of `DEFAULT_STORAGE_DIR/<addr>` where resources are stored
@@ -334,17 +335,31 @@ impl OnDiskStateView {
 
 impl ModuleResolver for OnDiskStateView {
     type Error = PartialVMError;
-    type Module = Bytes;
+    type Module = Arc<CompiledModule>;
 
     fn get_module_metadata(&self, _module_id: &ModuleId) -> Vec<Metadata> {
         vec![]
     }
 
     fn get_module(&self, module_id: &ModuleId) -> Result<Option<Self::Module>, Self::Error> {
-        self.get_module_bytes(module_id).map_err(|e| {
+        let bytes = self.get_module_bytes(module_id).map_err(|e| {
             PartialVMError::new(StatusCode::STORAGE_ERROR)
                 .with_message(format!("Storage error: {:?}", e))
+        })?;
+        Ok(match bytes {
+            Some(bytes) => {
+                let module = CompiledModule::deserialize(&bytes).unwrap();
+                Some(Arc::new(module))
+            },
+            None => None,
         })
+    }
+
+    fn get_module_info(
+        &self,
+        _module_id: &ModuleId,
+    ) -> std::result::Result<Option<(Self::Module, usize, [u8; 32])>, Self::Error> {
+        todo!()
     }
 }
 

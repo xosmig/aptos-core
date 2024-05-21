@@ -4,8 +4,7 @@
 
 use crate::{
     sandbox::utils::{
-        explain_publish_changeset, explain_publish_error, get_gas_status, module,
-        on_disk_state_view::OnDiskStateView,
+        explain_publish_error, get_gas_status, module, on_disk_state_view::OnDiskStateView,
     },
     NativeFunctionRecord,
 };
@@ -150,29 +149,31 @@ pub fn publish(
         }
 
         if !has_error {
-            let changeset = session.finish().map_err(|e| e.into_vm_status())?;
-            if verbose {
-                explain_publish_changeset(&changeset);
-            }
-            let modules: Vec<_> = changeset
-                .into_modules()
-                .map(|(module_id, blob_opt)| {
-                    (module_id, blob_opt.ok().expect("must be non-deletion"))
-                })
-                .collect();
-            state.save_modules(&modules)?;
+            // TODO: Do we even care about this CLI? Seems like can be killed
+            // let changeset = session.finish().map_err(|e| e.into_vm_status())?;
+            // if verbose {
+            //     explain_publish_changeset(&changeset);
+            // }
+            // let modules: Vec<_> = changeset
+            //     .into_modules()
+            //     .map(|(module_id, blob_opt)| {
+            //         (module_id, blob_opt.ok().expect("must be non-deletion"))
+            //     })
+            //     .collect();
+            // state.save_modules(&modules)?;
         }
     } else {
+        // TODO:  same here
         // NOTE: the VM enforces the most strict way of module republishing and does not allow
         // backward incompatible changes, as as result, if this flag is set, we skip the VM process
         // and force the CLI to override the on-disk state directly
-        let mut serialized_modules = vec![];
-        for unit in modules_to_publish {
-            let id = module(&unit.unit)?.self_id();
-            let module_bytes = unit.unit.serialize(bytecode_version);
-            serialized_modules.push((id, module_bytes.into()));
-        }
-        state.save_modules(&serialized_modules)?;
+        // let mut serialized_modules = vec![];
+        // for unit in modules_to_publish {
+        //     let id = module(&unit.unit)?.self_id();
+        //     let module_bytes = unit.unit.serialize(bytecode_version);
+        //     serialized_modules.push((id, module_bytes.into()));
+        // }
+        // state.save_modules(&serialized_modules)?;
     }
 
     Ok(())

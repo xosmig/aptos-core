@@ -10,7 +10,8 @@ use aptos_mvhashmap::types::TxnIndex;
 use aptos_types::{
     delayed_fields::PanicError, fee_statement::FeeStatement,
     state_store::state_value::StateValueMetadata,
-    transaction::BlockExecutableTransaction as Transaction, write_set::WriteOp,
+    transaction::BlockExecutableTransaction as Transaction, vm::modules::OnChainUnverifiedModule,
+    write_set::WriteOp,
 };
 use aptos_vm_types::resolver::{TExecutorView, TResourceGroupView};
 use move_core_types::{value::MoveTypeLayout, vm_status::StatusCode};
@@ -102,7 +103,7 @@ pub trait TransactionOutput: Send + Sync + Debug {
 
     fn module_write_set(
         &self,
-    ) -> BTreeMap<<Self::Txn as Transaction>::Key, <Self::Txn as Transaction>::Value>;
+    ) -> BTreeMap<<Self::Txn as Transaction>::Key, OnChainUnverifiedModule>;
 
     fn aggregator_v1_write_set(
         &self,

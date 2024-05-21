@@ -9,13 +9,14 @@ use crate::{
     },
 };
 use anyhow::Result;
+use bytes::Bytes;
 use colored::*;
 use move_binary_format::{errors::VMResult, file_format::CompiledModule};
 use move_bytecode_utils::Modules;
 use move_compiler::unit_test::{ExpectedFailure, ModuleTestPlan, TestCase, TestPlan};
 use move_core_types::{
     account_address::AccountAddress,
-    effects::{ChangeSet, Op},
+    effects::{Changes, Op},
     identifier::IdentStr,
     value::serialize_values,
     vm_status::StatusCode,
@@ -33,7 +34,12 @@ use move_vm_test_utils::{
     InMemoryStorage,
 };
 use rayon::prelude::*;
-use std::{io::Write, marker::Send, sync::Mutex, time::Instant};
+use std::{
+    io::Write,
+    marker::Send,
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 #[cfg(feature = "evm-backend")]
 use {
     evm::{backend::MemoryVicinity, ExitReason},
@@ -86,10 +92,7 @@ fn setup_test_storage<'a>(
         .compute_dependency_graph()
         .compute_topological_order()?
     {
-        let module_id = module.self_id();
-        let mut module_bytes = Vec::new();
-        module.serialize(&mut module_bytes)?;
-        storage.publish_or_overwrite_module(module_id, module_bytes);
+        storage.publish_or_overwrite_module(module.clone());
     }
 
     Ok(storage)
@@ -98,7 +101,7 @@ fn setup_test_storage<'a>(
 /// Print the updates to storage represented by `cs` in the context of the starting storage state
 /// `storage`.
 fn print_resources_and_extensions(
-    cs: &ChangeSet,
+    cs: &Changes<(Arc<CompiledModule>, Bytes), Bytes>,
     extensions: NativeContextExtensions,
     storage: &InMemoryStorage,
 ) -> Result<String> {
@@ -133,7 +136,7 @@ impl TestRunner {
         // TODO: maybe we should require the clients to always pass in a list of native functions so
         // we don't have to make assumptions about their gas parameters.
         native_function_table: Option<NativeFunctionTable>,
-        genesis_state: Option<ChangeSet>,
+        genesis_state: Option<Changes<(Arc<CompiledModule>, Bytes), Bytes>>,
         cost_table: Option<CostTable>,
         record_writeset: bool,
         #[cfg(feature = "evm-backend")] evm: bool,
@@ -144,9 +147,10 @@ impl TestRunner {
             .map(|(filepath, _)| filepath.to_string())
             .collect();
         let modules = tests.module_info.values().map(|info| &info.module);
-        let mut starting_storage_state = setup_test_storage(modules)?;
-        if let Some(genesis_state) = genesis_state {
-            starting_storage_state.apply(genesis_state)?;
+        let starting_storage_state = setup_test_storage(modules)?;
+        if let Some(_genesis_state) = genesis_state {
+            todo!()
+            // starting_storage_state.apply(genesis_state)?;
         }
         let native_function_table = native_function_table.unwrap_or_else(|| {
             move_stdlib::natives::all_natives(
@@ -262,7 +266,7 @@ impl SharedTestingConfig {
         function_name: &str,
         test_info: &TestCase,
     ) -> (
-        VMResult<ChangeSet>,
+        VMResult<Changes<(Arc<CompiledModule>, Bytes), Bytes>>,
         VMResult<NativeContextExtensions>,
         VMResult<Vec<Vec<u8>>>,
         TestRunInfo,

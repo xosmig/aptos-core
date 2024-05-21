@@ -66,6 +66,8 @@ pub(crate) fn module(unit: &CompiledUnit) -> Result<&CompiledModule> {
     }
 }
 
+// TODO: Remove???
+#[allow(dead_code)]
 pub(crate) fn explain_publish_changeset(changeset: &ChangeSet) {
     // publish effects should contain no resources
     assert!(changeset.resources().next().is_none());
@@ -102,7 +104,7 @@ pub(crate) fn explain_publish_changeset(changeset: &ChangeSet) {
     )
 }
 
-// Print a struct with a specified outer indent
+#[allow(dead_code)]
 fn print_struct_with_indent(value: &AnnotatedMoveStruct, indent: u64) {
     let indent_str: String = (0..indent).map(|_| " ").collect::<String>();
     let value_str = format!("{}", value);
@@ -112,7 +114,7 @@ fn print_struct_with_indent(value: &AnnotatedMoveStruct, indent: u64) {
     }
 }
 
-// Print struct diff with a specified outer indent
+#[allow(dead_code)]
 fn print_struct_diff_with_indent(
     value1: &AnnotatedMoveStruct,
     value2: &AnnotatedMoveStruct,
@@ -148,6 +150,7 @@ fn print_struct_diff_with_indent(
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn explain_execution_effects(
     changeset: &ChangeSet,
     state: &OnDiskStateView,
@@ -230,6 +233,7 @@ pub(crate) fn explain_execution_effects(
 }
 
 /// Commit the resources modified by a transaction to disk
+#[allow(dead_code)]
 pub(crate) fn maybe_commit_effects(
     commit: bool,
     changeset: ChangeSet,
