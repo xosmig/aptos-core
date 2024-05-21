@@ -334,12 +334,13 @@ impl OnDiskStateView {
 
 impl ModuleResolver for OnDiskStateView {
     type Error = PartialVMError;
+    type Module = Bytes;
 
     fn get_module_metadata(&self, _module_id: &ModuleId) -> Vec<Metadata> {
         vec![]
     }
 
-    fn get_module(&self, module_id: &ModuleId) -> Result<Option<Bytes>, Self::Error> {
+    fn get_module(&self, module_id: &ModuleId) -> Result<Option<Self::Module>, Self::Error> {
         self.get_module_bytes(module_id).map_err(|e| {
             PartialVMError::new(StatusCode::STORAGE_ERROR)
                 .with_message(format!("Storage error: {:?}", e))
