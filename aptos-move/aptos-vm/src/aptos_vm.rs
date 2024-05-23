@@ -1386,8 +1386,7 @@ impl AptosVM {
 
     /// Deserialize a module bundle.
     fn deserialize_module_bundle(&self, modules: &ModuleBundle) -> VMResult<Vec<CompiledModule>> {
-        let deserializer_config =
-            aptos_prod_deserializer_config(self.features(), self.gas_feature_version);
+        let deserializer_config = aptos_prod_deserializer_config(self.features());
 
         let mut result = vec![];
         for module_blob in modules.iter() {
@@ -1925,7 +1924,7 @@ impl AptosVM {
                 // it requires restarting execution afterwards,
                 // which allows it to be used as last transaction in delayed_field_enabled context.
                 let change = VMChangeSet::try_from_storage_change_set_with_delayed_field_optimization_disabled(
-                    &aptos_prod_deserializer_config(self.move_vm.features(), self.gas_feature_version),
+                    &aptos_prod_deserializer_config(self.move_vm.features()),
                     change_set.clone(),
                     &change_set_configs,
                 )
