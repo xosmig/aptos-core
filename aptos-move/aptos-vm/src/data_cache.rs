@@ -26,6 +26,7 @@ use aptos_types::{
         state_value::{StateValue, StateValueMetadata},
         StateView, StateViewId,
     },
+    vm::configs::aptos_prod_deserializer_config,
 };
 use aptos_vm_types::{
     resolver::{
@@ -88,7 +89,6 @@ impl<'e, E: ExecutorView> StorageAdapter<'e, E> {
             gas_feature_version,
             features.is_resource_groups_split_in_vm_change_set_enabled(),
         );
-
         Self::new(executor_view, resource_group_adapter)
     }
 
