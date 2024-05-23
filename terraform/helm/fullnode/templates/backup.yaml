@@ -29,6 +29,10 @@ spec:
       labels:
         {{- include "backup.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/name: backup
+      annotations:
+        {{- if $.Values.metrics.destination }}
+        aptos.dev/metrics-destination: {{ $.Values.metrics.destination }}
+        {{- end}}
     spec:
       terminationGracePeriodSeconds: 0
       containers:
