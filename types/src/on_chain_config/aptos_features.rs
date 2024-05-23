@@ -150,7 +150,7 @@ pub fn enable_features(enable_features: Vec<FeatureFlag>) {
 }
 static DISABLED_FEATURES: OnceCell<Vec<FeatureFlag>> = OnceCell::new();
 pub fn disable_features(disable_features: Vec<FeatureFlag>) {
-    ENABLED_FEATURES.set(disable_features).ok();
+    DISABLED_FEATURES.set(disable_features).ok();
 }
 
 
@@ -170,21 +170,15 @@ impl Default for Features {
         for feature in FeatureFlag::default_features() {
             features.enable(feature);
         }
-        match ENABLED_FEATURES.get() {
-            Some(enabled_features) => {
-                for feature in enabled_features.iter() {
-                    features.enable(*feature);
-                }
+        if let Some(enabled_features) = ENABLED_FEATURES.get() {
+            for feature in enabled_features.iter() {
+                features.enable(*feature);
             }
-            None => (),
         }
-        match DISABLED_FEATURES.get() {
-            Some(disabled_features) => {
-                for feature in disabled_features.iter() {
-                    features.disable(*feature);
-                }
+        if let Some(disabled_features) = DISABLED_FEATURES.get() {
+            for feature in disabled_features.iter() {
+                features.disable(*feature);
             }
-            None => (),
         }
         features
     }
@@ -334,4 +328,24 @@ fn test_features_into_flag_vec() {
         ],
         flag_vec
     );
+}
+
+#[test]
+fn test_enabling_disabling_features() {
+    enable_features(vec![FeatureFlag::BLS12_381_STRUCTURES, FeatureFlag::BN254_STRUCTURES, FeatureFlag::CODE_DEPENDENCY_CHECK]);
+    disable_features(vec![FeatureFlag::BN254_STRUCTURES, FeatureFlag::TREAT_FRIEND_AS_PRIVATE]);
+    let features = Features::default();
+    assert_eq!(
+        features.is_enabled(FeatureFlag::BLS12_381_STRUCTURES),
+        true
+    );
+    assert_eq!(
+        features.is_enabled(FeatureFlag::BULLETPROOFS_NATIVES),
+        true
+    );
+    assert_eq!(
+        features.is_enabled(FeatureFlag::BN254_STRUCTURES),
+        false
+    );
+
 }
