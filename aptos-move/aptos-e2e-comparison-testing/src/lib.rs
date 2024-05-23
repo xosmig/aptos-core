@@ -57,6 +57,9 @@ const ERR_LOG: &str = "err_log.txt";
 const ROCKS_INDEX_DB: &str = "rocks_txn_idx_db";
 pub const APTOS_COMMONS: &str = "aptos-commons";
 const MAX_TO_FLUSH: usize = 50000;
+pub const DISABLE_SPEC_CHECK: &str = "spec-check=off";
+pub const DISABLE_REF_CHECK: &str = "reference-safety=off";
+pub const ENABLE_REF_CHECK: &str = "reference-safety=on";
 
 struct IndexWriter {
     index_writer: BufWriter<File>,
