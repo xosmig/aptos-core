@@ -26,7 +26,6 @@ use aptos_types::{
         state_value::{StateValue, StateValueMetadata},
         StateView, StateViewId,
     },
-    vm::configs::aptos_prod_deserializer_config,
 };
 use aptos_vm_types::{
     resolver::{

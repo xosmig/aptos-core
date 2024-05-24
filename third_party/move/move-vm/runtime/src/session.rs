@@ -19,7 +19,7 @@ use move_binary_format::{
 };
 use move_core_types::{
     account_address::AccountAddress,
-    effects::Changes,
+    effects::ChangeSet,
     gas_algebra::NumBytes,
     identifier::IdentStr,
     language_storage::{ModuleId, TypeTag},
@@ -279,7 +279,7 @@ impl<'r, 'l> Session<'r, 'l> {
     /// This function should always succeed with no user errors returned, barring invariant violations.
     ///
     /// This MUST NOT be called if there is a previous invocation that failed with an invariant violation.
-    pub fn finish(self) -> VMResult<Changes<(Arc<CompiledModule>, Bytes), Bytes>> {
+    pub fn finish(self) -> VMResult<ChangeSet<(Arc<CompiledModule>, Bytes), Bytes>> {
         self.data_cache
             .into_effects(self.move_vm.runtime.loader())
             .map_err(|e| e.finish(Location::Undefined))
@@ -288,7 +288,7 @@ impl<'r, 'l> Session<'r, 'l> {
     pub fn finish_with_custom_effects<Resource>(
         self,
         resource_converter: &dyn Fn(Value, MoveTypeLayout, bool) -> PartialVMResult<Resource>,
-    ) -> VMResult<Changes<(Arc<CompiledModule>, Bytes), Resource>> {
+    ) -> VMResult<ChangeSet<(Arc<CompiledModule>, Bytes), Resource>> {
         self.data_cache
             .into_custom_effects(resource_converter, self.move_vm.runtime.loader())
             .map_err(|e| e.finish(Location::Undefined))
@@ -298,7 +298,7 @@ impl<'r, 'l> Session<'r, 'l> {
     pub fn finish_with_extensions(
         self,
     ) -> VMResult<(
-        Changes<(Arc<CompiledModule>, Bytes), Bytes>,
+        ChangeSet<(Arc<CompiledModule>, Bytes), Bytes>,
         NativeContextExtensions<'r>,
     )> {
         let Session {
@@ -316,7 +316,7 @@ impl<'r, 'l> Session<'r, 'l> {
         self,
         resource_converter: &dyn Fn(Value, MoveTypeLayout, bool) -> PartialVMResult<Resource>,
     ) -> VMResult<(
-        Changes<(Arc<CompiledModule>, Bytes), Resource>,
+        ChangeSet<(Arc<CompiledModule>, Bytes), Resource>,
         NativeContextExtensions<'r>,
     )> {
         let Session {
