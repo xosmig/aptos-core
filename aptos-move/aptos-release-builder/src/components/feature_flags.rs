@@ -116,6 +116,7 @@ pub enum FeatureFlag {
     DispatchableFungibleAsset,
     NewAccountsDefaultToFaAptStore,
     OperationsDefaultToFaAptStore,
+    MultisigV2Fix,
 }
 
 fn generate_features_blob(writer: &CodeWriter, data: &[u64]) {
@@ -300,6 +301,7 @@ impl From<FeatureFlag> for AptosFeatureFlag {
             FeatureFlag::OperationsDefaultToFaAptStore => {
                 AptosFeatureFlag::OPERATIONS_DEFAULT_TO_FA_APT_STORE
             },
+            FeatureFlag::MultisigV2Fix => AptosFeatureFlag::MULTISIG_V2_FIX,
         }
     }
 }
@@ -413,6 +415,7 @@ impl From<AptosFeatureFlag> for FeatureFlag {
             AptosFeatureFlag::OPERATIONS_DEFAULT_TO_FA_APT_STORE => {
                 FeatureFlag::OperationsDefaultToFaAptStore
             },
+            AptosFeatureFlag::MULTISIG_V2_FIX => FeatureFlag::MultisigV2Fix,
         }
     }
 }
