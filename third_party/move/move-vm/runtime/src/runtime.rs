@@ -65,7 +65,7 @@ impl VMRuntime {
         &self,
         modules: Vec<Vec<u8>>,
         sender: AccountAddress,
-        data_store: &mut TransactionDataCache,
+        data_store: &mut TransactionDataCache<Arc<CompiledModule>>,
         module_store: &ModuleStorageAdapter,
         _gas_meter: &mut impl GasMeter,
         compat: Compatibility,
@@ -203,7 +203,7 @@ impl VMRuntime {
                 // old module.
                 self.loader.mark_as_invalid();
             }
-            data_store.publish_module(module, blob.into(), is_republishing)?;
+            data_store.publish_module(module.self_id(), Arc::new(module), blob.into(), is_republishing)?;
         }
         Ok(())
     }
@@ -352,7 +352,6 @@ impl VMRuntime {
             .collect()
     }
 
-    #[allow(clippy::needless_collect)]
     fn execute_function_impl(
         &self,
         func: Arc<Function>,
@@ -360,7 +359,7 @@ impl VMRuntime {
         param_tys: Vec<Type>,
         return_tys: Vec<Type>,
         serialized_args: Vec<impl Borrow<[u8]>>,
-        data_store: &mut TransactionDataCache,
+        data_store: &mut TransactionDataCache<Arc<CompiledModule>>,
         module_store: &ModuleStorageAdapter,
         gas_meter: &mut impl GasMeter,
         traversal_context: &mut TraversalContext,
@@ -430,7 +429,7 @@ impl VMRuntime {
         function_name: &IdentStr,
         ty_args: Vec<TypeTag>,
         serialized_args: Vec<impl Borrow<[u8]>>,
-        data_store: &mut TransactionDataCache,
+        data_store: &mut TransactionDataCache<Arc<CompiledModule>>,
         module_store: &ModuleStorageAdapter,
         gas_meter: &mut impl GasMeter,
         traversal_context: &mut TraversalContext,
@@ -459,7 +458,7 @@ impl VMRuntime {
         func: LoadedFunction,
         function_instantiation: LoadedFunctionInstantiation,
         serialized_args: Vec<impl Borrow<[u8]>>,
-        data_store: &mut TransactionDataCache,
+        data_store: &mut TransactionDataCache<Arc<CompiledModule>>,
         module_store: &ModuleStorageAdapter,
         gas_meter: &mut impl GasMeter,
         traversal_context: &mut TraversalContext,
@@ -520,7 +519,7 @@ impl VMRuntime {
         script: impl Borrow<[u8]>,
         ty_args: Vec<TypeTag>,
         serialized_args: Vec<impl Borrow<[u8]>>,
-        data_store: &mut TransactionDataCache,
+        data_store: &mut TransactionDataCache<Arc<CompiledModule>>,
         module_store: &ModuleStorageAdapter,
         gas_meter: &mut impl GasMeter,
         traversal_context: &mut TraversalContext,

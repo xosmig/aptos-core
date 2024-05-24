@@ -255,7 +255,7 @@ impl Loader {
     pub(crate) fn check_script_dependencies_and_check_gas(
         &self,
         module_store: &ModuleStorageAdapter,
-        data_store: &mut TransactionDataCache,
+        data_store: &mut TransactionDataCache<Arc<CompiledModule>>,
         gas_meter: &mut impl GasMeter,
         traversal_context: &mut TraversalContext,
         script_blob: &[u8],
@@ -292,7 +292,7 @@ impl Loader {
         &self,
         script_blob: &[u8],
         ty_args: &[TypeTag],
-        data_store: &mut TransactionDataCache,
+        data_store: &mut TransactionDataCache<Arc<CompiledModule>>,
         module_store: &ModuleStorageAdapter,
     ) -> VMResult<(Arc<Function>, LoadedFunctionInstantiation)> {
         // Retrieve or load the script.
@@ -358,7 +358,7 @@ impl Loader {
         &self,
         script: &[u8],
         hash_value: [u8; 32],
-        data_store: &mut TransactionDataCache,
+        data_store: &mut TransactionDataCache<Arc<CompiledModule>>,
         module_store: &ModuleStorageAdapter,
     ) -> VMResult<Arc<CompiledScript>> {
         let script = data_store.load_compiled_script_to_cache(script, hash_value)?;
@@ -385,7 +385,7 @@ impl Loader {
         &self,
         module_id: &ModuleId,
         function_name: &IdentStr,
-        data_store: &mut TransactionDataCache,
+        data_store: &mut TransactionDataCache<Arc<CompiledModule>>,
         module_store: &ModuleStorageAdapter,
     ) -> VMResult<(Arc<Module>, Arc<Function>, Vec<Type>, Vec<Type>)> {
         let module = self.load_module(module_id, data_store, module_store)?;
@@ -490,7 +490,7 @@ impl Loader {
         module_id: &ModuleId,
         function_name: &IdentStr,
         expected_return_type: &Type,
-        data_store: &mut TransactionDataCache,
+        data_store: &mut TransactionDataCache<Arc<CompiledModule>>,
         module_store: &ModuleStorageAdapter,
     ) -> VMResult<(LoadedFunction, LoadedFunctionInstantiation)> {
         let (module, func, param_tys, return_tys) = self.load_function_without_type_args(
@@ -555,7 +555,7 @@ impl Loader {
         module_id: &ModuleId,
         function_name: &IdentStr,
         ty_args: &[TypeTag],
-        data_store: &mut TransactionDataCache,
+        data_store: &mut TransactionDataCache<Arc<CompiledModule>>,
         module_store: &ModuleStorageAdapter,
     ) -> VMResult<(Arc<Module>, Arc<Function>, LoadedFunctionInstantiation)> {
         let (module, func, param_tys, return_tys) = self.load_function_without_type_args(
@@ -595,7 +595,7 @@ impl Loader {
     pub(crate) fn verify_module_bundle_for_publication(
         &self,
         modules: &[CompiledModule],
-        data_store: &mut TransactionDataCache,
+        data_store: &mut TransactionDataCache<Arc<CompiledModule>>,
         module_store: &ModuleStorageAdapter,
     ) -> VMResult<()> {
         fail::fail_point!("verifier-failpoint-1", |_| { Ok(()) });
@@ -634,7 +634,7 @@ impl Loader {
         module: &CompiledModule,
         bundle_verified: &BTreeMap<ModuleId, CompiledModule>,
         bundle_unverified: &BTreeSet<ModuleId>,
-        data_store: &mut TransactionDataCache,
+        data_store: &mut TransactionDataCache<Arc<CompiledModule>>,
         module_store: &ModuleStorageAdapter,
     ) -> VMResult<()> {
         // Performs all verification steps to load the module without loading it, i.e., the new
@@ -752,7 +752,7 @@ impl Loader {
     pub(crate) fn load_type(
         &self,
         type_tag: &TypeTag,
-        data_store: &mut TransactionDataCache,
+        data_store: &mut TransactionDataCache<Arc<CompiledModule>>,
         module_store: &ModuleStorageAdapter,
     ) -> VMResult<Type> {
         Ok(match type_tag {
@@ -821,7 +821,7 @@ impl Loader {
     pub(crate) fn check_dependencies_and_charge_gas<'a, I>(
         &self,
         module_store: &ModuleStorageAdapter,
-        data_store: &mut TransactionDataCache,
+        data_store: &mut TransactionDataCache<Arc<CompiledModule>>,
         gas_meter: &mut impl GasMeter,
         visited: &mut BTreeMap<(&'a AccountAddress, &'a IdentStr), ()>,
         referenced_modules: &'a Arena<Arc<CompiledModule>>,
@@ -850,7 +850,7 @@ impl Loader {
                 Some(module) => (module.module.clone(), module.size),
                 None => {
                     let (module, size, _) = data_store.load_compiled_module_to_cache(
-                        ModuleId::new(*addr, name.to_owned()),
+                        &ModuleId::new(*addr, name.to_owned()),
                         allow_loading_failure,
                     )?;
                     (module, size)
@@ -891,7 +891,7 @@ impl Loader {
     pub(crate) fn check_dependencies_and_charge_gas_non_recursive_optional<'a, I>(
         &self,
         module_store: &ModuleStorageAdapter,
-        data_store: &mut TransactionDataCache,
+        data_store: &mut TransactionDataCache<Arc<CompiledModule>>,
         gas_meter: &mut impl GasMeter,
         visited: &mut BTreeMap<(&'a AccountAddress, &'a IdentStr), ()>,
         ids: I,
@@ -910,7 +910,7 @@ impl Loader {
             let size = match module_store.module_at_by_ref(addr, name) {
                 Some(module) => module.size,
                 None => match data_store
-                    .load_compiled_module_to_cache(ModuleId::new(*addr, name.to_owned()), true)
+                    .load_compiled_module_to_cache(&ModuleId::new(*addr, name.to_owned()), true)
                 {
                     Ok((_module, size, _hash)) => size,
                     Err(err) if err.major_status() == StatusCode::LINKER_ERROR => continue,
@@ -933,7 +933,7 @@ impl Loader {
     pub(crate) fn load_module(
         &self,
         id: &ModuleId,
-        data_store: &mut TransactionDataCache,
+        data_store: &mut TransactionDataCache<Arc<CompiledModule>>,
         module_store: &ModuleStorageAdapter,
     ) -> VMResult<Arc<Module>> {
         // if the module is already in the code cache, load the cached version
@@ -966,20 +966,20 @@ impl Loader {
     // Load, deserialize, and check the module with the bytecode verifier, without linking
     fn load_and_verify_module(
         &self,
-        id: &ModuleId,
-        data_store: &mut TransactionDataCache,
+        module_id: &ModuleId,
+        data_store: &mut TransactionDataCache<Arc<CompiledModule>>,
         allow_loading_failure: bool,
     ) -> VMResult<(Arc<CompiledModule>, usize)> {
         let (module, size, hash_value) =
-            data_store.load_compiled_module_to_cache(id.clone(), allow_loading_failure)?;
+            data_store.load_compiled_module_to_cache(module_id, allow_loading_failure)?;
 
         fail::fail_point!("verifier-failpoint-2", |_| { Ok((module.clone(), size)) });
 
-        if self.vm_config.paranoid_type_checks && &module.self_id() != id {
+        if self.vm_config.paranoid_type_checks && &module.self_id() != module_id {
             return Err(
                 PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
                     .with_message("Module self id mismatch with storage".to_string())
-                    .finish(Location::Module(id.clone())),
+                    .finish(Location::Module(module_id.clone())),
             );
         }
 
@@ -1005,7 +1005,7 @@ impl Loader {
         &self,
         id: &ModuleId,
         bundle_verified: &BTreeMap<ModuleId, CompiledModule>,
-        data_store: &mut TransactionDataCache,
+        data_store: &mut TransactionDataCache<Arc<CompiledModule>>,
         module_store: &ModuleStorageAdapter,
         visited: &mut BTreeSet<ModuleId>,
         friends_discovered: &mut BTreeSet<ModuleId>,
@@ -1047,7 +1047,7 @@ impl Loader {
         &self,
         module: &CompiledModule,
         bundle_verified: &BTreeMap<ModuleId, CompiledModule>,
-        data_store: &mut TransactionDataCache,
+        data_store: &mut TransactionDataCache<Arc<CompiledModule>>,
         module_store: &ModuleStorageAdapter,
         visited: &mut BTreeSet<ModuleId>,
         friends_discovered: &mut BTreeSet<ModuleId>,
@@ -1104,7 +1104,7 @@ impl Loader {
         id: &ModuleId,
         bundle_verified: &BTreeMap<ModuleId, CompiledModule>,
         bundle_unverified: &BTreeSet<ModuleId>,
-        data_store: &mut TransactionDataCache,
+        data_store: &mut TransactionDataCache<Arc<CompiledModule>>,
         module_store: &ModuleStorageAdapter,
         allow_module_loading_failure: bool,
     ) -> VMResult<Arc<Module>> {
@@ -1141,7 +1141,7 @@ impl Loader {
         friends_discovered: BTreeSet<ModuleId>,
         bundle_verified: &BTreeMap<ModuleId, CompiledModule>,
         bundle_unverified: &BTreeSet<ModuleId>,
-        data_store: &mut TransactionDataCache,
+        data_store: &mut TransactionDataCache<Arc<CompiledModule>>,
         module_store: &ModuleStorageAdapter,
         allow_friend_loading_failure: bool,
     ) -> VMResult<()> {
@@ -2295,7 +2295,7 @@ impl Loader {
     pub(crate) fn get_type_layout(
         &self,
         type_tag: &TypeTag,
-        move_storage: &mut TransactionDataCache,
+        move_storage: &mut TransactionDataCache<Arc<CompiledModule>>,
         module_storage: &ModuleStorageAdapter,
     ) -> VMResult<MoveTypeLayout> {
         let ty = self.load_type(type_tag, move_storage, module_storage)?;
@@ -2306,7 +2306,7 @@ impl Loader {
     pub(crate) fn get_fully_annotated_type_layout(
         &self,
         type_tag: &TypeTag,
-        move_storage: &mut TransactionDataCache,
+        move_storage: &mut TransactionDataCache<Arc<CompiledModule>>,
         module_storage: &ModuleStorageAdapter,
     ) -> VMResult<MoveTypeLayout> {
         let ty = self.load_type(type_tag, move_storage, module_storage)?;
