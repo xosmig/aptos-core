@@ -104,7 +104,7 @@ fn script_large_ty() {
     let mut module = vec![];
     decompiled_module.serialize(&mut module).unwrap();
     println!("Serialized len: {}", script.len());
-    let module = CompiledModule::deserialize(&module).unwrap();
+    CompiledModule::deserialize(&module).unwrap();
 
     let mut storage = InMemoryStorage::new();
     let move_vm = MoveVM::new_with_config(vec![], VMConfig {
@@ -118,7 +118,7 @@ fn script_large_ty() {
     let module_address = AccountAddress::from_hex_literal("0x42").unwrap();
     let module_identifier = Identifier::new("pwn").unwrap();
 
-    storage.publish_or_overwrite_module(module);
+    storage.publish_or_overwrite_module(decompiled_module.self_id(), module.to_vec());
 
     // constructs a type with about 25^3 nodes
     let num_type_args = 25;
