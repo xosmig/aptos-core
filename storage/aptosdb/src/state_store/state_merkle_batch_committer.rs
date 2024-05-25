@@ -15,6 +15,10 @@ use aptos_scratchpad::SmtAncestors;
 use aptos_storage_interface::state_delta::StateDelta;
 use aptos_types::state_store::state_value::StateValue;
 use std::sync::{mpsc::Receiver, Arc};
+use aptos_jellyfish_merkle::node_type::{Children, NodeKey};
+use aptos_types::state_store::state_key::StateKey;
+use crate::schema::jellyfish_merkle_node::JellyfishMerkleNodeSchema;
+use crate::state_merkle_db::Node;
 
 pub struct StateMerkleBatch {
     // pub top_levels_batch: SchemaBatch,
@@ -61,6 +65,20 @@ impl StateMerkleBatchCommitter {
                     let _timer = OTHER_TIMERS_SECONDS
                         .with_label_values(&["commit_jellyfish_merkle_nodes"])
                         .start_timer();
+
+                    self
+                        .state_db
+                        .state_merkle_db
+                        .metadata_db()
+                        .put::<JellyfishMerkleNodeSchema>(
+                            &NodeKey::new_empty_path(current_version),
+                            &Node::new_leaf(
+                                root_hash,
+                                root_hash,
+                                (StateKey::raw(b"root"), current_version),
+                            )
+                        ).unwrap();
+
                     /*
                     // commit jellyfish merkle nodes
                     self.state_db

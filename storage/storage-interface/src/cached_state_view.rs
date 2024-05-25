@@ -25,6 +25,7 @@ use std::{
     fmt::{Debug, Formatter},
     sync::Arc,
 };
+use aptos_logger::info;
 
 static IO_POOL: Lazy<rayon::ThreadPool> = Lazy::new(|| {
     rayon::ThreadPoolBuilder::new()
@@ -167,6 +168,10 @@ impl CachedStateView {
         let snapshot = reader
             .get_state_snapshot_before(next_version)
             .map_err(Into::<StateviewError>::into)?;
+        info!(
+            snapshot = snapshot,
+            "alden alden alden."
+        );
 
         Ok(Self::new_impl(id, snapshot, speculative_state, reader))
     }
