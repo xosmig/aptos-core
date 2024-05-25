@@ -340,7 +340,6 @@ impl<'r, 'l> Session<'r, 'l> {
             .load_resource(self.move_vm.runtime.loader(), addr, ty, &self.module_store)
     }
 
-    // TODO: This is only needed for metadata, rename!
     pub fn load_module(&self, module_id: &ModuleId) -> VMResult<Arc<CompiledModule>> {
         self.data_cache
             .load_module(module_id)
